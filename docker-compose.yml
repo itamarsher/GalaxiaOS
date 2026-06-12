@@ -1,0 +1,67 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-abos}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-abos}
+      POSTGRES_DB: ${POSTGRES_DB:-abos}
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-abos}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  api:
+    build: ./backend
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
+    env_file: .env
+    environment:
+      ABOS_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-abos}:${POSTGRES_PASSWORD:-abos}@postgres:5432/${POSTGRES_DB:-abos}
+      ABOS_REDIS_URL: redis://redis:6379/0
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  worker:
+    build: ./backend
+    command: arq app.runtime.worker.WorkerSettings
+    env_file: .env
+    environment:
+      ABOS_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-abos}:${POSTGRES_PASSWORD:-abos}@postgres:5432/${POSTGRES_DB:-abos}
+      ABOS_REDIS_URL: redis://redis:6379/0
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  web:
+    build: ./frontend
+    command: pnpm dev
+    environment:
+      NEXT_PUBLIC_API_BASE_URL: http://localhost:8000
+    ports:
+      - "3000:3000"
+    depends_on:
+      - api
+
+volumes:
+  pgdata:
