@@ -53,6 +53,13 @@ class Settings(BaseSettings):
     digest_hour_utc: int = 13  # daily digest cron hour
     runway_recompute_minute: int = 0  # hourly runway recompute
 
+    # Observability / rate limiting (productionization)
+    log_level: str = "INFO"
+    log_json: bool = True
+    rate_limit_enabled: bool = True
+    rate_limit_per_minute: int = 120
+    rate_limit_backend: str = "memory"  # memory | redis
+
 
 @lru_cache
 def get_settings() -> Settings:
