@@ -80,6 +80,22 @@ follow-up migration that drops the permissive fallback for a strict
 confirmed no tenant-table access path is left un-scoped. See the `app.db` module
 docstring for the procedure.
 
+## Operations
+
+- **Structured logging**: JSON logs (`ABOS_LOG_JSON`) with a per-request id —
+  honors an inbound `X-Request-ID`, otherwise generates one, echoes it on the
+  response, and binds it to every log line for the request (`app.observability`).
+- **Rate limiting**: per-user (by bearer token) or per-IP fixed-window limit
+  (`ABOS_RATE_LIMIT_PER_MINUTE`); `memory` backend for a single process, `redis`
+  for multi-process deploys. `/health*` and docs are exempt. Over-limit → `429`
+  with `Retry-After` (`app.ratelimit`).
+- **Probes**: `GET /health` (liveness) and `GET /health/ready` (readiness —
+  checks the database, returns `503` when unreachable).
+- **Deploy**: `docker-compose.yml` is dev-oriented (Postgres+pgvector, Redis,
+  api, worker, web). For production set `ABOS_RATE_LIMIT_BACKEND=redis`, a real
+  `ABOS_MASTER_KEY` from a KMS, and run the API and `arq` worker as separate
+  scaled services. A production manifest (k8s/Compose-prod) is a follow-up.
+
 ## Layout
 
 ```
