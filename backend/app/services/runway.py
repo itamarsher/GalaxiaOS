@@ -9,7 +9,7 @@ an explicit, founder-triggerable action (also reachable via the NL command plane
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -31,7 +31,7 @@ async def recompute(db: AsyncSession, company_id: uuid.UUID) -> RunwaySnapshot |
     if budget is None:
         return None
 
-    cutoff = datetime.now(timezone.utc) - timedelta(days=7)
+    cutoff = datetime.now(UTC) - timedelta(days=7)
     trailing = await db.scalar(
         select(func.coalesce(func.sum(SpendEntry.amount_cents), 0)).where(
             SpendEntry.company_id == company_id, SpendEntry.created_at >= cutoff

@@ -15,14 +15,12 @@ stays independent of any vendor's message shape.
 from __future__ import annotations
 
 from sqlalchemy import func, select
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
+from app.db import set_tenant
 from app.models import Agent, DecisionRequest, Mission, SpendEntry, Task
 from app.models.enums import AgentRole, DecisionKind, DecisionStatus, PolicyEffect, TaskStatus
-from app.db import set_tenant
 from app.providers.base import LLMProvider, Message, TextBlock, ToolResultBlock, ToolUseBlock
-from app.runtime import breakers
 from app.runtime.context import RuntimeContext
 from app.runtime.prompts import AGENT_LOOP_SYSTEM, ROLE_DESCRIPTIONS
 from app.runtime.tools import TOOL_SPECS, execute_tool

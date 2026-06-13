@@ -8,7 +8,6 @@ external charge both decrement the *same* budget through one CostMeter.
 from __future__ import annotations
 
 import asyncio
-import uuid
 
 import pytest
 

@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
-import uuid
-
 from fastapi import APIRouter, HTTPException, status
 from sqlalchemy import select
 
 from app.deps import CompanyDep, CurrentUser, DbDep
-from app.models import Agent, AgentEdge, Budget, Objective
+from app.models import Agent, AgentEdge, Objective
+from app.runtime.queue import enqueue_task
 from app.schemas import (
     AgentEdgeOut,
     AgentOut,
@@ -19,7 +18,6 @@ from app.schemas import (
     PreviewOut,
 )
 from app.services import onboarding
-from app.runtime.queue import enqueue_task
 
 router = APIRouter(tags=["onboarding"])
 
