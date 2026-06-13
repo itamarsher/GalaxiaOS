@@ -11,6 +11,7 @@ from __future__ import annotations
 from typing import Protocol, runtime_checkable
 
 from app.models import Agent, Task
+from app.runtime.backends.marketplace import MarketplaceBackend
 from app.runtime.backends.native import NativeBackend
 from app.runtime.context import RuntimeContext
 
@@ -20,10 +21,11 @@ class AgentBackend(Protocol):
     async def run(self, ctx: RuntimeContext, agent: Agent, task: Task) -> dict: ...
 
 
-# Backend registry keyed by Agent.backend_type. External/Marketplace are future
-# stubs; only "native" is implemented at MVP.
+# Backend registry keyed by Agent.backend_type. "marketplace" runs hired agents
+# (execution simulated, spend metered); "external" remains a reserved stub.
 _BACKENDS: dict[str, AgentBackend] = {
     "native": NativeBackend(),
+    "marketplace": MarketplaceBackend(),
 }
 
 

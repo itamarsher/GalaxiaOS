@@ -8,9 +8,11 @@ from __future__ import annotations
 
 from app.providers.anthropic import AnthropicProvider
 from app.providers.base import LLMProvider
+from app.providers.openai import OpenAIProvider
 
 _PROVIDERS: dict[str, LLMProvider] = {
     "anthropic": AnthropicProvider(),
+    "openai": OpenAIProvider(),
 }
 
 

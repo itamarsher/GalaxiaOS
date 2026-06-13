@@ -195,3 +195,21 @@ class CopilotAskRequest(BaseModel):
 class CopilotAskResponse(BaseModel):
     answer: str
     kind: str  # "query" | "command"
+
+
+# ── Marketplace ──────────────────────────────────────────────────────────────
+class AgentListingOut(ORMModel):
+    id: uuid.UUID
+    name: str
+    role: str
+    description: str
+    provider: str
+    price_cents: int
+    trust: float | None = None
+    accuracy: float | None = None
+    roi: float | None = None
+    reliability: float | None = None
+
+
+class HireAgentRequest(BaseModel):
+    listing_id: uuid.UUID

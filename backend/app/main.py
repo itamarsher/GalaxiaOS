@@ -12,7 +12,9 @@ from app.api import (
     companies,
     copilot,
     decisions,
+    events,
     governance,
+    marketplace,
     onboarding,
 )
 
@@ -36,6 +38,9 @@ def create_app() -> FastAPI:
     app.include_router(governance.router)
     app.include_router(decisions.router)
     app.include_router(copilot.router)
+    app.include_router(events.router)
+    app.include_router(marketplace.catalog_router)
+    app.include_router(marketplace.company_router)
 
     @app.get("/health", tags=["meta"])
     async def health() -> dict:
