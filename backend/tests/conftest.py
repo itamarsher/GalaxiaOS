@@ -30,12 +30,19 @@ _TABLES = [t for name, t in Base.metadata.tables.items() if name != "memory_entr
 async def session_factory():
     engine = create_async_engine(TEST_DB_URL, future=True)
     async with engine.begin() as conn:
-        await conn.run_sync(lambda c: Base.metadata.drop_all(c, tables=_TABLES))
+        # Hard reset to a clean schema. This is robust whether the DB is empty
+        # or already migrated by CI's `alembic upgrade head` — the latter leaves
+        # `memory_entries` (FK -> tasks) and RLS policies that a partial
+        # ``drop_all`` can't remove. Dropping the schema sidesteps all of that.
+        await conn.exec_driver_sql("DROP SCHEMA IF EXISTS public CASCADE")
+        await conn.exec_driver_sql("CREATE SCHEMA public")
+        # Recreating the schema drops the default PUBLIC grants; restore them so
+        # the RLS test's non-owner role can USAGE the schema (an unqualified name
+        # in an inaccessible schema reports "does not exist", not "denied").
+        await conn.exec_driver_sql("GRANT USAGE, CREATE ON SCHEMA public TO PUBLIC")
         await conn.run_sync(lambda c: Base.metadata.create_all(c, tables=_TABLES))
     sf = async_sessionmaker(engine, expire_on_commit=False)
     yield sf
-    async with engine.begin() as conn:
-        await conn.run_sync(lambda c: Base.metadata.drop_all(c, tables=_TABLES))
     await engine.dispose()
 
 
