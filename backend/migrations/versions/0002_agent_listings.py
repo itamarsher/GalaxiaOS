@@ -19,32 +19,53 @@ depends_on = None
 
 
 def upgrade() -> None:
-    listings = op.create_table(
-        "agent_listings",
-        sa.Column("id", PGUUID(as_uuid=True), primary_key=True),
-        sa.Column("name", sa.String(length=255), nullable=False),
-        sa.Column("role", sa.String(length=40), nullable=False),
-        sa.Column("description", sa.Text(), nullable=False, server_default=""),
-        sa.Column("provider", sa.String(length=120), nullable=False),
-        sa.Column("price_cents", sa.Integer(), nullable=False),
-        sa.Column("trust", sa.Float(), nullable=True),
-        sa.Column("accuracy", sa.Float(), nullable=True),
-        sa.Column("roi", sa.Float(), nullable=True),
-        sa.Column("reliability", sa.Float(), nullable=True),
-        sa.Column(
-            "created_at",
-            sa.DateTime(timezone=True),
-            server_default=sa.func.now(),
-            nullable=False,
-        ),
-        sa.Column(
-            "updated_at",
-            sa.DateTime(timezone=True),
-            server_default=sa.func.now(),
-            nullable=False,
-        ),
-    )
+    # The 0001 baseline runs ``Base.metadata.create_all`` over the full model
+    # metadata, which already creates ``agent_listings``. So this migration is
+    # idempotent: create the table only if absent, and seed only if empty.
+    bind = op.get_bind()
+    if not sa.inspect(bind).has_table("agent_listings"):
+        op.create_table(
+            "agent_listings",
+            sa.Column("id", PGUUID(as_uuid=True), primary_key=True),
+            sa.Column("name", sa.String(length=255), nullable=False),
+            sa.Column("role", sa.String(length=40), nullable=False),
+            sa.Column("description", sa.Text(), nullable=False, server_default=""),
+            sa.Column("provider", sa.String(length=120), nullable=False),
+            sa.Column("price_cents", sa.Integer(), nullable=False),
+            sa.Column("trust", sa.Float(), nullable=True),
+            sa.Column("accuracy", sa.Float(), nullable=True),
+            sa.Column("roi", sa.Float(), nullable=True),
+            sa.Column("reliability", sa.Float(), nullable=True),
+            sa.Column(
+                "created_at",
+                sa.DateTime(timezone=True),
+                server_default=sa.func.now(),
+                nullable=False,
+            ),
+            sa.Column(
+                "updated_at",
+                sa.DateTime(timezone=True),
+                server_default=sa.func.now(),
+                nullable=False,
+            ),
+        )
 
+    if bind.execute(sa.text("SELECT COUNT(*) FROM agent_listings")).scalar():
+        return  # already seeded
+
+    listings = sa.table(
+        "agent_listings",
+        sa.column("id", PGUUID(as_uuid=True)),
+        sa.column("name", sa.String),
+        sa.column("role", sa.String),
+        sa.column("description", sa.Text),
+        sa.column("provider", sa.String),
+        sa.column("price_cents", sa.Integer),
+        sa.column("trust", sa.Float),
+        sa.column("accuracy", sa.Float),
+        sa.column("roi", sa.Float),
+        sa.column("reliability", sa.Float),
+    )
     op.bulk_insert(
         listings,
         [
@@ -113,4 +134,6 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_table("agent_listings")
+    # IF EXISTS: the 0001 baseline's drop_all also targets this table, so a full
+    # downgrade past 0001 must not double-drop.
+    op.execute("DROP TABLE IF EXISTS agent_listings")
