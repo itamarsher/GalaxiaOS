@@ -163,7 +163,11 @@ class NativeBackend:
             }
         if outcome.park:
             return {"terminal": True, "result": {"status": "waiting_approval"}}
-        return {"terminal": False, "observation": outcome.observation}
+        return {
+            "terminal": False,
+            "observation": outcome.observation,
+            "is_error": outcome.is_error,
+        }
 
     async def _finish(
         self, ctx: RuntimeContext, task: Task, status: TaskStatus, output: dict

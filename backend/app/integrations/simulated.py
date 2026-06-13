@@ -1,37 +1,32 @@
 """Deterministic, network-free :class:`DomainRegistrar` for dev and tests.
 
-Pricing is derived purely from the TLD so the same domain always yields the
-same quote. ``.test`` / ``.invalid`` (and other reserved TLDs) are reported
-unavailable so callers can exercise the "not available, do not charge" path.
+Availability and price are derived purely from the TLD so the same domain always
+yields the same quote, and registration is a no-op that "succeeds". This is the
+default registrar so the agent loop and tests never touch the network or spend
+real money.
 """
 
 from __future__ import annotations
 
-from app.integrations.base import DomainQuote
+import uuid
 
-# Reserved/special-use TLDs we always report as unavailable (RFC 2606 + friends).
-_UNAVAILABLE_TLDS = frozenset({"test", "invalid", "example", "localhost"})
-
-# TLDs that price as "premium". Everything else falls back to the common price.
-_PREMIUM_TLDS = frozenset({"ai", "io", "dev", "app", "co"})
-
-_COMMON_PRICE_CENTS = 1200  # ~$12 — .com/.net/.org and the long tail.
-_PREMIUM_PRICE_CENTS = 4000  # ~$40 — sought-after TLDs.
-
-
-def _tld(domain: str) -> str:
-    return domain.rsplit(".", 1)[-1].strip().lower()
+from app.integrations import _pricing
+from app.integrations.base import DomainQuote, DomainRegistration, RegistrarError
 
 
 class SimulatedRegistrar:
-    """In-memory registrar. Same input -> same quote, no network."""
+    """In-memory registrar. Same input -> same quote, no network, no real spend."""
 
     async def check(self, domain: str) -> DomainQuote:
-        normalized = domain.strip().lower()
-        tld = _tld(normalized)
-
-        if not normalized or "." not in normalized or tld in _UNAVAILABLE_TLDS:
+        if not _pricing.is_registrable(domain):
             return DomainQuote(domain=domain, available=False, price_cents=0)
+        return DomainQuote(domain=domain, available=True, price_cents=_pricing.price_cents(domain))
 
-        price = _PREMIUM_PRICE_CENTS if tld in _PREMIUM_TLDS else _COMMON_PRICE_CENTS
-        return DomainQuote(domain=domain, available=True, price_cents=price)
+    async def register(self, domain: str) -> DomainRegistration:
+        if not _pricing.is_registrable(domain):
+            raise RegistrarError(f"{domain} is not registrable")
+        return DomainRegistration(
+            domain=domain,
+            price_cents=_pricing.price_cents(domain),
+            external_ref=f"sim:{uuid.uuid4().hex[:12]}",
+        )

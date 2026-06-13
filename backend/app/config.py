@@ -36,7 +36,16 @@ class Settings(BaseSettings):
     model_strategic: str = Field(default="claude-opus-4-8")
 
     # External integrations
-    domain_registrar: str = "simulated"  # registrar seam; see app.integrations.registry
+    domain_registrar: str = "simulated"  # simulated | rdap | namecheap
+    rdap_timeout_seconds: float = 4.0
+    # Namecheap (only used when domain_registrar == "namecheap")
+    namecheap_sandbox: bool = True
+    namecheap_api_user: str = ""
+    namecheap_api_key: str = ""
+    namecheap_username: str = ""
+    namecheap_client_ip: str = ""
+    # Registrant contact as JSON, e.g. ABOS_NAMECHEAP_CONTACT='{"FirstName":...}'
+    namecheap_contact: dict = Field(default_factory=dict)
 
     # Budget OS / Copilot
     runway_alert_days: float = 14.0  # raise a decision request below this runway
