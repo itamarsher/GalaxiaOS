@@ -1,6 +1,7 @@
 """ORM models. Importing this package registers every table on ``Base.metadata``."""
 
 from app.models.agent import Agent, AgentEdge
+from app.models.agent_listing import AgentListing
 from app.models.apikey import ApiKey
 from app.models.base import Base
 from app.models.budget import (
@@ -33,6 +34,7 @@ __all__ = [
     "KeyResult",
     "Agent",
     "AgentEdge",
+    "AgentListing",
     "AgentRun",
     "Task",
     "Budget",

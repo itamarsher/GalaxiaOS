@@ -59,6 +59,24 @@ uv run uvicorn app.main:app --reload
 
 Open the API docs at http://localhost:8000/docs and the web app at http://localhost:3000.
 
+## Security hardening (RLS)
+
+The `company_id` tenant boundary is enforced at the service/query layer (every
+query filters on the company resolved by `CompanyDep`). As defense-in-depth,
+Postgres **Row-Level Security** is enabled on every tenant table (migration
+`0002_row_level_security`), keyed to the `app.current_company` session GUC and
+`FORCE`d so it applies even to the table-owner role the app connects as.
+
+Rollout is **permissive-until-adopted**: the policy allows all rows when the GUC
+is unset or empty, so existing code and tests that never set it behave exactly
+as before. A request opts into DB-level scoping by calling
+`app.db.set_tenant(session, company_id)` (transaction-scoped `set_config`, so it
+never leaks across pooled connections). Once every tenant route sets the GUC, a
+follow-up migration tightens the policy to a strict
+`company_id = current_setting('app.current_company')::uuid` (no permissive
+fallback), turning the safety net into a hard boundary. See the `app.db` module
+docstring for the full procedure.
+
 ## Layout
 
 ```

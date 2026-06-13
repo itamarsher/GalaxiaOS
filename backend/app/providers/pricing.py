@@ -15,11 +15,22 @@ ANTHROPIC_PRICES: dict[str, Price] = {
     "claude-opus-4-8": Price(input_cents_per_mtok=500, output_cents_per_mtok=2500),
 }
 
+# OpenAI (USD cents per 1M tokens)
+OPENAI_PRICES: dict[str, Price] = {
+    "gpt-4o": Price(input_cents_per_mtok=250, output_cents_per_mtok=1000),
+    "gpt-4o-mini": Price(input_cents_per_mtok=15, output_cents_per_mtok=60),
+}
+
 # Conservative fallback for an unknown model id (treat as Opus-tier).
 DEFAULT_PRICE = Price(input_cents_per_mtok=500, output_cents_per_mtok=2500)
+
+# Per-provider default when the model id is unknown.
+OPENAI_DEFAULT_PRICE = OPENAI_PRICES["gpt-4o"]
 
 
 def price_for(provider: str, model: str) -> Price:
     if provider == "anthropic":
         return ANTHROPIC_PRICES.get(model, DEFAULT_PRICE)
+    if provider == "openai":
+        return OPENAI_PRICES.get(model, OPENAI_DEFAULT_PRICE)
     return DEFAULT_PRICE

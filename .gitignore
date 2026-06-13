@@ -25,3 +25,6 @@ dist/
 *.sqlite3
 .DS_Store
 coverage/
+
+# Claude Code transient worktrees / local state
+.claude/

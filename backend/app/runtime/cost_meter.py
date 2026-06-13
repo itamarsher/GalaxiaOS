@@ -171,3 +171,53 @@ class CostMeter:
                 )
                 await db.commit()
             committed["done"] = True
+
+    async def charge_agent_invocation(
+        self,
+        *,
+        company_id: uuid.UUID,
+        agent_id: uuid.UUID | None,
+        task_id: uuid.UUID | None,
+        amount_cents: int,
+        vendor: str,
+        sku: str | None = None,
+        external_ref: str | None = None,
+        payload: dict | None = None,
+        description: str | None = None,
+    ) -> None:
+        """Reserve and commit a per-invocation marketplace agent fee.
+
+        Identical reserve→commit path to :meth:`charge_external`, but the ledger
+        row is categorised :class:`SpendCategory.agent_invocation` so hired-agent
+        spend is reportable separately from raw external charges. An
+        ``ExternalCharge`` row is still written for the auditable vendor trail.
+        """
+        async with self._reserve(
+            company_id=company_id, agent_id=agent_id, estimated_cents=amount_cents
+        ) as (res, committed):
+            async with self._sf() as db:
+                entry = await budget_svc.commit_spend(
+                    db,
+                    company_id=company_id,
+                    budget_id=res.budget_id,
+                    reserved_cents=res.reserved_cents,
+                    actual_cents=amount_cents,
+                    category=SpendCategory.agent_invocation,
+                    agent_id=agent_id,
+                    task_id=task_id,
+                    vendor=vendor,
+                    sku=sku,
+                    description=description,
+                )
+                db.add(
+                    ExternalCharge(
+                        company_id=company_id,
+                        spend_entry_id=entry.id,
+                        vendor=vendor,
+                        sku=sku,
+                        external_ref=external_ref,
+                        payload=payload,
+                    )
+                )
+                await db.commit()
+            committed["done"] = True

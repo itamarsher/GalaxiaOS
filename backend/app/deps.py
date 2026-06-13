@@ -56,3 +56,31 @@ async def get_company_for_user(
 
 
 CompanyDep = Annotated[Company, Depends(get_company_for_user)]
+
+
+async def get_company_for_user_sse(
+    company_id: uuid.UUID, db: DbDep, token: str
+) -> Company:
+    """SSE variant of :func:`get_company_for_user` that auths via ``?token=``.
+
+    Browsers' ``EventSource`` cannot set an ``Authorization`` header, so the JWT
+    arrives as a query param instead. Membership enforcement is identical to the
+    normal bearer flow; this is used ONLY by the events stream.
+    """
+    user_id = decode_access_token(token)
+    if user_id is None:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid or expired token")
+    membership = await db.scalar(
+        select(Membership).where(
+            Membership.company_id == company_id, Membership.user_id == user_id
+        )
+    )
+    if membership is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Company not found")
+    company = await db.get(Company, company_id)
+    if company is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Company not found")
+    return company
+
+
+CompanySseDep = Annotated[Company, Depends(get_company_for_user_sse)]

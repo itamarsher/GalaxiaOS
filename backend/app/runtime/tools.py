@@ -22,11 +22,10 @@ from app.models.enums import (
     RunTrigger,
     TaskStatus,
 )
+from app.config import settings
+from app.integrations.registry import get_registrar
 from app.providers.base import ToolSpec
 from app.runtime.breakers import loop_signature
-
-# Simulated external vendor prices (cents). Real integrations slot in later.
-DOMAIN_PRICE_CENTS = 1200
 
 
 TOOL_SPECS: list[ToolSpec] = [
@@ -63,7 +62,11 @@ TOOL_SPECS: list[ToolSpec] = [
     ),
     ToolSpec(
         name="register_domain",
-        description="Purchase a domain name (incurs a real external charge).",
+        description=(
+            "Register a domain name. Checks availability and price first; only "
+            "available domains incur a real external charge, billed at the "
+            "registrar's quoted price."
+        ),
         input_schema={
             "type": "object",
             "properties": {"domain": {"type": "string"}},
@@ -158,16 +161,23 @@ async def execute_tool(
         return ToolOutcome(observation=f"memory saved: {args['title'][:60]}")
 
     if name == "register_domain":
+        domain = args["domain"]
+        registrar = get_registrar()
+        quote = await registrar.check(domain)
+        if not quote.available:
+            # No charge: nothing was reserved or spent.
+            return ToolOutcome(observation=f"domain {domain} unavailable; not registered (no charge)")
         await ctx.cost_meter.charge_external(
             company_id=task.company_id,
             agent_id=agent.id,
             task_id=task.id,
-            amount_cents=DOMAIN_PRICE_CENTS,
-            vendor="registrar(sim)",
-            sku=args["domain"],
-            description=f"domain {args['domain']}",
+            amount_cents=quote.price_cents,
+            vendor=f"registrar({settings.domain_registrar})",
+            sku=domain,
+            external_ref=domain,
+            description=f"domain {domain}",
         )
-        return ToolOutcome(observation=f"registered domain {args['domain']} (${DOMAIN_PRICE_CENTS/100:.2f})")
+        return ToolOutcome(observation=f"registered domain {domain} (${quote.price_cents/100:.2f})")
 
     if name == "request_decision":
         db.add(

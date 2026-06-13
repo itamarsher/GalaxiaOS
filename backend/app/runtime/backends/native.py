@@ -4,9 +4,12 @@ Per step: one metered LLM call (through :class:`CostMeter`) may emit tool calls;
 each tool call is screened by the governance engine, then executed. The loop ends
 on ``report_result``, a parked decision, a tripped breaker, or the step cap.
 
-Tool results are fed back to the model as a plain observation turn — a
-provider-agnostic simplification of the full tool_result protocol that keeps the
-loop independent of any vendor's message shape.
+Tool results are fed back to the model with the proper multi-turn tool_result
+protocol: an assistant turn echoing the model's ``tool_use`` blocks (one per
+:class:`ToolCall`, preserving ids), followed by a user turn carrying one
+``tool_result`` block per executed tool. The structured blocks live behind the
+provider-agnostic :mod:`app.providers.base` content-block model, so the loop
+stays independent of any vendor's message shape.
 """
 
 from __future__ import annotations
@@ -17,15 +20,19 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.models import Agent, DecisionRequest, Mission, SpendEntry, Task
 from app.models.enums import AgentRole, DecisionKind, DecisionStatus, PolicyEffect, TaskStatus
-from app.providers.base import Message
+from app.providers.base import Message, TextBlock, ToolResultBlock, ToolUseBlock
 from app.runtime import breakers
 from app.runtime.context import RuntimeContext
 from app.runtime.prompts import AGENT_LOOP_SYSTEM, ROLE_DESCRIPTIONS
-from app.runtime.tools import DOMAIN_PRICE_CENTS, TOOL_SPECS, execute_tool
+from app.runtime.tools import TOOL_SPECS, execute_tool
 from app.services import apikeys, reputation
 from app.services import governance as gov
 
-_COST_HINTS = {"register_domain": DOMAIN_PRICE_CENTS}
+# Conservative pre-execution price hint (cents) for governance evaluation only.
+# Domain pricing is now quoted dynamically by the registrar at execution time
+# (see app.integrations); this hint just lets policies gate the action up front.
+_DOMAIN_PRICE_HINT_CENTS = 4000
+_COST_HINTS = {"register_domain": _DOMAIN_PRICE_HINT_CENTS}
 
 
 def _model_for(agent: Agent) -> str:
@@ -74,17 +81,30 @@ class NativeBackend:
                     ctx, task, TaskStatus.done, {"summary": resp.text[:2000]}
                 )
 
-            observations: list[str] = []
+            results: list[ToolResultBlock] = []
             for call in resp.tool_calls:
                 verdict = await self._handle_call(ctx, agent, task, call)
                 if verdict["terminal"]:
                     return verdict["result"]
-                observations.append(verdict["observation"])
+                results.append(
+                    ToolResultBlock(
+                        tool_use_id=call.id,
+                        content=verdict["observation"],
+                        is_error=verdict.get("is_error", False),
+                    )
+                )
 
-            messages.append(Message(role="assistant", content=resp.text or "(tool calls)"))
-            messages.append(
-                Message(role="user", content="Observations: " + " | ".join(observations))
+            # Assistant turn: echo the model's tool_use blocks (ids preserved),
+            # prefixed with any leading text the model emitted.
+            assistant_blocks: list = []
+            if resp.text:
+                assistant_blocks.append(TextBlock(text=resp.text))
+            assistant_blocks.extend(
+                ToolUseBlock(id=c.id, name=c.name, input=c.arguments) for c in resp.tool_calls
             )
+            messages.append(Message(role="assistant", content=assistant_blocks))
+            # User turn: one tool_result per executed tool, matched by id.
+            messages.append(Message(role="user", content=list(results)))
 
         return await self._finish(ctx, task, TaskStatus.done, {"summary": "step cap reached"})
 
@@ -99,7 +119,11 @@ class NativeBackend:
 
             if effect is PolicyEffect.deny:
                 await db.commit()
-                return {"terminal": False, "observation": f"DENIED by policy: {call.name}"}
+                return {
+                    "terminal": False,
+                    "observation": f"DENIED by policy: {call.name}",
+                    "is_error": True,
+                }
 
             if effect is PolicyEffect.require_approval:
                 db.add(

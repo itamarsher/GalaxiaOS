@@ -9,13 +9,53 @@ runtime, services, and agents never import a vendor SDK — that lives behind an
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Protocol, Union, runtime_checkable
+
+
+@dataclass
+class TextBlock:
+    """A plain-text content block within a structured message turn."""
+
+    text: str
+
+
+@dataclass
+class ToolUseBlock:
+    """An assistant turn's request to invoke a tool (echoed back to the model).
+
+    ``id`` must match the originating :class:`ToolCall.id` so the model can
+    correlate it with the corresponding :class:`ToolResultBlock`.
+    """
+
+    id: str
+    name: str
+    input: dict[str, Any]
+
+
+@dataclass
+class ToolResultBlock:
+    """A user turn carrying the result of a previously requested tool call.
+
+    ``tool_use_id`` ties the result back to its :class:`ToolUseBlock.id`.
+    ``content`` is the tool's observation (text). ``is_error`` flags a failed
+    or denied execution.
+    """
+
+    tool_use_id: str
+    content: str
+    is_error: bool = False
+
+
+# A structured turn is an ordered list of content blocks. Plain ``str`` content
+# is still accepted (and preferred for simple text-only turns) so existing
+# callers need no change.
+ContentBlock = Union[TextBlock, ToolUseBlock, ToolResultBlock]
 
 
 @dataclass
 class Message:
     role: str  # "user" | "assistant"
-    content: str
+    content: str | list[ContentBlock]
 
 
 @dataclass

@@ -35,6 +35,9 @@ class Settings(BaseSettings):
     model_planner: str = Field(default="claude-sonnet-4-6")
     model_strategic: str = Field(default="claude-opus-4-8")
 
+    # External integrations
+    domain_registrar: str = "simulated"  # registrar seam; see app.integrations.registry
+
     # Budget OS / Copilot
     runway_alert_days: float = 14.0  # raise a decision request below this runway
     roi_pause_floor: float = 0.05  # reputation.roi below this is "low ROI"

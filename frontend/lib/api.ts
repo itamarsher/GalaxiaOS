@@ -50,6 +50,10 @@ export interface Reputation { agent_id: string; trust: number; accuracy: number;
 export interface Memory { id: string; type: string; title: string; content: string; created_at: string }
 export interface Runway { projected_days_remaining: number | null; burn_rate_cents_per_day: number; balance_cents: number | null }
 export interface Digest { summary_md: string | null; open_decisions: number; period_date: string | null }
+export interface AgentListing {
+  id: string; name: string; role: string; description: string; provider: string; price_cents: number;
+  trust: number | null; accuracy: number | null; roi: number | null; reliability: number | null;
+}
 
 // ── API ──────────────────────────────────────────────────────────────────────
 export const api = {
@@ -123,6 +127,21 @@ export const api = {
     req<{ answer: string; kind: string }>(`/companies/${companyId}/copilot/ask`, {
       method: "POST",
       body: JSON.stringify({ question }),
+    }),
+
+  // SSE live stream. EventSource cannot set an Authorization header, so the JWT
+  // is passed as a ?token= query param. Returns null if there is no token.
+  eventsUrl: (companyId: string): string | null => {
+    const t = token();
+    if (!t) return null;
+    return `${BASE}/companies/${companyId}/events?token=${encodeURIComponent(t)}`;
+  },
+
+  marketplace: () => req<AgentListing[]>(`/marketplace/listings`),
+  hireAgent: (companyId: string, listingId: string) =>
+    req<Agent>(`/companies/${companyId}/marketplace/hire`, {
+      method: "POST",
+      body: JSON.stringify({ listing_id: listingId }),
     }),
 };
 

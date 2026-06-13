@@ -13,6 +13,7 @@ const TABS = [
   ["governance", "Governance"],
   ["decisions", "Decisions"],
   ["memory", "Memory"],
+  ["marketplace", "Marketplace"],
   ["copilot", "Copilot"],
 ] as const;
 
