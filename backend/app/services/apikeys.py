@@ -14,6 +14,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.crypto import envelope
 from app.models import ApiKey
 from app.models.enums import ApiKeyStatus
+from app.providers.base import LLMProvider
+from app.providers.registry import get_provider, supported_providers
 
 
 async def store_key(
@@ -73,3 +75,36 @@ async def list_keys(db: AsyncSession, *, company_id: uuid.UUID) -> list[ApiKey]:
         )
     )
     return list(rows)
+
+
+async def get_active_key(db: AsyncSession, *, company_id: uuid.UUID) -> ApiKey | None:
+    """The company's active key for a *supported* provider (most recent first)."""
+    rows = await db.scalars(
+        select(ApiKey)
+        .where(ApiKey.company_id == company_id, ApiKey.status == ApiKeyStatus.active)
+        .order_by(ApiKey.created_at.desc())
+    )
+    supported = set(supported_providers())
+    for key in rows:
+        if key.provider in supported:
+            return key
+    return None
+
+
+async def resolve_provider(
+    db: AsyncSession, *, company_id: uuid.UUID
+) -> tuple[LLMProvider, str] | None:
+    """Resolve the company's (provider, plaintext key) from its stored BYOK key.
+
+    This is what makes BYOK provider-agnostic: the provider is chosen by which
+    key the founder configured, not hardcoded. Returns ``None`` if no usable key.
+    """
+    key = await get_active_key(db, company_id=company_id)
+    if key is None:
+        return None
+    sealed = envelope.SealedSecret(
+        ciphertext=key.encrypted_key,
+        wrapped_data_key=key.encrypted_data_key,
+        nonce=key.nonce,
+    )
+    return get_provider(key.provider), envelope.open_secret(sealed)

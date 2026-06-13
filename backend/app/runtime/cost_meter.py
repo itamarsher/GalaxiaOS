@@ -19,6 +19,7 @@ from dataclasses import dataclass
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.db import set_tenant
 from app.models import ExternalCharge, LLMCall
 from app.models.enums import SpendCategory
 from app.providers.base import LLMProvider, LLMResponse, Message, ToolSpec, Usage
@@ -41,6 +42,7 @@ class CostMeter:
     ):
         """Reserve ``estimated_cents`` in its own transaction; release on failure."""
         async with self._sf() as db:
+            await set_tenant(db, company_id)
             budget = await budget_svc.reserve(
                 db, company_id=company_id, cents=estimated_cents, agent_id=agent_id
             )
@@ -52,6 +54,7 @@ class CostMeter:
         finally:
             if not committed["done"]:
                 async with self._sf() as db:
+                    await set_tenant(db, company_id)
                     await budget_svc.release_reservation(
                         db, budget_id=res.budget_id, reserved_cents=res.reserved_cents
                     )
@@ -95,6 +98,7 @@ class CostMeter:
             actual_cents = price.cost_cents(resp.usage)
 
             async with self._sf() as db:
+                await set_tenant(db, company_id)
                 entry = await budget_svc.commit_spend(
                     db,
                     company_id=company_id,
@@ -146,6 +150,7 @@ class CostMeter:
             company_id=company_id, agent_id=agent_id, estimated_cents=amount_cents
         ) as (res, committed):
             async with self._sf() as db:
+                await set_tenant(db, company_id)
                 entry = await budget_svc.commit_spend(
                     db,
                     company_id=company_id,
@@ -196,6 +201,7 @@ class CostMeter:
             company_id=company_id, agent_id=agent_id, estimated_cents=amount_cents
         ) as (res, committed):
             async with self._sf() as db:
+                await set_tenant(db, company_id)
                 entry = await budget_svc.commit_spend(
                     db,
                     company_id=company_id,

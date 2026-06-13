@@ -13,6 +13,7 @@ import uuid
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.db import set_tenant
 from app.models import Agent, AgentRun, Task
 from app.models.enums import AgentRole, AgentStatus, RunStatus, RunTrigger, TaskStatus
 from app.runtime import breakers
@@ -54,6 +55,7 @@ async def run_task(ctx: RuntimeContext, task_id: uuid.UUID) -> dict:
         task = await db.get(Task, task_id)
         if task is None:
             return {"status": "missing"}
+        await set_tenant(db, task.company_id)
         if task.status not in (TaskStatus.queued, TaskStatus.waiting_approval):
             return {"status": f"skipped:{task.status.value}"}
 
