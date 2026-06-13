@@ -23,6 +23,7 @@ async function req<T>(path: string, init: RequestInit = {}): Promise<T> {
   return (res.status === 204 ? undefined : await res.json()) as T;
 }
 
+// ── Types ────────────────────────────────────────────────────────────────────
 export interface TokenResponse { access_token: string; token_type: string }
 export interface Company { id: string; name: string; status: string; mission_id: string | null }
 export interface Agent {
@@ -36,9 +37,25 @@ export interface Preview {
   company: Company; objectives: Objective[];
   org: { agents: Agent[]; edges: AgentEdge[] }; cost_estimate_cents: number | null;
 }
+export interface BudgetView {
+  budget: { limit_cents: number; spent_cents: number; reserved_cents: number };
+  by_category: Record<string, number>;
+  by_agent: Record<string, number>;
+}
+export interface Task { id: string; agent_id: string; goal: string; status: string; depth: number; cost_cents: number; output: Record<string, unknown> | null }
+export interface Decision { id: string; agent_id: string | null; task_id: string | null; kind: string; summary: string; status: string; created_at: string }
+export interface Policy { id: string; name: string; enabled: boolean; scope: string; rule: Record<string, unknown>; effect: string; priority: number }
+export interface Breaker { id: string; type: string; state: string; tripped_reason: string | null }
+export interface Reputation { agent_id: string; trust: number; accuracy: number; roi: number; reliability: number; sample_count: number }
+export interface Memory { id: string; type: string; title: string; content: string; created_at: string }
+export interface Runway { projected_days_remaining: number | null; burn_rate_cents_per_day: number; balance_cents: number | null }
+export interface Digest { summary_md: string | null; open_decisions: number; period_date: string | null }
 
+// ── API ──────────────────────────────────────────────────────────────────────
 export const api = {
   setToken(t: string) { window.localStorage.setItem("abos_token", t); },
+  hasToken() { return token() != null; },
+  logout() { window.localStorage.removeItem("abos_token"); },
 
   signup: (email: string, password: string) =>
     req<TokenResponse>("/auth/signup", { method: "POST", body: JSON.stringify({ email, password }) }),
@@ -66,25 +83,48 @@ export const api = {
       body: JSON.stringify({ provider, api_key: apiKey }),
     }),
 
-  generate: (companyId: string) =>
-    req<Preview>(`/onboarding/${companyId}/generate`, { method: "POST" }),
-
+  generate: (companyId: string) => req<Preview>(`/onboarding/${companyId}/generate`, { method: "POST" }),
   preview: (companyId: string) => req<Preview>(`/onboarding/${companyId}/preview`),
+  launch: (companyId: string) => req<Company>(`/onboarding/${companyId}/launch`, { method: "POST" }),
 
-  launch: (companyId: string) =>
-    req<Company>(`/onboarding/${companyId}/launch`, { method: "POST" }),
+  company: (companyId: string) => req<Company>(`/companies/${companyId}`),
+  org: (companyId: string) => req<{ agents: Agent[]; edges: AgentEdge[] }>(`/companies/${companyId}/org`),
+  agents: (companyId: string) => req<Agent[]>(`/companies/${companyId}/agents`),
+  pauseAgent: (companyId: string, agentId: string) =>
+    req<Agent>(`/companies/${companyId}/agents/${agentId}/pause`, { method: "POST" }),
+  resumeAgent: (companyId: string, agentId: string) =>
+    req<Agent>(`/companies/${companyId}/agents/${agentId}/resume`, { method: "POST" }),
 
-  org: (companyId: string) =>
-    req<{ agents: Agent[]; edges: AgentEdge[] }>(`/companies/${companyId}/org`),
+  budget: (companyId: string) => req<BudgetView>(`/companies/${companyId}/budget`),
+  runway: (companyId: string) => req<Runway>(`/companies/${companyId}/runway`),
+  recomputeRunway: (companyId: string) =>
+    req<Runway>(`/companies/${companyId}/runway/recompute`, { method: "POST" }),
 
-  budget: (companyId: string) =>
-    req<{ budget: { limit_cents: number; spent_cents: number; reserved_cents: number };
-          by_category: Record<string, number>; by_agent: Record<string, number> }>(
-      `/companies/${companyId}/budget`,
-    ),
+  tasks: (companyId: string) => req<Task[]>(`/companies/${companyId}/tasks`),
 
-  tasks: (companyId: string) =>
-    req<Array<{ id: string; goal: string; status: string; depth: number; cost_cents: number }>>(
-      `/companies/${companyId}/tasks`,
-    ),
+  policies: (companyId: string) => req<Policy[]>(`/companies/${companyId}/policies`),
+  breakers: (companyId: string) => req<Breaker[]>(`/companies/${companyId}/circuit-breakers`),
+  resetBreaker: (companyId: string, breakerId: string) =>
+    req<Breaker>(`/companies/${companyId}/circuit-breakers/${breakerId}/reset`, { method: "POST" }),
+  reputation: (companyId: string) => req<Reputation[]>(`/companies/${companyId}/reputation`),
+
+  decisions: (companyId: string, onlyPending = true) =>
+    req<Decision[]>(`/companies/${companyId}/decisions?only_pending=${onlyPending}`),
+  approveDecision: (id: string) => req<Decision>(`/decisions/${id}/approve`, { method: "POST" }),
+  rejectDecision: (id: string) => req<Decision>(`/decisions/${id}/reject`, { method: "POST" }),
+
+  memory: (companyId: string, q?: string) =>
+    req<Memory[]>(`/companies/${companyId}/memory${q ? `?q=${encodeURIComponent(q)}` : ""}`),
+
+  digestLatest: (companyId: string) => req<Digest>(`/companies/${companyId}/digest/latest`),
+  generateDigest: (companyId: string) =>
+    req<Digest>(`/companies/${companyId}/digest/generate`, { method: "POST" }),
+  copilotAsk: (companyId: string, question: string) =>
+    req<{ answer: string; kind: string }>(`/companies/${companyId}/copilot/ask`, {
+      method: "POST",
+      body: JSON.stringify({ question }),
+    }),
 };
+
+export const fmtUsd = (cents: number | null | undefined) =>
+  cents == null ? "—" : `$${(cents / 100).toFixed(2)}`;

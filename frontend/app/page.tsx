@@ -1,20 +1,19 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { api, type Preview } from "@/lib/api";
+import { useState } from "react";
+import { useRouter } from "next/navigation";
+import { api, fmtUsd, type Preview } from "@/lib/api";
 
-type Step = "auth" | "mission" | "key" | "review" | "live";
+type Step = "auth" | "mission" | "key" | "review";
 
 export default function Home() {
+  const router = useRouter();
   const [step, setStep] = useState<Step>("auth");
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  // auth
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-
-  // onboarding
   const [mission, setMission] = useState("");
   const [budget, setBudget] = useState("500");
   const [companyId, setCompanyId] = useState<string | null>(null);
@@ -45,8 +44,7 @@ export default function Home() {
     guard(async () => {
       if (!companyId) return;
       await api.addApiKey(companyId, apiKey);
-      const p = await api.generate(companyId);
-      setPreview(p);
+      setPreview(await api.generate(companyId));
       setStep("review");
     });
 
@@ -54,7 +52,7 @@ export default function Home() {
     guard(async () => {
       if (!companyId) return;
       await api.launch(companyId);
-      setStep("live");
+      router.push(`/c/${companyId}`);
     });
 
   return (
@@ -109,9 +107,7 @@ export default function Home() {
             <div className="step">Step 3 · Review generated organization</div>
             <h2>{preview.company.name}</h2>
             {preview.cost_estimate_cents != null && (
-              <p className="muted">
-                Est. monthly cost: ${(preview.cost_estimate_cents / 100).toFixed(2)}
-              </p>
+              <p className="muted">Est. monthly cost: {fmtUsd(preview.cost_estimate_cents)}</p>
             )}
             <h3>Objectives</h3>
             {preview.objectives.map((o) => (
@@ -120,14 +116,14 @@ export default function Home() {
                 <span className="pill">P{o.priority}</span>
               </div>
             ))}
-            <h3 style={{ marginTop: 20 }}>Agent fleet</h3>
+            <h3>Agent fleet</h3>
             {preview.org.agents.map((a) => (
               <div key={a.id} className="agent">
                 <div className="role">{a.role}</div>
                 <strong>{a.name}</strong>
                 <div className="muted">
                   autonomy: {a.autonomy_level}
-                  {a.monthly_budget_cents != null && ` · budget $${(a.monthly_budget_cents / 100).toFixed(0)}/mo`}
+                  {a.monthly_budget_cents != null && ` · budget ${fmtUsd(a.monthly_budget_cents)}/mo`}
                 </div>
               </div>
             ))}
@@ -140,56 +136,7 @@ export default function Home() {
         </div>
       )}
 
-      {step === "live" && companyId && <Live companyId={companyId} />}
-
       {err && <div className="err">{err}</div>}
-    </div>
-  );
-}
-
-function Live({ companyId }: { companyId: string }) {
-  const [budget, setBudget] = useState<Awaited<ReturnType<typeof api.budget>> | null>(null);
-  const [tasks, setTasks] = useState<Awaited<ReturnType<typeof api.tasks>>>([]);
-
-  useEffect(() => {
-    let active = true;
-    const poll = async () => {
-      try {
-        const [b, t] = await Promise.all([api.budget(companyId), api.tasks(companyId)]);
-        if (active) { setBudget(b); setTasks(t); }
-      } catch { /* ignore transient errors */ }
-    };
-    poll();
-    const id = setInterval(poll, 3000);
-    return () => { active = false; clearInterval(id); };
-  }, [companyId]);
-
-  return (
-    <div>
-      <div className="card">
-        <div className="step">Live · Budget</div>
-        {budget ? (
-          <>
-            <div className="kv"><span>Limit</span><span>${(budget.budget.limit_cents / 100).toFixed(2)}</span></div>
-            <div className="kv"><span>Spent</span><span>${(budget.budget.spent_cents / 100).toFixed(2)}</span></div>
-            <div className="kv"><span>Reserved</span><span>${(budget.budget.reserved_cents / 100).toFixed(2)}</span></div>
-            <h4>By category</h4>
-            {Object.entries(budget.by_category).map(([k, v]) => (
-              <div key={k} className="kv"><span>{k}</span><span>${(v / 100).toFixed(2)}</span></div>
-            ))}
-          </>
-        ) : <p className="muted">loading…</p>}
-      </div>
-      <div className="card">
-        <div className="step">Live · Tasks ({tasks.length})</div>
-        {tasks.map((t) => (
-          <div key={t.id} className="kv">
-            <span>{"—".repeat(t.depth)} {t.goal.slice(0, 70)}</span>
-            <span className="pill">{t.status}</span>
-          </div>
-        ))}
-        {tasks.length === 0 && <p className="muted">Agents are warming up…</p>}
-      </div>
     </div>
   );
 }

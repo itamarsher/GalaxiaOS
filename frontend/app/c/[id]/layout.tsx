@@ -1,0 +1,51 @@
+"use client";
+
+import Link from "next/link";
+import { usePathname, useParams, useRouter } from "next/navigation";
+import type { ReactNode } from "react";
+import { api } from "@/lib/api";
+
+const TABS = [
+  ["", "Overview"],
+  ["org", "Org"],
+  ["budget", "Budget"],
+  ["tasks", "Tasks"],
+  ["governance", "Governance"],
+  ["decisions", "Decisions"],
+  ["memory", "Memory"],
+  ["copilot", "Copilot"],
+] as const;
+
+export default function DashboardLayout({ children }: { children: ReactNode }) {
+  const params = useParams<{ id: string }>();
+  const pathname = usePathname();
+  const router = useRouter();
+  const base = `/c/${params.id}`;
+
+  return (
+    <div>
+      <div className="topbar">
+        <span className="brand">ABOS</span>
+        <button
+          className="ghost"
+          style={{ marginTop: 0 }}
+          onClick={() => { api.logout(); router.push("/"); }}
+        >
+          Log out
+        </button>
+      </div>
+      <nav className="nav">
+        {TABS.map(([slug, label]) => {
+          const href = slug ? `${base}/${slug}` : base;
+          const active = pathname === href;
+          return (
+            <Link key={slug} href={href} className={active ? "active" : ""}>
+              {label}
+            </Link>
+          );
+        })}
+      </nav>
+      <div className="dash">{children}</div>
+    </div>
+  );
+}
