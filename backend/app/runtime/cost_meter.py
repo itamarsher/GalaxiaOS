@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import time
 import uuid
+from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 
@@ -176,6 +177,59 @@ class CostMeter:
                 )
                 await db.commit()
             committed["done"] = True
+
+    async def metered_external(
+        self,
+        *,
+        company_id: uuid.UUID,
+        agent_id: uuid.UUID | None,
+        task_id: uuid.UUID | None,
+        estimated_cents: int,
+        vendor: str,
+        sku: str | None,
+        action: Callable[[], Awaitable[tuple[int, str | None, dict | None]]],
+        description: str | None = None,
+    ) -> str | None:
+        """Reserve, run an irreversible external ``action``, then commit the actual.
+
+        ``action`` performs the real side effect (e.g. a domain registration) and
+        returns ``(actual_cents, external_ref, payload)``. The budget is reserved
+        *before* the action runs, so an over-budget purchase is refused up front;
+        if the action raises, the reservation is released and nothing is charged.
+        Returns the ``external_ref`` on success.
+        """
+        async with self._reserve(
+            company_id=company_id, agent_id=agent_id, estimated_cents=estimated_cents
+        ) as (res, committed):
+            actual_cents, external_ref, payload = await action()
+            async with self._sf() as db:
+                await set_tenant(db, company_id)
+                entry = await budget_svc.commit_spend(
+                    db,
+                    company_id=company_id,
+                    budget_id=res.budget_id,
+                    reserved_cents=res.reserved_cents,
+                    actual_cents=actual_cents,
+                    category=SpendCategory.external,
+                    agent_id=agent_id,
+                    task_id=task_id,
+                    vendor=vendor,
+                    sku=sku,
+                    description=description,
+                )
+                db.add(
+                    ExternalCharge(
+                        company_id=company_id,
+                        spend_entry_id=entry.id,
+                        vendor=vendor,
+                        sku=sku,
+                        external_ref=external_ref,
+                        payload=payload,
+                    )
+                )
+                await db.commit()
+            committed["done"] = True
+        return external_ref
 
     async def charge_agent_invocation(
         self,

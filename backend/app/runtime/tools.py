@@ -23,6 +23,7 @@ from app.models.enums import (
     TaskStatus,
 )
 from app.config import settings
+from app.integrations.base import RegistrarError
 from app.integrations.registry import get_registrar
 from app.providers.base import ToolSpec
 from app.runtime.breakers import loop_signature
@@ -105,6 +106,7 @@ class ToolOutcome:
     observation: str
     stop: bool = False  # report_result -> finish the task
     park: bool = False  # request_decision -> wait for founder
+    is_error: bool = False  # surfaced as a tool_result error block to the model
 
 
 async def _spawn_child(db, ctx, parent: Task, agent: Agent, role: str, goal: str) -> None:
@@ -167,17 +169,29 @@ async def execute_tool(
         if not quote.available:
             # No charge: nothing was reserved or spent.
             return ToolOutcome(observation=f"domain {domain} unavailable; not registered (no charge)")
-        await ctx.cost_meter.charge_external(
-            company_id=task.company_id,
-            agent_id=agent.id,
-            task_id=task.id,
-            amount_cents=quote.price_cents,
-            vendor=f"registrar({settings.domain_registrar})",
-            sku=domain,
-            external_ref=domain,
-            description=f"domain {domain}",
+
+        async def _do_register() -> tuple[int, str | None, dict | None]:
+            # Reserved by metered_external BEFORE this runs; on failure the
+            # reservation is released and nothing is charged.
+            reg = await registrar.register(domain)
+            return reg.price_cents, reg.external_ref, {"domain": domain}
+
+        try:
+            ref = await ctx.cost_meter.metered_external(
+                company_id=task.company_id,
+                agent_id=agent.id,
+                task_id=task.id,
+                estimated_cents=quote.price_cents,
+                vendor=f"registrar({settings.domain_registrar})",
+                sku=domain,
+                action=_do_register,
+                description=f"domain {domain}",
+            )
+        except RegistrarError as exc:
+            return ToolOutcome(observation=f"domain {domain} registration failed: {exc}", is_error=True)
+        return ToolOutcome(
+            observation=f"registered domain {domain} (${quote.price_cents / 100:.2f}, ref {ref})"
         )
-        return ToolOutcome(observation=f"registered domain {domain} (${quote.price_cents/100:.2f})")
 
     if name == "request_decision":
         db.add(
