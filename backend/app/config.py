@@ -35,6 +35,12 @@ class Settings(BaseSettings):
     model_planner: str = Field(default="claude-sonnet-4-6")
     model_strategic: str = Field(default="claude-opus-4-8")
 
+    # Budget OS / Copilot
+    runway_alert_days: float = 14.0  # raise a decision request below this runway
+    roi_pause_floor: float = 0.05  # reputation.roi below this is "low ROI"
+    digest_hour_utc: int = 13  # daily digest cron hour
+    runway_recompute_minute: int = 0  # hourly runway recompute
+
 
 @lru_cache
 def get_settings() -> Settings:

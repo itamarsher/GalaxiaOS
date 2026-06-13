@@ -35,3 +35,14 @@ async def ask(company: CompanyDep, body: CopilotAskRequest, db: DbDep):
     text, kind = await copilot.answer(db, company_id=company.id, question=body.question)
     await db.commit()
     return CopilotAskResponse(answer=text, kind=kind)
+
+
+@router.post("/digest/generate")
+async def generate_digest(company: CompanyDep, db: DbDep):
+    digest = await copilot.generate_digest(db, company_id=company.id)
+    await db.commit()
+    return {
+        "summary_md": digest.summary_md,
+        "open_decisions": digest.open_decisions,
+        "period_date": digest.period_date.isoformat(),
+    }

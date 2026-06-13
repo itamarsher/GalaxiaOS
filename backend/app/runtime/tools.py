@@ -13,7 +13,7 @@ from dataclasses import dataclass
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import Agent, DecisionRequest, MemoryEntry, Task
+from app.models import Agent, DecisionRequest, Task
 from app.models.enums import (
     AgentRole,
     DecisionKind,
@@ -145,16 +145,16 @@ async def execute_tool(
         return ToolOutcome(observation=f"dispatched {args['role']}: {args['goal'][:80]}")
 
     if name == "write_memory":
-        db.add(
-            MemoryEntry(
-                company_id=task.company_id,
-                type=MemoryType(args["type"]),
-                title=args["title"][:500],
-                content=args["content"],
-                source_task_id=task.id,
-            )
+        from app.services import memory as memory_svc
+
+        await memory_svc.write(
+            db,
+            company_id=task.company_id,
+            type=MemoryType(args["type"]),
+            title=args["title"],
+            content=args["content"],
+            source_task_id=task.id,
         )
-        await db.flush()
         return ToolOutcome(observation=f"memory saved: {args['title'][:60]}")
 
     if name == "register_domain":

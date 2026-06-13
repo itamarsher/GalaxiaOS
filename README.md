@@ -24,6 +24,22 @@ Two decoupling seams keep the system future-proof:
 
 See the full design in the plan referenced from the project history.
 
+## Status
+
+- **Onboarding → launch**: mission → objectives/OKRs → generated agent fleet → launch.
+- **Budget OS**: every billable action (LLM + external) metered through one `CostMeter`
+  chokepoint; per-category/per-agent rollups; runway forecasting; ROI-based pausing.
+- **Live runtime**: native agent loop, CEO-as-planner orchestration, circuit breakers,
+  declarative policy engine, founder decision inbox.
+- **Governance & reputation**: per-agent trust/accuracy/ROI/reliability updated on task
+  completion (also the future marketplace trust signal).
+- **Company Memory**: pgvector-backed write/retrieve behind a swappable embedding seam.
+- **Founder Copilot**: daily digest (cron) + NL control plane — LLM answers grounded
+  queries and parses commands into allow-listed, code-executed actions.
+
+Tests: `make test` (set `ABOS_TEST_DATABASE_URL` to a Postgres DSN to include the
+DB-backed budget/runway/reputation tests; pure-logic tests run without a DB).
+
 ## Quickstart
 
 ```bash

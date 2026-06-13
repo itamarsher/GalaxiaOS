@@ -9,6 +9,7 @@ from app.deps import CompanyDep, DbDep
 from app.models import RunwaySnapshot
 from app.schemas import BudgetOut, BudgetPatchRequest, BudgetView
 from app.services import budget as budget_svc
+from app.services import runway as runway_svc
 
 router = APIRouter(prefix="/companies/{company_id}", tags=["budget"])
 
@@ -34,6 +35,19 @@ async def patch_budget(company: CompanyDep, body: BudgetPatchRequest, db: DbDep)
     budget.version += 1
     await db.commit()
     return budget
+
+
+@router.post("/runway/recompute")
+async def recompute_runway(company: CompanyDep, db: DbDep):
+    snap = await runway_svc.recompute(db, company.id)
+    await db.commit()
+    if snap is None:
+        return {"projected_days_remaining": None, "burn_rate_cents_per_day": 0, "balance_cents": None}
+    return {
+        "projected_days_remaining": snap.projected_days_remaining,
+        "burn_rate_cents_per_day": snap.burn_rate_cents_per_day,
+        "balance_cents": snap.balance_cents,
+    }
 
 
 @router.get("/runway")

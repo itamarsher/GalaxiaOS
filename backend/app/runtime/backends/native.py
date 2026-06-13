@@ -22,7 +22,7 @@ from app.runtime import breakers
 from app.runtime.context import RuntimeContext
 from app.runtime.prompts import AGENT_LOOP_SYSTEM, ROLE_DESCRIPTIONS
 from app.runtime.tools import DOMAIN_PRICE_CENTS, TOOL_SPECS, execute_tool
-from app.services import apikeys
+from app.services import apikeys, reputation
 from app.services import governance as gov
 
 _COST_HINTS = {"register_domain": DOMAIN_PRICE_CENTS}
@@ -152,5 +152,13 @@ class NativeBackend:
                 )
             )
             row.cost_cents = int(cost or 0)
+            await reputation.record_task_outcome(
+                db,
+                company_id=task.company_id,
+                agent_id=task.agent_id,
+                success=status is TaskStatus.done,
+                blocked=status is TaskStatus.blocked,
+                cost_cents=row.cost_cents,
+            )
             await db.commit()
         return {"status": status.value, "output": output}

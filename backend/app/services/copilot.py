@@ -1,12 +1,15 @@
 """Founder Copilot: daily digest + natural-language control plane.
 
-Queries are answered by an LLM grounded in structured company state. Commands are
-parsed by the LLM into a *structured action* validated against an allow-list and
-executed by **code, not the LLM** — destructive actions return a confirmation.
+Queries are answered by an LLM grounded in structured company state plus
+semantically-retrieved memory. Commands are parsed by the LLM into a *structured
+action* validated against an allow-list and executed by **code, not the LLM**;
+reversible actions (pause/resume) run immediately, destructive ones (budget
+changes) return a confirmation instead of mutating.
 """
 
 from __future__ import annotations
 
+import json
 import uuid
 from datetime import date
 
@@ -15,18 +18,31 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.db import SessionLocal
-from app.models import Agent, FounderDigest, MemoryEntry, Task
-from app.models.enums import AgentStatus, TaskStatus
+from app.models import Agent, FounderDigest, Task
+from app.models.enums import AgentRole, AgentStatus, TaskStatus
 from app.providers.base import Message
 from app.providers.registry import get_provider
 from app.runtime.cost_meter import CostMeter
 from app.services import apikeys
 from app.services import budget as budget_svc
+from app.services import memory as memory_svc
+from app.services import runway as runway_svc
 
-_COMMAND_VERBS = ("pause", "resume", "stop", "halt", "increase", "decrease", "set")
+_COMMAND_VERBS = ("pause", "resume", "stop", "halt", "increase", "decrease", "set", "raise", "lower")
+
+_ALLOWED_ACTIONS = {"pause_agents", "resume_agents", "pause_low_roi_agents", "set_budget", "none"}
+
+COMMAND_PARSE_SYSTEM = """Translate the founder's command into ONE structured action.
+Respond ONLY with minified JSON:
+{"action": "pause_agents|resume_agents|pause_low_roi_agents|set_budget|none",
+ "roles": ["growth","research","product","finance","governance","ceo"],
+ "all": false, "roi_lt": 0.05, "value_cents": 50000}
+Rules: include only the fields relevant to the action. Use "pause_low_roi_agents" for
+commands about pausing by ROI/performance threshold (set roi_lt). Use "all": true to target
+every agent. Use "none" if the command cannot be mapped to one of these actions."""
 
 
-async def _company_state(db: AsyncSession, company_id: uuid.UUID) -> str:
+async def _company_state(db: AsyncSession, company_id: uuid.UUID, extra_memory=None) -> str:
     budget = await budget_svc.get_active_budget(db, company_id)
     by_cat = await budget_svc.spend_by_category(db, company_id)
     task_counts = await db.execute(
@@ -35,20 +51,15 @@ async def _company_state(db: AsyncSession, company_id: uuid.UUID) -> str:
         .group_by(Task.status)
     )
     counts = {s.value: c for s, c in task_counts.all()}
-    memories = (
-        await db.scalars(
-            select(MemoryEntry)
-            .where(MemoryEntry.company_id == company_id)
-            .order_by(MemoryEntry.created_at.desc())
-            .limit(8)
-        )
-    ).all()
+    memories = extra_memory if extra_memory is not None else await memory_svc.query(
+        db, company_id=company_id, text=None, limit=8
+    )
     lines = [
         f"Budget: limit={budget.limit_cents if budget else 0}c "
         f"spent={budget.spent_cents if budget else 0}c reserved={budget.reserved_cents if budget else 0}c",
         f"Spend by category (cents): {by_cat}",
         f"Task counts: {counts}",
-        "Recent memory:",
+        "Relevant memory:",
     ]
     lines += [f"- [{m.type.value}] {m.title}: {m.content[:160]}" for m in memories]
     return "\n".join(lines)
@@ -56,22 +67,17 @@ async def _company_state(db: AsyncSession, company_id: uuid.UUID) -> str:
 
 async def answer(db: AsyncSession, *, company_id: uuid.UUID, question: str) -> tuple[str, str]:
     """Return (answer_text, kind) where kind is 'query' or 'command'."""
-    is_command = question.strip().lower().startswith(_COMMAND_VERBS)
     api_key = await apikeys.get_plaintext_key(db, company_id=company_id, provider="anthropic")
     if not api_key:
         return ("Add a provider API key to use the copilot.", "query")
 
-    if is_command:
-        # MVP: surface the parsed intent and require explicit confirmation before
-        # any destructive mutation. The structured executor is wired in Phase 4.
-        return (
-            f"Interpreted as a command: '{question}'. Commands that change company "
-            "state require confirmation — review the affected agents/initiatives, then "
-            "approve via the relevant control (pause/resume) before it is applied.",
-            "command",
-        )
+    if question.strip().lower().startswith(_COMMAND_VERBS):
+        action = await _parse_command(company_id, api_key, question)
+        text = await _execute_command(db, company_id=company_id, action=action)
+        return (text, "command")
 
-    state = await _company_state(db, company_id)
+    relevant = await memory_svc.query(db, company_id=company_id, text=question, limit=8)
+    state = await _company_state(db, company_id, extra_memory=relevant)
     meter = CostMeter(SessionLocal)
     resp = await meter.run_llm(
         get_provider("anthropic"),
@@ -88,6 +94,69 @@ async def answer(db: AsyncSession, *, company_id: uuid.UUID, question: str) -> t
         max_tokens=600,
     )
     return (resp.text, "query")
+
+
+async def _parse_command(company_id: uuid.UUID, api_key: str, question: str) -> dict:
+    meter = CostMeter(SessionLocal)
+    resp = await meter.run_llm(
+        get_provider("anthropic"),
+        api_key=api_key,
+        company_id=company_id,
+        agent_id=None,
+        task_id=None,
+        model=settings.model_cheap,
+        system=COMMAND_PARSE_SYSTEM,
+        messages=[Message(role="user", content=question)],
+        max_tokens=200,
+    )
+    try:
+        text = resp.text
+        action = json.loads(text[text.find("{") : text.rfind("}") + 1])
+    except (ValueError, json.JSONDecodeError):
+        return {"action": "none"}
+    if action.get("action") not in _ALLOWED_ACTIONS:
+        return {"action": "none"}
+    return action
+
+
+async def _resolve_agents(db, company_id: uuid.UUID, action: dict) -> list[Agent]:
+    stmt = select(Agent).where(Agent.company_id == company_id)
+    roles = action.get("roles")
+    if roles and not action.get("all"):
+        try:
+            stmt = stmt.where(Agent.role.in_([AgentRole(r) for r in roles]))
+        except ValueError:
+            return []
+    return list((await db.scalars(stmt)).all())
+
+
+async def _execute_command(db: AsyncSession, *, company_id: uuid.UUID, action: dict) -> str:
+    kind = action.get("action")
+
+    if kind == "pause_low_roi_agents":
+        threshold = float(action.get("roi_lt", settings.roi_pause_floor))
+        paused = await runway_svc.pause_low_roi_agents(db, company_id, threshold)
+        return f"Paused {len(paused)} agent(s) with ROI below {threshold:.0%}."
+
+    if kind in ("pause_agents", "resume_agents"):
+        new_status = AgentStatus.paused if kind == "pause_agents" else AgentStatus.active
+        agents = await _resolve_agents(db, company_id, action)
+        changed = [a for a in agents if a.status is not new_status]
+        for a in changed:
+            a.status = new_status
+        await db.flush()
+        verb = "Paused" if new_status is AgentStatus.paused else "Resumed"
+        names = ", ".join(a.name for a in changed) or "no matching agents"
+        return f"{verb} {len(changed)} agent(s): {names}."
+
+    if kind == "set_budget":
+        value = action.get("value_cents")
+        return (
+            f"This would change the monthly budget to ${(value or 0) / 100:.2f}. Budget changes "
+            "are not applied automatically — confirm via the budget control (PATCH /budget) to proceed."
+        )
+
+    return "I couldn't map that to a supported command. Try: pause/resume agents, or pause agents below an ROI threshold."
 
 
 async def generate_digest(db: AsyncSession, *, company_id: uuid.UUID) -> FounderDigest:
