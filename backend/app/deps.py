@@ -10,7 +10,7 @@ from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db import get_db
+from app.db import get_db, set_tenant
 from app.models import Company, Membership, User
 from app.security import decode_access_token
 
@@ -52,6 +52,8 @@ async def get_company_for_user(
     company = await db.get(Company, company_id)
     if company is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Company not found")
+    # Activate RLS scoping for the rest of this request's queries.
+    await set_tenant(db, company_id)
     return company
 
 
@@ -80,6 +82,7 @@ async def get_company_for_user_sse(
     company = await db.get(Company, company_id)
     if company is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Company not found")
+    await set_tenant(db, company_id)
     return company
 
 

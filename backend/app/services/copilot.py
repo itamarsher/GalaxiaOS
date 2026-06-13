@@ -21,7 +21,6 @@ from app.db import SessionLocal
 from app.models import Agent, FounderDigest, Task
 from app.models.enums import AgentRole, AgentStatus, TaskStatus
 from app.providers.base import Message
-from app.providers.registry import get_provider
 from app.runtime.cost_meter import CostMeter
 from app.services import apikeys
 from app.services import budget as budget_svc
@@ -67,12 +66,13 @@ async def _company_state(db: AsyncSession, company_id: uuid.UUID, extra_memory=N
 
 async def answer(db: AsyncSession, *, company_id: uuid.UUID, question: str) -> tuple[str, str]:
     """Return (answer_text, kind) where kind is 'query' or 'command'."""
-    api_key = await apikeys.get_plaintext_key(db, company_id=company_id, provider="anthropic")
-    if not api_key:
+    resolved = await apikeys.resolve_provider(db, company_id=company_id)
+    if resolved is None:
         return ("Add a provider API key to use the copilot.", "query")
+    provider, api_key = resolved
 
     if question.strip().lower().startswith(_COMMAND_VERBS):
-        action = await _parse_command(company_id, api_key, question)
+        action = await _parse_command(provider, company_id, api_key, question)
         text = await _execute_command(db, company_id=company_id, action=action)
         return (text, "command")
 
@@ -80,12 +80,12 @@ async def answer(db: AsyncSession, *, company_id: uuid.UUID, question: str) -> t
     state = await _company_state(db, company_id, extra_memory=relevant)
     meter = CostMeter(SessionLocal)
     resp = await meter.run_llm(
-        get_provider("anthropic"),
+        provider,
         api_key=api_key,
         company_id=company_id,
         agent_id=None,
         task_id=None,
-        model=settings.model_cheap,
+        model=provider.default_models["cheap"],
         system=(
             "You are the founder's copilot. Answer concisely and only from the company "
             "state provided. If the data does not support an answer, say so."
@@ -96,15 +96,15 @@ async def answer(db: AsyncSession, *, company_id: uuid.UUID, question: str) -> t
     return (resp.text, "query")
 
 
-async def _parse_command(company_id: uuid.UUID, api_key: str, question: str) -> dict:
+async def _parse_command(provider, company_id: uuid.UUID, api_key: str, question: str) -> dict:
     meter = CostMeter(SessionLocal)
     resp = await meter.run_llm(
-        get_provider("anthropic"),
+        provider,
         api_key=api_key,
         company_id=company_id,
         agent_id=None,
         task_id=None,
-        model=settings.model_cheap,
+        model=provider.default_models["cheap"],
         system=COMMAND_PARSE_SYSTEM,
         messages=[Message(role="user", content=question)],
         max_tokens=200,
@@ -167,17 +167,18 @@ async def generate_digest(db: AsyncSession, *, company_id: uuid.UUID) -> Founder
         .select_from(Task)
         .where(Task.company_id == company_id, Task.status == TaskStatus.waiting_approval)
     )
-    api_key = await apikeys.get_plaintext_key(db, company_id=company_id, provider="anthropic")
+    resolved = await apikeys.resolve_provider(db, company_id=company_id)
     summary = state
-    if api_key:
+    if resolved is not None:
+        provider, api_key = resolved
         meter = CostMeter(SessionLocal)
         resp = await meter.run_llm(
-            get_provider("anthropic"),
+            provider,
             api_key=api_key,
             company_id=company_id,
             agent_id=None,
             task_id=None,
-            model=settings.model_cheap,
+            model=provider.default_models["cheap"],
             system=(
                 "Write a terse board update for a solo founder: yesterday's progress, "
                 "spend, risks, and any decisions needed. Markdown, <150 words."

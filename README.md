@@ -67,15 +67,18 @@ Postgres **Row-Level Security** is enabled on every tenant table (migration
 `0002_row_level_security`), keyed to the `app.current_company` session GUC and
 `FORCE`d so it applies even to the table-owner role the app connects as.
 
-Rollout is **permissive-until-adopted**: the policy allows all rows when the GUC
-is unset or empty, so existing code and tests that never set it behave exactly
-as before. A request opts into DB-level scoping by calling
-`app.db.set_tenant(session, company_id)` (transaction-scoped `set_config`, so it
-never leaks across pooled connections). Once every tenant route sets the GUC, a
-follow-up migration tightens the policy to a strict
-`company_id = current_setting('app.current_company')::uuid` (no permissive
-fallback), turning the safety net into a hard boundary. See the `app.db` module
-docstring for the full procedure.
+DB-level scoping is now **active**: `app.db.set_tenant(session, company_id)`
+(transaction-scoped `set_config`, so it never leaks across pooled connections) is
+called on every tenant path — the `CompanyDep`/SSE API dependencies, the agent
+runtime (orchestrator, native + marketplace backends), the `CostMeter` sessions,
+and the scheduled jobs. The policy is still **permissive-when-unset** (it allows
+all rows if the GUC is absent) so that global/non-tenant sessions and tests keep
+working; because the app role is not a superuser in production, this acts as a
+real per-tenant boundary wherever the GUC is set. The remaining step is a
+follow-up migration that drops the permissive fallback for a strict
+`company_id = current_setting('app.current_company')::uuid`, once you've
+confirmed no tenant-table access path is left un-scoped. See the `app.db` module
+docstring for the procedure.
 
 ## Layout
 

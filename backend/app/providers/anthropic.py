@@ -75,6 +75,11 @@ def _render_content(content: str | list) -> str | list[dict]:
 
 class AnthropicProvider(LLMProvider):
     name = "anthropic"
+    default_models = {
+        "cheap": "claude-haiku-4-5",
+        "planner": "claude-sonnet-4-6",
+        "strategic": "claude-opus-4-8",
+    }
 
     def price(self, model: str) -> Price:
         return price_for(self.name, model)

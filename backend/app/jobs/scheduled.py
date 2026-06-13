@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from sqlalchemy import select
 
-from app.db import SessionLocal
+from app.db import SessionLocal, set_tenant
 from app.models import Company
 from app.models.enums import CompanyStatus
 from app.services import copilot
@@ -23,6 +23,7 @@ async def recompute_runway(ctx: dict) -> dict:
     count = 0
     for company_id in await _active_company_ids():
         async with SessionLocal() as db:
+            await set_tenant(db, company_id)
             await runway_svc.recompute(db, company_id)
             await db.commit()
             count += 1
@@ -33,6 +34,7 @@ async def generate_digests(ctx: dict) -> dict:
     count = 0
     for company_id in await _active_company_ids():
         async with SessionLocal() as db:
+            await set_tenant(db, company_id)
             await copilot.generate_digest(db, company_id=company_id)
             await db.commit()
             count += 1

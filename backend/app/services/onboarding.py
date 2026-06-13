@@ -35,8 +35,7 @@ from app.models.enums import (
     PolicyEffect,
     PolicyScope,
 )
-from app.providers.base import Message, ToolSpec
-from app.providers.registry import get_provider
+from app.providers.base import Message
 from app.runtime import orchestrator
 from app.runtime.cost_meter import CostMeter
 from app.runtime.prompts import MISSION_TO_PLAN_SYSTEM, PLAN_TO_ORG_SYSTEM
@@ -92,25 +91,24 @@ async def start(
 
 async def generate(db: AsyncSession, *, company: Company) -> dict:
     """Run the generation LLM calls and persist objectives, KRs, agents, edges."""
-    api_key = await apikeys.get_plaintext_key(db, company_id=company.id, provider="anthropic")
-    if not api_key:
+    resolved = await apikeys.resolve_provider(db, company_id=company.id)
+    if resolved is None:
         raise OnboardingError("Add a provider API key before generating the organization.")
+    provider, api_key = resolved
+    planner_model = provider.default_models["planner"]
 
     mission = await db.scalar(select(Mission).where(Mission.company_id == company.id))
     budget = await db.scalar(select(Budget).where(Budget.company_id == company.id))
-    provider = get_provider("anthropic")
     meter = CostMeter(SessionLocal)
 
     # ── LLM #1: mission → plan ────────────────────────────────────────────────
-    from app.config import settings
-
     plan_resp = await meter.run_llm(
         provider,
         api_key=api_key,
         company_id=company.id,
         agent_id=None,
         task_id=None,
-        model=settings.model_planner,
+        model=planner_model,
         system=MISSION_TO_PLAN_SYSTEM,
         messages=[Message(role="user", content=mission.raw_text)],
         max_tokens=1500,
@@ -156,7 +154,7 @@ async def generate(db: AsyncSession, *, company: Company) -> dict:
         company_id=company.id,
         agent_id=None,
         task_id=None,
-        model=settings.model_planner,
+        model=planner_model,
         system=PLAN_TO_ORG_SYSTEM,
         messages=[Message(role="user", content=org_input)],
         max_tokens=1500,

@@ -107,6 +107,9 @@ class Price:
 @runtime_checkable
 class LLMProvider(Protocol):
     name: str
+    #: Default model id per role tier. Keys: "cheap", "planner", "strategic".
+    #: Lets the runtime pick a sensible model without hardcoding vendor ids.
+    default_models: dict[str, str]
 
     def price(self, model: str) -> Price: ...
 

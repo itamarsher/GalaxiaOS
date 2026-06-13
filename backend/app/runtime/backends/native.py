@@ -20,7 +20,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.models import Agent, DecisionRequest, Mission, SpendEntry, Task
 from app.models.enums import AgentRole, DecisionKind, DecisionStatus, PolicyEffect, TaskStatus
-from app.providers.base import Message, TextBlock, ToolResultBlock, ToolUseBlock
+from app.db import set_tenant
+from app.providers.base import LLMProvider, Message, TextBlock, ToolResultBlock, ToolUseBlock
 from app.runtime import breakers
 from app.runtime.context import RuntimeContext
 from app.runtime.prompts import AGENT_LOOP_SYSTEM, ROLE_DESCRIPTIONS
@@ -35,24 +36,26 @@ _DOMAIN_PRICE_HINT_CENTS = 4000
 _COST_HINTS = {"register_domain": _DOMAIN_PRICE_HINT_CENTS}
 
 
-def _model_for(agent: Agent) -> str:
+def _model_for(agent: Agent, provider: LLMProvider) -> str:
+    """Agent's explicit preference, else the provider's tier default."""
     if agent.model_pref:
         return agent.model_pref
-    return settings.model_planner if agent.role is AgentRole.ceo else settings.model_cheap
+    tier = "planner" if agent.role is AgentRole.ceo else "cheap"
+    return provider.default_models.get(tier, provider.default_models["cheap"])
 
 
 class NativeBackend:
     async def run(self, ctx: RuntimeContext, agent: Agent, task: Task) -> dict:
         async with ctx.session_factory() as db:
+            await set_tenant(db, task.company_id)
             mission = await db.scalar(
                 select(Mission).where(Mission.company_id == task.company_id).limit(1)
             )
             mission_text = mission.generated_summary or mission.raw_text if mission else ""
-            api_key = await apikeys.get_plaintext_key(
-                db, company_id=task.company_id, provider=ctx.provider.name
-            )
-        if not api_key:
+            resolved = await apikeys.resolve_provider(db, company_id=task.company_id)
+        if resolved is None:
             return await self._finish(ctx, task, TaskStatus.failed, {"error": "no API key"})
+        provider, api_key = resolved
 
         system = AGENT_LOOP_SYSTEM.format(
             role_desc=ROLE_DESCRIPTIONS.get(agent.role, ""),
@@ -60,11 +63,11 @@ class NativeBackend:
             goal=task.goal,
         )
         messages: list[Message] = [Message(role="user", content=f"Begin: {task.goal}")]
-        model = _model_for(agent)
+        model = _model_for(agent, provider)
 
         for _ in range(settings.max_steps_per_task):
             resp = await ctx.cost_meter.run_llm(
-                ctx.provider,
+                provider,
                 api_key=api_key,
                 company_id=task.company_id,
                 agent_id=agent.id,
@@ -110,6 +113,7 @@ class NativeBackend:
 
     async def _handle_call(self, ctx: RuntimeContext, agent: Agent, task: Task, call) -> dict:
         async with ctx.session_factory() as db:
+            await set_tenant(db, task.company_id)
             action = {
                 "tool": call.name,
                 "agent_role": agent.role.value,
@@ -165,6 +169,7 @@ class NativeBackend:
         self, ctx: RuntimeContext, task: Task, status: TaskStatus, output: dict
     ) -> dict:
         async with ctx.session_factory() as db:
+            await set_tenant(db, task.company_id)
             row = await db.get(Task, task.id)
             if row is None:  # pragma: no cover
                 return {"status": status.value}

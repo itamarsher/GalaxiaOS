@@ -49,6 +49,11 @@ def _flatten(content) -> str:
 
 class OpenAIProvider(LLMProvider):
     name = "openai"
+    default_models = {
+        "cheap": "gpt-4o-mini",
+        "planner": "gpt-4o",
+        "strategic": "gpt-4o",
+    }
 
     def price(self, model: str) -> Price:
         return price_for(self.name, model)

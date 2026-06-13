@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from sqlalchemy import func, select
 
+from app.db import set_tenant
 from app.models import Agent, SpendEntry, Task
 from app.models.enums import MemoryType, TaskStatus
 from app.runtime.context import RuntimeContext
@@ -42,6 +43,7 @@ class MarketplaceBackend:
         )
 
         async with ctx.session_factory() as db:
+            await set_tenant(db, task.company_id)
             await memory.write(
                 db,
                 company_id=task.company_id,
@@ -67,6 +69,7 @@ class MarketplaceBackend:
         self, ctx: RuntimeContext, task: Task, status: TaskStatus, output: dict
     ) -> dict:
         async with ctx.session_factory() as db:
+            await set_tenant(db, task.company_id)
             row = await db.get(Task, task.id)
             if row is None:  # pragma: no cover
                 return {"status": status.value}
