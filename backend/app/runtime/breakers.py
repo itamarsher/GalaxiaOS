@@ -11,7 +11,7 @@ import hashlib
 import re
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -48,7 +48,7 @@ async def _trip(
         breaker = CircuitBreaker(company_id=company_id, type=btype)
         db.add(breaker)
     breaker.state = BreakerState.tripped
-    breaker.tripped_at = datetime.now(timezone.utc)
+    breaker.tripped_at = datetime.now(UTC)
     breaker.tripped_reason = reason
     breaker.scope_agent_id = scope_agent_id
     await db.flush()

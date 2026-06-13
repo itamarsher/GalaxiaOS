@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, HTTPException, status
 from sqlalchemy import select
@@ -51,7 +51,7 @@ async def approve(decision_id: uuid.UUID, db: DbDep, user: CurrentUser):
     decision = await _load_decision(db, user, decision_id)
     decision.status = DecisionStatus.approved
     decision.resolved_by_user_id = user.id
-    decision.resolved_at = datetime.now(timezone.utc)
+    decision.resolved_at = datetime.now(UTC)
 
     resumed_task_id: uuid.UUID | None = None
     if decision.task_id:
@@ -70,7 +70,7 @@ async def reject(decision_id: uuid.UUID, db: DbDep, user: CurrentUser):
     decision = await _load_decision(db, user, decision_id)
     decision.status = DecisionStatus.rejected
     decision.resolved_by_user_id = user.id
-    decision.resolved_at = datetime.now(timezone.utc)
+    decision.resolved_at = datetime.now(UTC)
     if decision.task_id:
         task = await db.get(Task, decision.task_id)
         if task is not None and task.status is TaskStatus.waiting_approval:

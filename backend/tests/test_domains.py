@@ -2,14 +2,12 @@
 
 from __future__ import annotations
 
-import uuid
-
 import pytest
 
 from app.integrations.availability import interpret_status
 from app.integrations.base import RegistrarError
-from app.integrations.registry import get_registrar
 from app.integrations.rdap import RdapRegistrar
+from app.integrations.registry import get_registrar
 from app.integrations.simulated import SimulatedRegistrar
 from app.runtime.cost_meter import CostMeter
 from app.services import budget as budget_svc

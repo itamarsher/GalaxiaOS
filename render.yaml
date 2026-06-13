@@ -1,0 +1,100 @@
+# Render Blueprint for ABOS — managed Postgres + Redis, API + worker + web.
+#
+# Apply via Render Dashboard → "New +" → "Blueprint" (point at this repo). Secret
+# env vars (sync:false) must be set in the dashboard after first apply. Verify
+# plan names / region against your Render account — plans evolve.
+#
+# Deploys are gated on green CI: `autoDeploy: false` here, and the GitHub Actions
+# `deploy` job triggers a Render Deploy Hook per service only after tests pass.
+
+databases:
+  - name: abos-postgres
+    plan: basic-256mb
+    postgresMajorVersion: "16"
+    # pgvector: the baseline Alembic migration runs `CREATE EXTENSION vector`,
+    # which Render Postgres supports. No manual step needed.
+
+services:
+  # Managed Redis-compatible store (rate limiting + arq queue).
+  - type: keyvalue
+    name: abos-redis
+    plan: starter
+    ipAllowList: []  # internal-only
+
+  # FastAPI app. Migrations run as a pre-deploy step before each release.
+  - type: web
+    name: abos-api
+    runtime: docker
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    autoDeploy: false
+    healthCheckPath: /health/ready
+    preDeployCommand: "alembic upgrade head"
+    envVars:
+      - key: ABOS_DATABASE_URL
+        fromDatabase:
+          name: abos-postgres
+          property: connectionString
+      - key: ABOS_REDIS_URL
+        fromService:
+          name: abos-redis
+          type: keyvalue
+          property: connectionString
+      - key: ABOS_RATE_LIMIT_BACKEND
+        value: redis
+      - key: ABOS_MASTER_KEY
+        sync: false   # set in dashboard: `make gen-key`
+      - key: ABOS_JWT_SECRET
+        generateValue: true
+      - fromGroup: abos-shared
+
+  # arq worker (agent runtime + scheduled jobs). Same image, different command.
+  - type: worker
+    name: abos-worker
+    runtime: docker
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    dockerCommand: "arq app.runtime.worker.WorkerSettings"
+    autoDeploy: false
+    envVars:
+      - key: ABOS_DATABASE_URL
+        fromDatabase:
+          name: abos-postgres
+          property: connectionString
+      - key: ABOS_REDIS_URL
+        fromService:
+          name: abos-redis
+          type: keyvalue
+          property: connectionString
+      - key: ABOS_MASTER_KEY
+        sync: false
+      - key: ABOS_JWT_SECRET
+        fromService:
+          name: abos-api
+          type: web
+          envVarKey: ABOS_JWT_SECRET
+      - fromGroup: abos-shared
+
+  # Next.js frontend.
+  - type: web
+    name: abos-web
+    runtime: docker
+    dockerfilePath: ./frontend/Dockerfile.prod
+    dockerContext: ./frontend
+    autoDeploy: false
+    envVars:
+      # Baked into the client bundle at build time; point at the API's URL.
+      - key: NEXT_PUBLIC_API_BASE_URL
+        sync: false
+
+envVarGroups:
+  - name: abos-shared
+    envVars:
+      - key: ABOS_LOG_JSON
+        value: "true"
+      - key: ABOS_LOG_LEVEL
+        value: INFO
+      - key: ABOS_RATE_LIMIT_ENABLED
+        value: "true"
+      - key: ABOS_RATE_LIMIT_PER_MINUTE
+        value: "120"

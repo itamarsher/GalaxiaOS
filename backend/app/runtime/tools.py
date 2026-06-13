@@ -8,26 +8,23 @@ breaker, per-agent caps, and governance all apply identically.
 
 from __future__ import annotations
 
-import uuid
 from dataclasses import dataclass
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
+from app.integrations.base import RegistrarError
+from app.integrations.registry import get_registrar
 from app.models import Agent, DecisionRequest, Task
 from app.models.enums import (
     AgentRole,
     DecisionKind,
     DecisionStatus,
     MemoryType,
-    RunTrigger,
     TaskStatus,
 )
-from app.config import settings
-from app.integrations.base import RegistrarError
-from app.integrations.registry import get_registrar
 from app.providers.base import ToolSpec
 from app.runtime.breakers import loop_signature
-
 
 TOOL_SPECS: list[ToolSpec] = [
     ToolSpec(
