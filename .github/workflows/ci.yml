@@ -86,5 +86,7 @@ jobs:
             exit 0
           fi
           curl -fsS -X POST "$API_HOOK"
-          curl -fsS -X POST "$WORKER_HOOK"
+          # The free-tier blueprint folds the worker into the API (no worker
+          # service), so its hook is optional.
+          if [ -n "$WORKER_HOOK" ]; then curl -fsS -X POST "$WORKER_HOOK"; fi
           curl -fsS -X POST "$WEB_HOOK"

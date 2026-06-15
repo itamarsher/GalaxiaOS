@@ -2,6 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
+import logging
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
@@ -25,9 +30,41 @@ from app.observability import RequestContextMiddleware, configure_logging
 from app.ratelimit import RateLimitMiddleware, build_limiter
 
 
+@asynccontextmanager
+async def _lifespan(app: FastAPI):
+    """Optionally run the arq worker in-process (single-instance / free-tier).
+
+    In production the worker is a separate service and this is a no-op. When
+    ``ABOS_RUN_WORKER_IN_PROCESS`` is set, the think→act loop and cron jobs run
+    as a background task alongside the API so the whole app fits on one host.
+    """
+    worker = None
+    task = None
+    if settings.run_worker_in_process:
+        # Imported lazily so the API has no hard dependency on the worker wiring.
+        from app.runtime.worker import build_worker
+
+        worker = build_worker(handle_signals=False)
+        task = asyncio.create_task(worker.async_run())
+        logging.getLogger("app").info("in-process arq worker started")
+    try:
+        yield
+    finally:
+        if task is not None:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+        if worker is not None:
+            await worker.close()
+
+
 def create_app() -> FastAPI:
     configure_logging(level=settings.log_level, json_logs=settings.log_json)
-    app = FastAPI(title="ABOS — Autonomous Business Operating System", version="0.1.0")
+    app = FastAPI(
+        title="ABOS — Autonomous Business Operating System",
+        version="0.1.0",
+        lifespan=_lifespan,
+    )
 
     # Middleware added later is outermost: request-context wraps everything (so
     # rate-limit rejections and CORS are logged with a request id).
