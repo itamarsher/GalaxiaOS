@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import urllib.parse as _url
 from functools import lru_cache
+from typing import Annotated
 
 from pydantic import Field, field_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
 def normalize_db_url(url: str) -> str:
@@ -129,6 +130,27 @@ class Settings(BaseSettings):
     # Investor review (onboarding): three agentic investors critique the venture.
     investor_review_enabled: bool = True
     investor_model: str = ""  # empty -> provider's planner-tier default
+
+    # CORS: browser origins allowed to call the API. Comma-separated in the
+    # environment, e.g.
+    #   ABOS_CORS_ALLOW_ORIGINS=https://abos-web.onrender.com,http://localhost:3000
+    # The default "*" allows any origin. Per the CORS spec a wildcard origin
+    # cannot be combined with credentials, so credentials are only enabled when
+    # an explicit allowlist is configured (the frontend authenticates with a
+    # bearer token, not cookies, so this costs nothing).
+    # NoDecode keeps pydantic-settings from JSON-decoding the env value, so the
+    # validator below can accept a plain comma-separated string.
+    cors_allow_origins: Annotated[list[str], NoDecode] = Field(
+        default_factory=lambda: ["*"]
+    )
+
+    @field_validator("cors_allow_origins", mode="before")
+    @classmethod
+    def _split_cors_origins(cls, v):
+        # Accept a comma-separated string from the environment.
+        if isinstance(v, str):
+            return [o.strip() for o in v.split(",") if o.strip()]
+        return v
 
     # Observability / rate limiting (productionization)
     log_level: str = "INFO"

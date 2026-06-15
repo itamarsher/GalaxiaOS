@@ -66,8 +66,12 @@ merge.
 - **Strict RLS.** Row-Level Security is enabled and every tenant path sets the
   `app.current_company` GUC; the policy is still permissive-when-unset. Once
   verified end-to-end, ship the strict-policy migration (see `app/db.py`).
-- **CORS.** `create_app` currently allows all origins; restrict to the web
-  origin in production.
+- **CORS.** Restrict to the web origin in production via
+  `ABOS_CORS_ALLOW_ORIGINS` (comma-separated; defaults to `*`). Set it on
+  `abos-api` to the `abos-web` URL, e.g. `https://abos-web.onrender.com`. CORS
+  is the outermost middleware, so rate-limit (429) and error responses also
+  carry the `Access-Control-*` headers — without that, the browser masks the
+  real status with an opaque "No 'Access-Control-Allow-Origin' header" error.
 
 ## Alternatives
 
