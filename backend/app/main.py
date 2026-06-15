@@ -7,8 +7,9 @@ import contextlib
 import logging
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from sqlalchemy import text
 
 from app.api import (
@@ -27,6 +28,7 @@ from app.api import (
 from app.config import settings
 from app.db import SessionLocal
 from app.observability import RequestContextMiddleware, configure_logging
+from app.providers.base import ProviderError
 from app.ratelimit import RateLimitMiddleware, build_limiter
 
 
@@ -103,6 +105,16 @@ def create_app() -> FastAPI:
     app.include_router(events.router)
     app.include_router(marketplace.catalog_router)
     app.include_router(marketplace.company_router)
+
+    @app.exception_handler(ProviderError)
+    async def _provider_error(request: Request, exc: ProviderError) -> JSONResponse:
+        """Surface upstream LLM-provider failures as a clear 502 instead of a
+        bare 500. Registered handlers run inside the CORS layer, so the response
+        carries the Access-Control-* headers."""
+        return JSONResponse(
+            {"detail": str(exc), "kind": exc.kind},
+            status_code=status.HTTP_502_BAD_GATEWAY,
+        )
 
     @app.get("/health", tags=["meta"])
     async def health() -> dict:

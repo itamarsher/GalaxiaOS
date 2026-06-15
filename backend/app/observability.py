@@ -11,6 +11,7 @@ import uuid
 
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
+from starlette.responses import JSONResponse
 
 # Bound for the lifetime of a request; included in every log line emitted under it.
 request_id_var: contextvars.ContextVar[str] = contextvars.ContextVar("request_id", default="-")
@@ -74,10 +75,21 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
             )
             return response
         except Exception:
+            # Convert an otherwise-unhandled exception into a JSON 500 *here*,
+            # inside the CORS middleware, so the response still carries the
+            # Access-Control-* headers. If we re-raised, Starlette's outermost
+            # error handler (which sits outside CORS) would return a bare 500
+            # with no CORS headers, and the browser would mask the real failure
+            # as an opaque "No 'Access-Control-Allow-Origin' header" error. The
+            # full traceback is logged below; the body stays generic on purpose.
             _log.exception(
                 "request_error",
                 extra={"extra_fields": {"method": request.method, "path": request.url.path}},
             )
-            raise
+            return JSONResponse(
+                {"detail": "Internal Server Error", "request_id": rid},
+                status_code=500,
+                headers={"X-Request-ID": rid},
+            )
         finally:
             request_id_var.reset(token)

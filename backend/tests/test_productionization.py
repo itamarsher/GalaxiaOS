@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from fastapi.testclient import TestClient
 
 from app.observability import RequestContextMiddleware
+from app.providers.base import ProviderError
 from app.ratelimit import InMemoryRateLimiter, RateLimitMiddleware
 
 
@@ -119,3 +121,49 @@ def test_cors_explicit_allowlist_reflects_origin_with_credentials():
     # A disallowed origin is not echoed back.
     r2 = client.get("/ping", headers={"Origin": "https://evil.example"})
     assert r2.headers.get("Access-Control-Allow-Origin") != "https://evil.example"
+
+
+def _app_with_error_handling() -> FastAPI:
+    """Mirror create_app's error wiring: request-context (catches unhandled
+    exceptions) inside CORS, plus the ProviderError -> 502 handler."""
+    app = FastAPI()
+    app.add_middleware(RequestContextMiddleware)
+    app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+
+    @app.exception_handler(ProviderError)
+    async def _provider_error(request: Request, exc: ProviderError) -> JSONResponse:
+        return JSONResponse(
+            {"detail": str(exc), "kind": exc.kind},
+            status_code=status.HTTP_502_BAD_GATEWAY,
+        )
+
+    @app.post("/boom")
+    async def boom():
+        raise ValueError("unexpected bug")
+
+    @app.post("/provider-down")
+    async def provider_down():
+        raise ProviderError("Provider rejected the API key.", kind="auth")
+
+    return app
+
+
+def test_unhandled_exception_returns_500_with_cors_header():
+    # The regression: an unhandled exception must come back as a JSON 500 that
+    # still carries the CORS header, instead of a bare 500 the browser masks as
+    # an opaque "No 'Access-Control-Allow-Origin' header" error.
+    client = TestClient(_app_with_error_handling(), raise_server_exceptions=False)
+    r = client.post("/boom", headers={"Origin": "https://abos-web.onrender.com"})
+    assert r.status_code == 500
+    assert r.json()["detail"] == "Internal Server Error"
+    assert r.headers["Access-Control-Allow-Origin"] == "*"
+
+
+def test_provider_error_returns_502_with_cors_header():
+    client = TestClient(_app_with_error_handling(), raise_server_exceptions=False)
+    r = client.post("/provider-down", headers={"Origin": "https://abos-web.onrender.com"})
+    assert r.status_code == 502
+    body = r.json()
+    assert body["kind"] == "auth"
+    assert "API key" in body["detail"]
+    assert r.headers["Access-Control-Allow-Origin"] == "*"
