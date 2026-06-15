@@ -61,6 +61,12 @@ class Settings(BaseSettings):
     # Envelope encryption: 32-byte master key, base64url-encoded.
     master_key: str = ""
 
+    # Deployment topology. When true, the API process also runs the arq worker
+    # in-process (think→act loop + cron jobs) instead of relying on a separate
+    # worker service. Lets the whole app run on a single free-tier web instance;
+    # leave false in production, where API and worker scale independently.
+    run_worker_in_process: bool = False
+
     # Runtime safety caps (circuit breakers)
     max_task_depth: int = 4
     max_tasks_per_run: int = 200
@@ -90,6 +96,39 @@ class Settings(BaseSettings):
     roi_pause_floor: float = 0.05  # reputation.roi below this is "low ROI"
     digest_hour_utc: int = 13  # daily digest cron hour
     runway_recompute_minute: int = 0  # hourly runway recompute
+
+    # Closed-loop runtime
+    memory_recall_limit: int = 6  # prior learnings injected into an agent's context
+    metrics_recall_limit: int = 8  # recent outcome signals injected into context
+    # Reputation-driven model selection: bump a struggling agent to a stronger
+    # tier when its trust falls below the threshold.
+    reputation_model_escalation: bool = True
+    reputation_escalate_below: float = 0.4
+
+    # Continuous operation: a recurring "business cycle" re-wakes the org.
+    business_cycle_enabled: bool = True
+    business_cycle_hour_utc: int = 12
+
+    # Web search seam (agents' window on the world); "simulated" is offline.
+    web_search_provider: str = "simulated"  # simulated | tavily
+    web_search_max_results: int = 5
+    web_search_timeout_seconds: float = 10.0
+    # Tavily (only used when web_search_provider == "tavily")
+    tavily_api_key: str = ""
+    tavily_search_depth: str = "basic"  # basic | advanced
+
+    # Email seam (agents send sales/marketing/ops mail); "simulated" is offline.
+    email_provider: str = "simulated"  # simulated | smtp
+    email_from: str = ""
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_username: str = ""
+    smtp_password: str = ""
+    smtp_use_tls: bool = True
+
+    # Investor review (onboarding): three agentic investors critique the venture.
+    investor_review_enabled: bool = True
+    investor_model: str = ""  # empty -> provider's planner-tier default
 
     # Observability / rate limiting (productionization)
     log_level: str = "INFO"

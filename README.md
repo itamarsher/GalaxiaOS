@@ -96,6 +96,27 @@ docstring for the procedure.
   `ABOS_MASTER_KEY` from a KMS, and run the API and `arq` worker as separate
   scaled services. A production manifest (k8s/Compose-prod) is a follow-up.
 
+### Render blueprints (paid vs. free)
+
+Two Render Blueprints are provided:
+
+- **`render.yaml`** — production topology: managed Postgres + Redis and
+  separate API, worker, and web services (~$40/mo).
+- **`render.free.yaml`** — experiment for **$0/mo**. Render has no free
+  background-worker plan and deletes free Postgres after 30 days, so this
+  variant:
+  - folds the worker into the API process via `ABOS_RUN_WORKER_IN_PROCESS=true`
+    (the API runs the arq loop + cron jobs in-process — see `app.main` lifespan);
+  - uses a free, persistent **[Neon](https://neon.tech)** Postgres for
+    `ABOS_DATABASE_URL` (pgvector supported; `normalize_db_url` handles its
+    SSL params), since Render's free database self-deletes;
+  - uses a free Render Key Value (Redis) for the ephemeral arq queue.
+
+  Free web services spin down after ~15 min idle, so the first request after
+  idle is slow and cron jobs only run while awake — fine for experimentation.
+  Ping `/health` on a schedule to stay warm, or switch to `render.yaml` to scale
+  up. `ABOS_RUN_WORKER_IN_PROCESS` is the only code-level seam between the two.
+
 ## Layout
 
 ```

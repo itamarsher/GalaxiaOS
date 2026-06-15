@@ -12,6 +12,7 @@ import uuid
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
 from app.db import SessionLocal
 from app.models import (
     Agent,
@@ -35,12 +36,15 @@ from app.models.enums import (
     PolicyEffect,
     PolicyScope,
 )
+from app.observability import get_logger
 from app.providers.base import Message
 from app.runtime import orchestrator
 from app.runtime.cost_meter import CostMeter
 from app.runtime.prompts import MISSION_TO_PLAN_SYSTEM, PLAN_TO_ORG_SYSTEM
-from app.services import apikeys
+from app.services import apikeys, investors
 from app.services import governance as gov
+
+_log = get_logger("abos.onboarding")
 
 
 class OnboardingError(Exception):
@@ -200,9 +204,20 @@ async def generate(db: AsyncSession, *, company: Company) -> dict:
             )
 
     await db.flush()
+
+    # ── Investment review (best-effort; never breaks generation) ──────────────
+    investor_reviews = 0
+    if settings.investor_review_enabled:
+        try:
+            reviews = await investors.review(db, company=company)
+            investor_reviews = len(reviews)
+        except Exception:  # noqa: BLE001 - a review failure must not fail generation
+            _log.exception("investment review failed for company %s", company.id)
+
     return {
         "cost_estimate_cents": org.get("monthly_cost_estimate_cents"),
         "agent_roles": list(role_to_agent.keys()),
+        "investor_reviews": investor_reviews,
     }
 
 
