@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 from app.observability import RequestContextMiddleware
 from app.providers.base import ProviderError
 from app.ratelimit import InMemoryRateLimiter, RateLimitMiddleware
+from app.services.budget import BudgetExceeded
 
 
 async def test_in_memory_limiter_blocks_after_limit_and_refills():
@@ -137,6 +138,18 @@ def _app_with_error_handling() -> FastAPI:
             status_code=status.HTTP_502_BAD_GATEWAY,
         )
 
+    @app.exception_handler(BudgetExceeded)
+    async def _budget_exceeded(request: Request, exc: BudgetExceeded) -> JSONResponse:
+        return JSONResponse(
+            {
+                "detail": str(exc),
+                "scope": exc.scope,
+                "requested_cents": exc.requested_cents,
+                "available_cents": exc.available_cents,
+            },
+            status_code=status.HTTP_402_PAYMENT_REQUIRED,
+        )
+
     @app.post("/boom")
     async def boom():
         raise ValueError("unexpected bug")
@@ -144,6 +157,10 @@ def _app_with_error_handling() -> FastAPI:
     @app.post("/provider-down")
     async def provider_down():
         raise ProviderError("Provider rejected the API key.", kind="auth")
+
+    @app.post("/over-budget")
+    async def over_budget():
+        raise BudgetExceeded("company", 5000, 100)
 
     return app
 
@@ -156,6 +173,8 @@ def test_unhandled_exception_returns_500_with_cors_header():
     r = client.post("/boom", headers={"Origin": "https://abos-web.onrender.com"})
     assert r.status_code == 500
     assert r.json()["detail"] == "Internal Server Error"
+    # The exception *type* is surfaced for diagnosis (never the message).
+    assert r.json()["error"] == "ValueError"
     assert r.headers["Access-Control-Allow-Origin"] == "*"
 
 
@@ -166,4 +185,15 @@ def test_provider_error_returns_502_with_cors_header():
     body = r.json()
     assert body["kind"] == "auth"
     assert "API key" in body["detail"]
+    assert r.headers["Access-Control-Allow-Origin"] == "*"
+
+
+def test_budget_exceeded_returns_402_with_cors_header():
+    # A reservation over budget is an expected business condition, not a 500.
+    client = TestClient(_app_with_error_handling(), raise_server_exceptions=False)
+    r = client.post("/over-budget", headers={"Origin": "https://abos-web.onrender.com"})
+    assert r.status_code == 402
+    body = r.json()
+    assert body["scope"] == "company"
+    assert body["available_cents"] == 100
     assert r.headers["Access-Control-Allow-Origin"] == "*"

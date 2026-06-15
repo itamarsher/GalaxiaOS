@@ -30,6 +30,7 @@ from app.db import SessionLocal
 from app.observability import RequestContextMiddleware, configure_logging
 from app.providers.base import ProviderError
 from app.ratelimit import RateLimitMiddleware, build_limiter
+from app.services.budget import BudgetExceeded
 
 
 @asynccontextmanager
@@ -114,6 +115,21 @@ def create_app() -> FastAPI:
         return JSONResponse(
             {"detail": str(exc), "kind": exc.kind},
             status_code=status.HTTP_502_BAD_GATEWAY,
+        )
+
+    @app.exception_handler(BudgetExceeded)
+    async def _budget_exceeded(request: Request, exc: BudgetExceeded) -> JSONResponse:
+        """A reservation over the company/agent budget is an expected business
+        condition (e.g. generating an org with too small a budget), not a server
+        fault — return 402 with the shortfall instead of a 500."""
+        return JSONResponse(
+            {
+                "detail": str(exc),
+                "scope": exc.scope,
+                "requested_cents": exc.requested_cents,
+                "available_cents": exc.available_cents,
+            },
+            status_code=status.HTTP_402_PAYMENT_REQUIRED,
         )
 
     @app.get("/health", tags=["meta"])
