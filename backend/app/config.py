@@ -111,6 +111,15 @@ class Settings(BaseSettings):
     tavily_api_key: str = ""
     tavily_search_depth: str = "basic"  # basic | advanced
 
+    # Email seam (agents send sales/marketing/ops mail); "simulated" is offline.
+    email_provider: str = "simulated"  # simulated | smtp
+    email_from: str = ""
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_username: str = ""
+    smtp_password: str = ""
+    smtp_use_tls: bool = True
+
     # Investor review (onboarding): three agentic investors critique the venture.
     investor_review_enabled: bool = True
     investor_model: str = ""  # empty -> provider's planner-tier default
