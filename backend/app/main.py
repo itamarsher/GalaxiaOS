@@ -16,6 +16,7 @@ from app.api import (
     events,
     governance,
     marketplace,
+    metrics,
     onboarding,
 )
 from app.config import settings
@@ -42,6 +43,7 @@ def create_app() -> FastAPI:
     app.include_router(companies.router)
     app.include_router(budget.router)
     app.include_router(governance.router)
+    app.include_router(metrics.router)
     app.include_router(decisions.router)
     app.include_router(copilot.router)
     app.include_router(events.router)

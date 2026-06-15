@@ -91,6 +91,30 @@ class Settings(BaseSettings):
     digest_hour_utc: int = 13  # daily digest cron hour
     runway_recompute_minute: int = 0  # hourly runway recompute
 
+    # Closed-loop runtime
+    memory_recall_limit: int = 6  # prior learnings injected into an agent's context
+    metrics_recall_limit: int = 8  # recent outcome signals injected into context
+    # Reputation-driven model selection: bump a struggling agent to a stronger
+    # tier when its trust falls below the threshold.
+    reputation_model_escalation: bool = True
+    reputation_escalate_below: float = 0.4
+
+    # Continuous operation: a recurring "business cycle" re-wakes the org.
+    business_cycle_enabled: bool = True
+    business_cycle_hour_utc: int = 12
+
+    # Web search seam (agents' window on the world); "simulated" is offline.
+    web_search_provider: str = "simulated"  # simulated | tavily
+    web_search_max_results: int = 5
+    web_search_timeout_seconds: float = 10.0
+    # Tavily (only used when web_search_provider == "tavily")
+    tavily_api_key: str = ""
+    tavily_search_depth: str = "basic"  # basic | advanced
+
+    # Investor review (onboarding): three agentic investors critique the venture.
+    investor_review_enabled: bool = True
+    investor_model: str = ""  # empty -> provider's planner-tier default
+
     # Observability / rate limiting (productionization)
     log_level: str = "INFO"
     log_json: bool = True

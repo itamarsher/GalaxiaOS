@@ -10,21 +10,25 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.integrations.base import RegistrarError
 from app.integrations.registry import get_registrar
+from app.integrations.websearch import WebSearchError, get_web_search
 from app.models import Agent, DecisionRequest, Task
 from app.models.enums import (
     AgentRole,
     DecisionKind,
     DecisionStatus,
     MemoryType,
+    MetricSource,
     TaskStatus,
 )
 from app.providers.base import ToolSpec
 from app.runtime.breakers import loop_signature
+from app.services import metrics as metrics_svc
 
 TOOL_SPECS: list[ToolSpec] = [
     ToolSpec(
@@ -94,6 +98,42 @@ TOOL_SPECS: list[ToolSpec] = [
             "properties": {"summary": {"type": "string"}},
             "required": ["summary"],
         },
+    ),
+    ToolSpec(
+        name="read_metrics",
+        description="Read the most recent real-world business metrics for the company.",
+        input_schema={"type": "object", "properties": {}},
+    ),
+    ToolSpec(
+        name="record_metric",
+        description="Record one observed real-world outcome signal (a measured metric).",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "name": {"type": "string"},
+                "value": {"type": "number"},
+                "unit": {"type": "string"},
+                "note": {"type": "string"},
+            },
+            "required": ["name", "value"],
+        },
+    ),
+    ToolSpec(
+        name="web_search",
+        description="Search the web for up-to-date external information.",
+        input_schema={
+            "type": "object",
+            "properties": {"query": {"type": "string"}},
+            "required": ["query"],
+        },
+    ),
+    ToolSpec(
+        name="collect_results",
+        description=(
+            "Gather the outputs of sub-tasks you dispatched earlier that have "
+            "finished, so you can synthesize their results."
+        ),
+        input_schema={"type": "object", "properties": {}},
     ),
 ]
 
@@ -189,6 +229,64 @@ async def execute_tool(
         return ToolOutcome(
             observation=f"registered domain {domain} (${quote.price_cents / 100:.2f}, ref {ref})"
         )
+
+    if name == "read_metrics":
+        signals = await metrics_svc.latest_signals(
+            db, company_id=task.company_id, limit=settings.metrics_recall_limit
+        )
+        return ToolOutcome(observation=metrics_svc.summarize_for_prompt(signals))
+
+    if name == "record_metric":
+        await metrics_svc.record_signal(
+            db,
+            company_id=task.company_id,
+            name=args["name"],
+            value=float(args["value"]),
+            unit=args.get("unit"),
+            source=MetricSource.agent,
+            note=args.get("note"),
+        )
+        unit = f" {args['unit']}" if args.get("unit") else ""
+        return ToolOutcome(
+            observation=f"recorded metric {args['name']}={float(args['value']):g}{unit}"
+        )
+
+    if name == "web_search":
+        try:
+            results = await get_web_search().search(
+                args["query"], max_results=settings.web_search_max_results
+            )
+        except WebSearchError as exc:
+            return ToolOutcome(observation=f"web search failed: {exc}", is_error=True)
+        if not results:
+            return ToolOutcome(observation=f"no web results for {args['query']!r}")
+        lines = [
+            f"- {r.title} ({r.url})\n  {r.snippet[:200]}" for r in results
+        ]
+        observation = f"Web results for {args['query']!r}:\n" + "\n".join(lines)
+        return ToolOutcome(observation=observation[:2000])
+
+    if name == "collect_results":
+        rows = (
+            await db.scalars(
+                select(Task)
+                .where(
+                    Task.parent_task_id == task.id,
+                    Task.status == TaskStatus.done,
+                )
+                .order_by(Task.created_at.asc())
+            )
+        ).all()
+        if not rows:
+            return ToolOutcome(
+                observation="No dispatched sub-tasks have finished yet."
+            )
+        lines = []
+        for child in rows:
+            summary = (child.output or {}).get("summary", "") if child.output else ""
+            lines.append(f"- {child.goal[:80]}: {summary[:300] or '(no summary)'}")
+        observation = "Completed sub-task results:\n" + "\n".join(lines)
+        return ToolOutcome(observation=observation[:2000])
 
     if name == "request_decision":
         db.add(
