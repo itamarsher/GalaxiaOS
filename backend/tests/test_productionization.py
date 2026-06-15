@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.testclient import TestClient
 
 from app.observability import RequestContextMiddleware
@@ -64,3 +65,57 @@ def test_http_429_after_limit_and_health_exempt():
     assert int(blocked.headers["Retry-After"]) > 0
     # /health is exempt from rate limiting even after the limit is hit.
     assert client.get("/health").status_code == 200
+
+
+def _app_with_cors(limit: int, origins: list[str]) -> FastAPI:
+    """Mirror create_app's middleware order: rate-limit → request-context → CORS
+    (outermost), so every response — including 429s — carries CORS headers."""
+    app = FastAPI()
+    app.add_middleware(RateLimitMiddleware, limiter=InMemoryRateLimiter(limit, 60))
+    app.add_middleware(RequestContextMiddleware)
+    allow_all = "*" in origins
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=origins,
+        allow_credentials=not allow_all,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
+    @app.get("/ping")
+    async def ping():
+        return {"ok": True}
+
+    return app
+
+
+def test_cors_header_present_on_normal_response():
+    client = TestClient(_app_with_cors(100, ["*"]))
+    r = client.get("/ping", headers={"Origin": "https://abos-web.onrender.com"})
+    assert r.status_code == 200
+    assert r.headers["Access-Control-Allow-Origin"] == "*"
+
+
+def test_cors_header_present_on_rate_limit_rejection():
+    # The regression this fixes: with CORS outermost, a 429 still carries the
+    # Access-Control-Allow-Origin header, so the browser surfaces the real 429
+    # instead of masking it as an opaque CORS error.
+    client = TestClient(_app_with_cors(1, ["*"]))
+    origin = {"Origin": "https://abos-web.onrender.com"}
+    assert client.get("/ping", headers=origin).status_code == 200
+    blocked = client.get("/ping", headers=origin)
+    assert blocked.status_code == 429
+    assert blocked.headers["Access-Control-Allow-Origin"] == "*"
+
+
+def test_cors_explicit_allowlist_reflects_origin_with_credentials():
+    origin = "https://abos-web.onrender.com"
+    client = TestClient(_app_with_cors(100, [origin]))
+    r = client.get("/ping", headers={"Origin": origin})
+    assert r.status_code == 200
+    # An explicit allowlist reflects the origin and may enable credentials.
+    assert r.headers["Access-Control-Allow-Origin"] == origin
+    assert r.headers["Access-Control-Allow-Credentials"] == "true"
+    # A disallowed origin is not echoed back.
+    r2 = client.get("/ping", headers={"Origin": "https://evil.example"})
+    assert r2.headers.get("Access-Control-Allow-Origin") != "https://evil.example"

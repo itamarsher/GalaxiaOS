@@ -66,13 +66,30 @@ def create_app() -> FastAPI:
         lifespan=_lifespan,
     )
 
-    # Middleware added later is outermost: request-context wraps everything (so
-    # rate-limit rejections and CORS are logged with a request id).
-    app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True,
-                       allow_methods=["*"], allow_headers=["*"])
+    # Middleware added later is outermost. Order (inner → outer):
+    # rate-limit → request-context → CORS. CORS is outermost so that *every*
+    # response carries the Access-Control-* headers — including the rate
+    # limiter's 429 rejections and error responses. If CORS sat inside the
+    # rate limiter, a rejected request would come back with no CORS header and
+    # the browser would mask the real status with an opaque
+    # "No 'Access-Control-Allow-Origin' header is present" error. Request
+    # context still wraps the rate limiter, so rejections are logged with a
+    # request id.
     if settings.rate_limit_enabled:
         app.add_middleware(RateLimitMiddleware, limiter=build_limiter())
     app.add_middleware(RequestContextMiddleware)
+    cors_origins = settings.cors_allow_origins
+    allow_all_origins = "*" in cors_origins
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=cors_origins,
+        # A wildcard origin can't be combined with credentials per the CORS
+        # spec, and the frontend authenticates with a bearer token rather than
+        # cookies — so only enable credentials for an explicit allowlist.
+        allow_credentials=not allow_all_origins,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
     app.include_router(auth.router)
     app.include_router(onboarding.router)
