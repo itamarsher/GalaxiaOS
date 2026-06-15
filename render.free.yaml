@@ -1,0 +1,83 @@
+# Render Blueprint for ABOS — FREE-TIER variant (experiment for $0/mo).
+#
+# Differs from the paid `render.yaml` in three ways, because Render's free tier
+# has no background-worker plan and deletes free Postgres after 30 days:
+#
+#   1. No separate worker service. The API runs the arq worker IN-PROCESS
+#      (`ABOS_RUN_WORKER_IN_PROCESS=true`) — agent loop + cron jobs included.
+#   2. Postgres is NOT a Render database. Use a free, persistent Neon project
+#      (https://neon.tech — pgvector supported) and paste its connection string
+#      into `ABOS_DATABASE_URL` in the dashboard. (`app.config.normalize_db_url`
+#      already rewrites Neon's `?sslmode=require&channel_binding=...` for asyncpg.)
+#   3. Redis is a free Render Key Value instance (25 MB, no persistence — fine
+#      for an ephemeral arq queue).
+#
+# Free web services SPIN DOWN after ~15 min idle: first request after idle is
+# slow, and cron jobs (digest / runway / business cycle) only fire while the
+# instance is awake. For continuous operation, hit `/health` on a schedule
+# (e.g. cron-job.org / UptimeRobot) or graduate to the paid `render.yaml`.
+#
+# Apply: Render Dashboard → "New +" → "Blueprint" → select this file. After the
+# first apply, set the `sync:false` secrets in the dashboard.
+
+services:
+  # Managed Redis-compatible store for the arq queue (free Key Value tier).
+  - type: keyvalue
+    name: abos-redis
+    plan: free
+    ipAllowList: []  # internal-only
+
+  # FastAPI app + in-process arq worker. `entrypoint.sh` runs migrations at
+  # container start (free instances have no preDeployCommand), then binds $PORT.
+  - type: web
+    name: abos-api
+    runtime: docker
+    plan: free
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    dockerCommand: "sh entrypoint.sh"
+    autoDeploy: false
+    healthCheckPath: /health/ready
+    envVars:
+      - key: ABOS_DATABASE_URL
+        sync: false   # paste your Neon connection string (free, persistent)
+      - key: ABOS_REDIS_URL
+        fromService:
+          name: abos-redis
+          type: keyvalue
+          property: connectionString
+      - key: ABOS_RUN_WORKER_IN_PROCESS
+        value: "true"
+      - key: ABOS_MASTER_KEY
+        sync: false   # set in dashboard: `make gen-key`
+      - key: ABOS_JWT_SECRET
+        generateValue: true
+      - fromGroup: abos-shared
+
+  # Next.js frontend.
+  - type: web
+    name: abos-web
+    runtime: docker
+    plan: free
+    dockerfilePath: ./frontend/Dockerfile.prod
+    dockerContext: ./frontend
+    autoDeploy: false
+    envVars:
+      # Baked into the client bundle at build time; point at the API's URL.
+      - key: NEXT_PUBLIC_API_BASE_URL
+        sync: false
+
+envVarGroups:
+  - name: abos-shared
+    envVars:
+      - key: ABOS_LOG_JSON
+        value: "true"
+      - key: ABOS_LOG_LEVEL
+        value: INFO
+      - key: ABOS_RATE_LIMIT_ENABLED
+        value: "true"
+      - key: ABOS_RATE_LIMIT_PER_MINUTE
+        value: "120"
+      # Single free instance → in-memory limiter (no Redis dependency for this).
+      - key: ABOS_RATE_LIMIT_BACKEND
+        value: memory

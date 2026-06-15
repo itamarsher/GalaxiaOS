@@ -45,3 +45,15 @@ class WorkerSettings:
     on_startup = startup
     redis_settings = redis_settings()
     max_jobs = 10
+
+
+def build_worker(handle_signals: bool = True):
+    """Construct an arq ``Worker`` from :class:`WorkerSettings`.
+
+    ``handle_signals=False`` is required when embedding the worker inside the
+    API process (uvicorn owns the signal handlers); see the API lifespan and
+    the ``run_worker_in_process`` setting.
+    """
+    from arq.worker import create_worker
+
+    return create_worker(WorkerSettings, handle_signals=handle_signals)

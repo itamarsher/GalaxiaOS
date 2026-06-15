@@ -58,9 +58,7 @@ jobs:
         working-directory: frontend
     steps:
       - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 10
+      - uses: pnpm/action-setup@v4  # version comes from package.json "packageManager"
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -86,5 +84,7 @@ jobs:
             exit 0
           fi
           curl -fsS -X POST "$API_HOOK"
-          curl -fsS -X POST "$WORKER_HOOK"
+          # The free-tier blueprint folds the worker into the API (no worker
+          # service), so its hook is optional.
+          if [ -n "$WORKER_HOOK" ]; then curl -fsS -X POST "$WORKER_HOOK"; fi
           curl -fsS -X POST "$WEB_HOOK"

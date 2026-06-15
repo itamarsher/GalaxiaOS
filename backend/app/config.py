@@ -61,6 +61,12 @@ class Settings(BaseSettings):
     # Envelope encryption: 32-byte master key, base64url-encoded.
     master_key: str = ""
 
+    # Deployment topology. When true, the API process also runs the arq worker
+    # in-process (think→act loop + cron jobs) instead of relying on a separate
+    # worker service. Lets the whole app run on a single free-tier web instance;
+    # leave false in production, where API and worker scale independently.
+    run_worker_in_process: bool = False
+
     # Runtime safety caps (circuit breakers)
     max_task_depth: int = 4
     max_tasks_per_run: int = 200
