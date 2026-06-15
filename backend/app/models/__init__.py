@@ -19,7 +19,9 @@ from app.models.governance import (
     Policy,
     ReputationScore,
 )
+from app.models.investment import InvestmentReview
 from app.models.memory import MemoryEntry
+from app.models.metrics import MetricSignal
 from app.models.mission import KeyResult, Mission, Objective
 from app.models.run import AgentRun, Task
 from app.models.user import Membership, User
@@ -47,6 +49,8 @@ __all__ = [
     "ReputationScore",
     "DecisionRequest",
     "MemoryEntry",
+    "MetricSignal",
+    "InvestmentReview",
     "ApiKey",
     "FounderDigest",
 ]

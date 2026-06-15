@@ -6,18 +6,19 @@ from fastapi import APIRouter, HTTPException, status
 from sqlalchemy import select
 
 from app.deps import CompanyDep, CurrentUser, DbDep
-from app.models import Agent, AgentEdge, Objective
+from app.models import Agent, AgentEdge, InvestmentReview, Objective
 from app.runtime.queue import enqueue_task
 from app.schemas import (
     AgentEdgeOut,
     AgentOut,
     CompanyOut,
+    InvestmentReviewOut,
     ObjectiveOut,
     OnboardingStartRequest,
     OrgChartOut,
     PreviewOut,
 )
-from app.services import onboarding
+from app.services import investors, onboarding
 
 router = APIRouter(tags=["onboarding"])
 
@@ -47,6 +48,19 @@ async def generate(company: CompanyDep, db: DbDep):
     return preview
 
 
+@router.post(
+    "/onboarding/{company_id}/investment-review",
+    response_model=list[InvestmentReviewOut],
+)
+async def investment_review(company: CompanyDep, db: DbDep):
+    try:
+        reviews = await investors.review(db, company=company)
+    except (investors.InvestorError, onboarding.OnboardingError) as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+    await db.commit()
+    return [InvestmentReviewOut.model_validate(r) for r in reviews]
+
+
 @router.get("/onboarding/{company_id}/preview", response_model=PreviewOut)
 async def preview(company: CompanyDep, db: DbDep):
     return await _build_preview(db, company)
@@ -71,6 +85,11 @@ async def _build_preview(db: DbDep, company) -> PreviewOut:
     ).all()
     agents = (await db.scalars(select(Agent).where(Agent.company_id == company.id))).all()
     edges = (await db.scalars(select(AgentEdge).where(AgentEdge.company_id == company.id))).all()
+    reviews = (
+        await db.scalars(
+            select(InvestmentReview).where(InvestmentReview.company_id == company.id)
+        )
+    ).all()
     return PreviewOut(
         company=CompanyOut.model_validate(company),
         objectives=[ObjectiveOut.model_validate(o) for o in objectives],
@@ -78,4 +97,5 @@ async def _build_preview(db: DbDep, company) -> PreviewOut:
             agents=[AgentOut.model_validate(a) for a in agents],
             edges=[AgentEdgeOut.model_validate(e) for e in edges],
         ),
+        investment_reviews=[InvestmentReviewOut.model_validate(r) for r in reviews],
     )

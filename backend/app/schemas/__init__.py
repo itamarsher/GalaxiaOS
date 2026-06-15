@@ -81,11 +81,24 @@ class OrgChartOut(BaseModel):
     edges: list[AgentEdgeOut]
 
 
+class InvestmentReviewOut(ORMModel):
+    id: uuid.UUID
+    persona: str
+    stance: str
+    conviction: int
+    headline: str
+    thesis: str
+    strengths: list | None = None
+    risks: list | None = None
+    conditions: list | None = None
+
+
 class PreviewOut(BaseModel):
     company: CompanyOut
     objectives: list[ObjectiveOut]
     org: OrgChartOut
     cost_estimate_cents: int | None = None
+    investment_reviews: list[InvestmentReviewOut] = Field(default_factory=list)
 
 
 # ── API keys ─────────────────────────────────────────────────────────────────

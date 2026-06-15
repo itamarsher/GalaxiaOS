@@ -8,7 +8,7 @@ from arq import cron
 
 from app.config import settings
 from app.db import SessionLocal
-from app.jobs.scheduled import generate_digests, recompute_runway
+from app.jobs.scheduled import generate_digests, recompute_runway, run_business_cycle
 from app.providers.registry import get_provider
 from app.runtime import orchestrator
 from app.runtime.context import RuntimeContext
@@ -40,6 +40,7 @@ class WorkerSettings:
     cron_jobs = [
         cron(recompute_runway, minute=settings.runway_recompute_minute),
         cron(generate_digests, hour=settings.digest_hour_utc, minute=0),
+        cron(run_business_cycle, hour=settings.business_cycle_hour_utc, minute=0),
     ]
     on_startup = startup
     redis_settings = redis_settings()

@@ -138,3 +138,28 @@ class DecisionStatus(str, enum.Enum):
 class ApiKeyStatus(str, enum.Enum):
     active = "active"
     revoked = "revoked"
+
+
+class MetricSource(str, enum.Enum):
+    """Where a real-world outcome signal came from."""
+
+    founder = "founder"  # entered by the human founder
+    agent = "agent"  # recorded by an agent via a tool
+    integration = "integration"  # pulled from an external system
+    simulated = "simulated"  # synthetic/dev signal
+
+
+class InvestorPersona(str, enum.Enum):
+    """The three onboarding investor reviewers."""
+
+    small_business = "small_business"  # pragmatic, cash-flow / lifestyle-business lens
+    startup = "startup"  # VC / venture-scale lens
+    devils_advocate = "devils_advocate"  # the nay-sayer; argues the bear case
+
+
+class InvestmentStance(str, enum.Enum):
+    """An investor's bottom-line verdict."""
+
+    invest = "invest"
+    conditional = "conditional"
+    pass_ = "pass"

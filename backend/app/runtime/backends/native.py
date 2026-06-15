@@ -19,13 +19,41 @@ from sqlalchemy import func, select
 from app.config import settings
 from app.db import set_tenant
 from app.models import Agent, DecisionRequest, Mission, SpendEntry, Task
-from app.models.enums import AgentRole, DecisionKind, DecisionStatus, PolicyEffect, TaskStatus
+from app.models.enums import (
+    AgentRole,
+    DecisionKind,
+    DecisionStatus,
+    MemoryType,
+    PolicyEffect,
+    TaskStatus,
+)
 from app.providers.base import LLMProvider, Message, TextBlock, ToolResultBlock, ToolUseBlock
 from app.runtime.context import RuntimeContext
 from app.runtime.prompts import AGENT_LOOP_SYSTEM, ROLE_DESCRIPTIONS
 from app.runtime.tools import TOOL_SPECS, execute_tool
-from app.services import apikeys, reputation
+from app.services import apikeys, memory, metrics, reputation
 from app.services import governance as gov
+
+# Model tiers, cheapest -> most capable. Used for reputation-driven escalation.
+_MODEL_TIERS = ("cheap", "planner", "strategic")
+
+
+def _escalate_tier(tier: str, trust: float | None) -> str:
+    """Bump a model tier one notch when the agent's trust is low.
+
+    Pure helper (no I/O) so the escalation policy is unit-testable. Returns the
+    next tier up when ``settings.reputation_model_escalation`` is on and ``trust``
+    is below ``settings.reputation_escalate_below``; otherwise ``tier`` unchanged.
+    """
+    if not settings.reputation_model_escalation:
+        return tier
+    if trust is None or trust >= settings.reputation_escalate_below:
+        return tier
+    try:
+        idx = _MODEL_TIERS.index(tier)
+    except ValueError:
+        return tier
+    return _MODEL_TIERS[min(idx + 1, len(_MODEL_TIERS) - 1)]
 
 # Conservative pre-execution price hint (cents) for governance evaluation only.
 # Domain pricing is now quoted dynamically by the registrar at execution time
@@ -34,11 +62,24 @@ _DOMAIN_PRICE_HINT_CENTS = 4000
 _COST_HINTS = {"register_domain": _DOMAIN_PRICE_HINT_CENTS}
 
 
-def _model_for(agent: Agent, provider: LLMProvider) -> str:
-    """Agent's explicit preference, else the provider's tier default."""
+def _summarize_memory(entries) -> str:
+    """Render recalled memory entries as a compact ``type: title`` bullet list."""
+    if not entries:
+        return "No prior learnings recorded yet."
+    return "\n".join(f"- {e.type.value}: {e.title}" for e in entries)
+
+
+def _model_for(agent: Agent, provider: LLMProvider, trust: float | None = None) -> str:
+    """Agent's explicit preference, else the provider's tier default.
+
+    When no explicit ``model_pref`` is set, the base tier (planner for the CEO,
+    cheap otherwise) may be escalated one notch if the agent's reputation
+    ``trust`` is low — give a struggling agent a stronger model.
+    """
     if agent.model_pref:
         return agent.model_pref
     tier = "planner" if agent.role is AgentRole.ceo else "cheap"
+    tier = _escalate_tier(tier, trust)
     return provider.default_models.get(tier, provider.default_models["cheap"])
 
 
@@ -51,6 +92,26 @@ class NativeBackend:
             )
             mission_text = mission.generated_summary or mission.raw_text if mission else ""
             resolved = await apikeys.resolve_provider(db, company_id=task.company_id)
+
+            # Perceive: recall relevant institutional memory and recent real-world
+            # metrics so the loop reasons from what's known, not from a blank slate.
+            recalled = await memory.query(
+                db,
+                company_id=task.company_id,
+                text=task.goal,
+                limit=settings.memory_recall_limit,
+            )
+            memory_summary = _summarize_memory(recalled)
+            signals = await metrics.latest_signals(
+                db, company_id=task.company_id, limit=settings.metrics_recall_limit
+            )
+            metrics_summary = metrics.summarize_for_prompt(signals)
+
+            # Reputation drives model selection (escalate a struggling agent).
+            rep = await reputation.get_or_create(
+                db, company_id=task.company_id, agent_id=agent.id
+            )
+            trust = rep.trust
         if resolved is None:
             return await self._finish(ctx, task, TaskStatus.failed, {"error": "no API key"})
         provider, api_key = resolved
@@ -59,9 +120,11 @@ class NativeBackend:
             role_desc=ROLE_DESCRIPTIONS.get(agent.role, ""),
             mission=mission_text,
             goal=task.goal,
+            memory=memory_summary,
+            metrics=metrics_summary,
         )
         messages: list[Message] = [Message(role="user", content=f"Begin: {task.goal}")]
-        model = _model_for(agent, provider)
+        model = _model_for(agent, provider, trust)
 
         for _ in range(settings.max_steps_per_task):
             resp = await ctx.cost_meter.run_llm(
@@ -191,5 +254,22 @@ class NativeBackend:
                 blocked=status is TaskStatus.blocked,
                 cost_cents=row.cost_cents,
             )
+
+            # Delegation result propagation: when a delegated (child) task
+            # completes, persist its outcome to memory so it resurfaces to the
+            # parent/CEO via memory recall on a later step. Best-effort.
+            if status is TaskStatus.done and row.parent_task_id is not None:
+                try:
+                    await memory.write(
+                        db,
+                        company_id=task.company_id,
+                        type=MemoryType.result,
+                        title=f"Result: {row.goal[:80]}",
+                        content=output.get("summary", "") or "(no summary)",
+                        source_task_id=task.id,
+                    )
+                except Exception:  # noqa: BLE001 — propagation must not fail finish
+                    pass
+
             await db.commit()
         return {"status": status.value, "output": output}
