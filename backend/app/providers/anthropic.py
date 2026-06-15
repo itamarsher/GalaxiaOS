@@ -15,6 +15,7 @@ from app.providers.base import (
     LLMResponse,
     Message,
     Price,
+    ProviderError,
     TextBlock,
     ToolCall,
     ToolResultBlock,
@@ -121,6 +122,32 @@ class AnthropicProvider(LLMProvider):
 
         try:
             resp = await client.messages.create(**kwargs)
+        except anthropic.AuthenticationError as exc:
+            raise ProviderError(
+                "Anthropic rejected the API key (authentication failed). "
+                "Check the key configured for this company.",
+                kind="auth",
+            ) from exc
+        except anthropic.PermissionDeniedError as exc:
+            raise ProviderError(
+                "Anthropic denied access for this API key (check plan/permissions).",
+                kind="auth",
+            ) from exc
+        except anthropic.RateLimitError as exc:
+            raise ProviderError("Anthropic rate limit exceeded; try again shortly.",
+                                kind="rate_limit") from exc
+        except anthropic.NotFoundError as exc:
+            raise ProviderError(f"Anthropic could not find model '{model}'.",
+                                kind="bad_request") from exc
+        except anthropic.BadRequestError as exc:
+            raise ProviderError(f"Anthropic rejected the request: {exc}", kind="bad_request") from exc
+        except anthropic.APIConnectionError as exc:
+            raise ProviderError("Could not reach the Anthropic API (network error).",
+                                kind="connection") from exc
+        except anthropic.APIStatusError as exc:
+            raise ProviderError(f"Anthropic API error (HTTP {exc.status_code}).") from exc
+        except anthropic.APIError as exc:
+            raise ProviderError(f"Anthropic API call failed: {type(exc).__name__}.") from exc
         finally:
             await client.close()
 

@@ -16,6 +16,7 @@ from app.providers.base import (
     LLMResponse,
     Message,
     Price,
+    ProviderError,
     TextBlock,
     ToolCall,
     ToolResultBlock,
@@ -155,6 +156,32 @@ class OpenAIProvider(LLMProvider):
 
         try:
             resp = await client.chat.completions.create(**kwargs)
+        except openai.AuthenticationError as exc:
+            raise ProviderError(
+                "OpenAI rejected the API key (authentication failed). "
+                "Check the key configured for this company.",
+                kind="auth",
+            ) from exc
+        except openai.PermissionDeniedError as exc:
+            raise ProviderError(
+                "OpenAI denied access for this API key (check plan/permissions).",
+                kind="auth",
+            ) from exc
+        except openai.RateLimitError as exc:
+            raise ProviderError("OpenAI rate limit exceeded; try again shortly.",
+                                kind="rate_limit") from exc
+        except openai.NotFoundError as exc:
+            raise ProviderError(f"OpenAI could not find model '{model}'.",
+                                kind="bad_request") from exc
+        except openai.BadRequestError as exc:
+            raise ProviderError(f"OpenAI rejected the request: {exc}", kind="bad_request") from exc
+        except openai.APIConnectionError as exc:
+            raise ProviderError("Could not reach the OpenAI API (network error).",
+                                kind="connection") from exc
+        except openai.APIStatusError as exc:
+            raise ProviderError(f"OpenAI API error (HTTP {exc.status_code}).") from exc
+        except openai.APIError as exc:
+            raise ProviderError(f"OpenAI API call failed: {type(exc).__name__}.") from exc
         finally:
             await client.close()
 

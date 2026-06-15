@@ -12,6 +12,20 @@ from dataclasses import dataclass, field
 from typing import Any, Protocol, Union, runtime_checkable
 
 
+class ProviderError(Exception):
+    """A provider call failed (bad API key, rate limit, upstream/network error).
+
+    Wraps the vendor SDK's exception so callers outside ``app/providers/`` can
+    handle provider failures without importing a vendor SDK (see the
+    provider-boundary guard). ``kind`` is a coarse, vendor-neutral category
+    (``auth`` | ``rate_limit`` | ``connection`` | ``bad_request`` | ``error``).
+    """
+
+    def __init__(self, message: str, *, kind: str = "error") -> None:
+        super().__init__(message)
+        self.kind = kind
+
+
 @dataclass
 class TextBlock:
     """A plain-text content block within a structured message turn."""
