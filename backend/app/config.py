@@ -104,8 +104,12 @@ class Settings(BaseSettings):
     business_cycle_hour_utc: int = 12
 
     # Web search seam (agents' window on the world); "simulated" is offline.
-    web_search_provider: str = "simulated"  # simulated | (real adapters are creds-gated)
+    web_search_provider: str = "simulated"  # simulated | tavily
     web_search_max_results: int = 5
+    web_search_timeout_seconds: float = 10.0
+    # Tavily (only used when web_search_provider == "tavily")
+    tavily_api_key: str = ""
+    tavily_search_depth: str = "basic"  # basic | advanced
 
     # Investor review (onboarding): three agentic investors critique the venture.
     investor_review_enabled: bool = True

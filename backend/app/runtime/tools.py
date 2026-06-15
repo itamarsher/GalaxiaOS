@@ -16,7 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.integrations.base import RegistrarError
 from app.integrations.registry import get_registrar
-from app.integrations.websearch import get_web_search
+from app.integrations.websearch import WebSearchError, get_web_search
 from app.models import Agent, DecisionRequest, Task
 from app.models.enums import (
     AgentRole,
@@ -252,9 +252,12 @@ async def execute_tool(
         )
 
     if name == "web_search":
-        results = await get_web_search().search(
-            args["query"], max_results=settings.web_search_max_results
-        )
+        try:
+            results = await get_web_search().search(
+                args["query"], max_results=settings.web_search_max_results
+            )
+        except WebSearchError as exc:
+            return ToolOutcome(observation=f"web search failed: {exc}", is_error=True)
         if not results:
             return ToolOutcome(observation=f"no web results for {args['query']!r}")
         lines = [

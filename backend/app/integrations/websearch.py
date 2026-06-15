@@ -21,6 +21,10 @@ class SearchResult:
     snippet: str
 
 
+class WebSearchError(RuntimeError):
+    """Raised when a real provider fails (missing creds, HTTP error, bad body)."""
+
+
 @runtime_checkable
 class WebSearch(Protocol):
     async def search(self, query: str, *, max_results: int = 5) -> list[SearchResult]:
@@ -56,4 +60,8 @@ def get_web_search(name: str | None = None) -> WebSearch:
     key = (name or settings.web_search_provider).strip().lower()
     if key in ("", "none", "simulated"):
         return SimulatedWebSearch()
+    if key == "tavily":
+        from app.integrations.tavily import TavilyWebSearch
+
+        return TavilyWebSearch()
     raise ValueError(f"unknown web search provider: {key!r}")
