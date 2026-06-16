@@ -24,7 +24,11 @@ from app.providers.base import (
     ToolUseBlock,
     Usage,
 )
-from app.providers.pricing import price_for
+from app.providers import pricing
+
+# Above this many output tokens we stream rather than block on one large
+# non-streaming response (which risks an HTTP read timeout).
+_STREAM_THRESHOLD = 16_000
 
 
 def _flatten(content) -> str:
@@ -108,7 +112,10 @@ class OpenAIProvider(LLMProvider):
     }
 
     def price(self, model: str) -> Price:
-        return price_for(self.name, model)
+        return pricing.price_for(self.name, model)
+
+    def max_output_tokens(self, model: str) -> int:
+        return pricing.max_output_tokens(self.name, model)
 
     def estimate_input_tokens(
         self, *, api_key: str, model: str, system: str, messages: list[Message]
@@ -155,7 +162,25 @@ class OpenAIProvider(LLMProvider):
             ]
 
         try:
-            resp = await client.chat.completions.create(**kwargs)
+            if max_tokens > _STREAM_THRESHOLD:
+                # Stream large responses so we don't block on one big call (and
+                # risk an HTTP read timeout); reassemble into one LLMResponse.
+                text, raw_calls, prompt_tokens, completion_tokens, resp_model, finish = (
+                    await self._stream(client, kwargs)
+                )
+            else:
+                resp = await client.chat.completions.create(**kwargs)
+                message = resp.choices[0].message
+                text = message.content or ""
+                raw_calls = [
+                    (tc.id, tc.function.name, tc.function.arguments or "{}")
+                    for tc in message.tool_calls or []
+                ]
+                usage = resp.usage
+                prompt_tokens = usage.prompt_tokens if usage else 0
+                completion_tokens = usage.completion_tokens if usage else 0
+                resp_model = resp.model
+                finish = resp.choices[0].finish_reason or ""
         except openai.AuthenticationError as exc:
             raise ProviderError(
                 "OpenAI rejected the API key (authentication failed). "
@@ -185,28 +210,72 @@ class OpenAIProvider(LLMProvider):
         finally:
             await client.close()
 
-        choice = resp.choices[0]
-        message = choice.message
-
-        text = message.content or ""
-
         tool_calls: list[ToolCall] = []
-        for tc in message.tool_calls or []:
-            raw = tc.function.arguments or "{}"
+        for tc_id, tc_name, tc_args in raw_calls:
             try:
-                arguments = json.loads(raw)
+                arguments = json.loads(tc_args or "{}")
             except (json.JSONDecodeError, TypeError):
                 arguments = {}
-            tool_calls.append(ToolCall(id=tc.id, name=tc.function.name, arguments=arguments))
+            tool_calls.append(ToolCall(id=tc_id, name=tc_name, arguments=arguments))
 
-        usage = resp.usage
         return LLMResponse(
             text=text,
             tool_calls=tool_calls,
-            usage=Usage(
-                input_tokens=usage.prompt_tokens if usage else 0,
-                output_tokens=usage.completion_tokens if usage else 0,
-            ),
-            model=resp.model,
-            stop_reason=choice.finish_reason or "",
+            usage=Usage(input_tokens=prompt_tokens, output_tokens=completion_tokens),
+            model=resp_model,
+            stop_reason=finish,
+        )
+
+    @staticmethod
+    async def _stream(client: openai.AsyncOpenAI, kwargs: dict):
+        """Consume a streamed completion into the same fields as one response.
+
+        Returns ``(text, raw_tool_calls, prompt_tokens, completion_tokens,
+        model, finish_reason)`` where each raw tool call is
+        ``(id, name, arguments_json_str)``.
+        """
+        text_parts: list[str] = []
+        calls: dict[int, dict] = {}
+        prompt_tokens = completion_tokens = 0
+        resp_model = ""
+        finish = ""
+
+        stream = await client.chat.completions.create(
+            **kwargs, stream=True, stream_options={"include_usage": True}
+        )
+        async for chunk in stream:
+            if chunk.model:
+                resp_model = chunk.model
+            if chunk.usage:
+                prompt_tokens = chunk.usage.prompt_tokens
+                completion_tokens = chunk.usage.completion_tokens
+            if not chunk.choices:
+                continue
+            choice = chunk.choices[0]
+            if choice.finish_reason:
+                finish = choice.finish_reason
+            delta = choice.delta
+            if delta is None:
+                continue
+            if delta.content:
+                text_parts.append(delta.content)
+            for tcd in delta.tool_calls or []:
+                slot = calls.setdefault(tcd.index, {"id": None, "name": None, "args": []})
+                if tcd.id:
+                    slot["id"] = tcd.id
+                if tcd.function and tcd.function.name:
+                    slot["name"] = tcd.function.name
+                if tcd.function and tcd.function.arguments:
+                    slot["args"].append(tcd.function.arguments)
+
+        raw_calls = [
+            (c["id"], c["name"], "".join(c["args"])) for _, c in sorted(calls.items())
+        ]
+        return (
+            "".join(text_parts),
+            raw_calls,
+            prompt_tokens,
+            completion_tokens,
+            resp_model,
+            finish,
         )

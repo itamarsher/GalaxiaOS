@@ -161,6 +161,9 @@ async def generate(db: AsyncSession, *, company: Company) -> dict:
         raise OnboardingError("Add a provider API key before generating the organization.")
     provider, api_key = resolved
     planner_model = provider.default_models["planner"]
+    # Use the model's full output ceiling so generation is never truncated; the
+    # provider streams internally above its safe non-streaming size.
+    gen_max_tokens = provider.max_output_tokens(planner_model)
 
     mission = await db.scalar(select(Mission).where(Mission.company_id == company.id))
     budget = await db.scalar(select(Budget).where(Budget.company_id == company.id))
@@ -176,7 +179,7 @@ async def generate(db: AsyncSession, *, company: Company) -> dict:
         model=planner_model,
         system=MISSION_TO_PLAN_SYSTEM,
         messages=[Message(role="user", content=mission.raw_text)],
-        max_tokens=4096,
+        max_tokens=gen_max_tokens,
     )
     plan = _parse_llm_json(plan_resp)
 
@@ -222,7 +225,7 @@ async def generate(db: AsyncSession, *, company: Company) -> dict:
         model=planner_model,
         system=PLAN_TO_ORG_SYSTEM,
         messages=[Message(role="user", content=org_input)],
-        max_tokens=4096,
+        max_tokens=gen_max_tokens,
     )
     org = _parse_llm_json(org_resp)
 

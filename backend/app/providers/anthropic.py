@@ -23,7 +23,12 @@ from app.providers.base import (
     ToolUseBlock,
     Usage,
 )
-from app.providers.pricing import price_for
+from app.providers import pricing
+
+# Above this many output tokens the Anthropic SDK refuses a non-streaming
+# request (it estimates the response could exceed the ~10-min HTTP timeout), so
+# we transparently switch to streaming and reassemble the final message.
+_STREAM_THRESHOLD = 16_000
 
 
 def _block_text(block: object) -> str:
@@ -83,7 +88,10 @@ class AnthropicProvider(LLMProvider):
     }
 
     def price(self, model: str) -> Price:
-        return price_for(self.name, model)
+        return pricing.price_for(self.name, model)
+
+    def max_output_tokens(self, model: str) -> int:
+        return pricing.max_output_tokens(self.name, model)
 
     def estimate_input_tokens(
         self, *, api_key: str, model: str, system: str, messages: list[Message]
@@ -121,7 +129,13 @@ class AnthropicProvider(LLMProvider):
             ]
 
         try:
-            resp = await client.messages.create(**kwargs)
+            if max_tokens > _STREAM_THRESHOLD:
+                # Stream to dodge the SDK's non-streaming size guard, then
+                # reassemble the same Message object via get_final_message().
+                async with client.messages.stream(**kwargs) as stream:
+                    resp = await stream.get_final_message()
+            else:
+                resp = await client.messages.create(**kwargs)
         except anthropic.AuthenticationError as exc:
             raise ProviderError(
                 "Anthropic rejected the API key (authentication failed). "
