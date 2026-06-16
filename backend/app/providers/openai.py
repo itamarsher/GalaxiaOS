@@ -138,6 +138,7 @@ class OpenAIProvider(LLMProvider):
         messages: list[Message],
         tools: list[ToolSpec] | None = None,
         max_tokens: int = 4096,
+        json_schema: dict | None = None,
     ) -> LLMResponse:
         client = openai.AsyncOpenAI(api_key=api_key)
 
@@ -148,6 +149,10 @@ class OpenAIProvider(LLMProvider):
             "messages": oai_messages,
             "max_tokens": max_tokens,
         }
+        if json_schema is not None:
+            # JSON mode: the model is constrained to emit a single valid JSON
+            # object. (The prompts already say "JSON", which OpenAI requires.)
+            kwargs["response_format"] = {"type": "json_object"}
         if tools:
             kwargs["tools"] = [
                 {

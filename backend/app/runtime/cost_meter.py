@@ -74,6 +74,7 @@ class CostMeter:
         messages: list[Message],
         tools: list[ToolSpec] | None = None,
         max_tokens: int = 4096,
+        json_schema: dict | None = None,
     ) -> LLMResponse:
         """Reserve worst-case cost, call the provider, reconcile to actual usage."""
         price = provider.price(model)
@@ -94,6 +95,7 @@ class CostMeter:
                 messages=messages,
                 tools=tools,
                 max_tokens=max_tokens,
+                json_schema=json_schema,
             )
             latency_ms = int((time.monotonic() - started) * 1000)
             actual_cents = price.cost_cents(resp.usage)

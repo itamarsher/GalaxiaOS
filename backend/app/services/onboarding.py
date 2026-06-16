@@ -9,7 +9,6 @@ from __future__ import annotations
 import json
 import uuid
 
-import json_repair
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -41,7 +40,12 @@ from app.observability import get_logger
 from app.providers.base import LLMResponse, Message
 from app.runtime import orchestrator
 from app.runtime.cost_meter import CostMeter
-from app.runtime.prompts import MISSION_TO_PLAN_SYSTEM, PLAN_TO_ORG_SYSTEM
+from app.runtime.prompts import (
+    MISSION_TO_PLAN_SCHEMA,
+    MISSION_TO_PLAN_SYSTEM,
+    PLAN_TO_ORG_SCHEMA,
+    PLAN_TO_ORG_SYSTEM,
+)
 from app.services import apikeys, investors
 from app.services import governance as gov
 
@@ -120,14 +124,8 @@ def _parse_llm_json(resp: LLMResponse) -> dict:
     try:
         return json.loads(candidate)
     except json.JSONDecodeError as exc:
-        # The model emitted structurally-invalid JSON (most often an unescaped
-        # quote inside a free-text field). Brace-extraction can't recover that —
-        # and an unescaped quote can even desync it — so fall back to a tolerant
-        # repair pass over the whole response before giving up.
-        repaired = _repair_json(text)
-        if repaired is not None:
-            _log.warning("LLM JSON was malformed (%s); recovered via repair", exc)
-            return repaired
+        # Generation forces structured JSON at the provider, so this should be
+        # rare; log enough to diagnose if a provider ever returns junk anyway.
         _log.warning(
             "failed to parse LLM JSON response (model=%s, stop_reason=%s): %s | raw=%r",
             resp.model,
@@ -136,20 +134,6 @@ def _parse_llm_json(resp: LLMResponse) -> dict:
             text[:2000],
         )
         raise OnboardingError("LLM returned malformed JSON; please try again.") from exc
-
-
-def _repair_json(text: str) -> dict | None:
-    """Best-effort recovery of a JSON object from slightly-broken model output.
-
-    ``json_repair`` fixes the common LLM breakages (unescaped quotes, trailing
-    commas, missing delimiters). Returns the object only if the repair yields a
-    non-empty ``dict``; anything else means the recovery isn't trustworthy.
-    """
-    try:
-        obj = json_repair.loads(text)
-    except (ValueError, RecursionError):
-        return None
-    return obj if isinstance(obj, dict) and obj else None
 
 
 async def start(
@@ -209,6 +193,7 @@ async def generate(db: AsyncSession, *, company: Company) -> dict:
         system=MISSION_TO_PLAN_SYSTEM,
         messages=[Message(role="user", content=mission.raw_text)],
         max_tokens=gen_max_tokens,
+        json_schema=MISSION_TO_PLAN_SCHEMA,
     )
     plan = _parse_llm_json(plan_resp)
 
@@ -255,6 +240,7 @@ async def generate(db: AsyncSession, *, company: Company) -> dict:
         system=PLAN_TO_ORG_SYSTEM,
         messages=[Message(role="user", content=org_input)],
         max_tokens=gen_max_tokens,
+        json_schema=PLAN_TO_ORG_SCHEMA,
     )
     org = _parse_llm_json(org_resp)
 

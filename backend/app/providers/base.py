@@ -144,4 +144,12 @@ class LLMProvider(Protocol):
         messages: list[Message],
         tools: list[ToolSpec] | None = None,
         max_tokens: int = 4096,
-    ) -> LLMResponse: ...
+        json_schema: dict | None = None,
+    ) -> LLMResponse:
+        """Run one completion.
+
+        When ``json_schema`` is provided, the provider forces structured JSON
+        output (Anthropic via a pinned tool, OpenAI via JSON mode) and the
+        returned :attr:`LLMResponse.text` is guaranteed-valid JSON.
+        """
+        ...
