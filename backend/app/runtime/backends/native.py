@@ -83,6 +83,32 @@ def _model_for(agent: Agent, provider: LLMProvider, trust: float | None = None) 
     return provider.default_models.get(tier, provider.default_models["cheap"])
 
 
+async def _consume_approval_grant(db, *, task_id, tool: str) -> bool:
+    """Use up a founder approval for ``tool`` on this task, if one is pending.
+
+    When the founder approves a gated action the task is re-queued and re-run
+    from the top; without this, the same governance gate would just re-trigger
+    and ask for approval again forever. An approved ``DecisionRequest`` therefore
+    acts as a one-shot grant: the first matching tool call on resume consumes it
+    and proceeds instead of escalating again.
+    """
+    grants = (
+        await db.scalars(
+            select(DecisionRequest).where(
+                DecisionRequest.task_id == task_id,
+                DecisionRequest.status == DecisionStatus.approved,
+            )
+        )
+    ).all()
+    for grant in grants:
+        payload = grant.payload or {}
+        if payload.get("tool") == tool and not payload.get("consumed"):
+            grant.payload = {**payload, "consumed": True}
+            await db.flush()
+            return True
+    return False
+
+
 class NativeBackend:
     async def run(self, ctx: RuntimeContext, agent: Agent, task: Task) -> dict:
         async with ctx.session_factory() as db:
@@ -190,7 +216,12 @@ class NativeBackend:
                     "is_error": True,
                 }
 
-            if effect is PolicyEffect.require_approval:
+            if effect is PolicyEffect.require_approval and not await _consume_approval_grant(
+                db, task_id=task.id, tool=call.name
+            ):
+                # No standing approval for this action — park the task and ask the
+                # founder. (If a grant existed, it was just consumed and we fall
+                # through to execute, so an approved action isn't re-escalated.)
                 db.add(
                     DecisionRequest(
                         company_id=task.company_id,

@@ -150,3 +150,41 @@ async def spend_by_agent(db: AsyncSession, company_id: uuid.UUID) -> dict[str, i
         .group_by(SpendEntry.agent_id)
     )
     return {str(agent_id): int(total) for agent_id, total in rows.all()}
+
+
+async def spend_detail_by_agent(db: AsyncSession, company_id: uuid.UUID) -> list[dict]:
+    """Per-agent spend with the underlying ledger entries (for the expandable view).
+
+    Grouped by agent and sorted by total spend desc; each agent carries its
+    individual :class:`SpendEntry` rows so the UI can expand to the full detail.
+    """
+    agents = {
+        a.id: a
+        for a in (await db.scalars(select(Agent).where(Agent.company_id == company_id))).all()
+    }
+    entries = (
+        await db.scalars(
+            select(SpendEntry)
+            .where(SpendEntry.company_id == company_id)
+            .order_by(SpendEntry.created_at.desc())
+        )
+    ).all()
+
+    grouped: dict[uuid.UUID | None, list[SpendEntry]] = {}
+    for entry in entries:
+        grouped.setdefault(entry.agent_id, []).append(entry)
+
+    out: list[dict] = []
+    for agent_id, rows in grouped.items():
+        agent = agents.get(agent_id) if agent_id is not None else None
+        out.append(
+            {
+                "agent_id": agent_id,
+                "agent_name": agent.name if agent else None,
+                "agent_role": agent.role.value if agent else None,
+                "total_cents": sum(int(r.amount_cents) for r in rows),
+                "entries": rows,
+            }
+        )
+    out.sort(key=lambda g: g["total_cents"], reverse=True)
+    return out

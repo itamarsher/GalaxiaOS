@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
-import { api, fmtUsd, type Task, type TaskDetail } from "@/lib/api";
+import { api, fmtUsd, statusLabel, type Task, type TaskDetail } from "@/lib/api";
 import { usePoll } from "@/lib/useApi";
 
 interface EventFrame {
@@ -18,6 +18,13 @@ export default function TasksPage() {
   const [openId, setOpenId] = useState<string | null>(null);
   // Fallback polling, only active once SSE has errored out.
   const polled = usePoll(() => api.tasks(id), sseOk ? 0 : 3000, [id, sseOk]);
+
+  // Deep-link: /tasks?task=<id> (e.g. from the Overview activity feed) opens the drawer.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const t = new URLSearchParams(window.location.search).get("task");
+    if (t) setOpenId(t);
+  }, []);
 
   useEffect(() => {
     const url = api.eventsUrl(id);
@@ -59,7 +66,7 @@ export default function TasksPage() {
                 <td>{"— ".repeat(t.depth)}{t.goal.slice(0, 90)}</td>
                 <td>{t.depth}</td>
                 <td>{fmtUsd(t.cost_cents)}</td>
-                <td><span className={`status ${t.status}`}>{t.status}</span></td>
+                <td><span className={`status ${t.status}`}>{statusLabel(t.status)}</span></td>
               </tr>
             ))}
           </tbody>
@@ -75,15 +82,32 @@ export default function TasksPage() {
 function TaskDrawer({ companyId, taskId, onClose }: { companyId: string; taskId: string; onClose: () => void }) {
   const [task, setTask] = useState<TaskDetail | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const load = () => {
+    api.task(companyId, taskId)
+      .then((t) => setTask(t))
+      .catch((e) => setErr(String(e instanceof Error ? e.message : e)));
+  };
 
   useEffect(() => {
-    let active = true;
     setTask(null); setErr(null);
-    api.task(companyId, taskId)
-      .then((t) => active && setTask(t))
-      .catch((e) => active && setErr(String(e instanceof Error ? e.message : e)));
-    return () => { active = false; };
+    load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [companyId, taskId]);
+
+  const resolve = async (approve: boolean) => {
+    const d = task?.pending_decision;
+    if (!d) return;
+    setBusy(true);
+    try {
+      if (approve) await api.approveDecision(d.id);
+      else await api.rejectDecision(d.id);
+      load();
+    } finally {
+      setBusy(false);
+    }
+  };
 
   // Pull a readable execution summary + result out of the (free-form) output blob.
   const out = task?.output ?? null;
@@ -106,7 +130,20 @@ function TaskDrawer({ companyId, taskId, onClose }: { companyId: string; taskId:
         {task && (
           <>
             <p style={{ margin: "12px 0 4px" }}>{task.goal}</p>
-            <div className="kv"><span>Status</span><span className={`status ${task.status}`}>{task.status}</span></div>
+            <div className="kv"><span>Status</span><span className={`status ${task.status}`}>{statusLabel(task.status)}</span></div>
+
+            {task.pending_decision && (
+              <div className="card" style={{ borderColor: "var(--warn)", marginTop: 12 }}>
+                <div className="step" style={{ color: "var(--warn)" }}>⏳ Waiting for your decision</div>
+                <p style={{ margin: "8px 0" }}>{task.pending_decision.summary}</p>
+                <div className="btnrow">
+                  <button disabled={busy} onClick={() => resolve(true)}>Approve</button>
+                  <button className="ghost" disabled={busy} onClick={() => resolve(false)}>Reject</button>
+                  <a className="muted" style={{ fontSize: 12, alignSelf: "center" }}
+                     href={`/c/${companyId}/decisions`}>Discuss in Decisions →</a>
+                </div>
+              </div>
+            )}
             <div className="kv"><span>Agent</span><span>{task.agent_name ?? "—"}{task.agent_role ? ` · ${task.agent_role}` : ""}</span></div>
             <div className="kv"><span>Depth</span><span>{task.depth}</span></div>
             <div className="kv"><span>Cost</span><span>{fmtUsd(task.cost_cents)}</span></div>

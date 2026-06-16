@@ -175,6 +175,27 @@ class TaskDetailOut(TaskOut):
     agent_role: str | None = None
     input: dict | None = None
     children: list[TaskOut] = Field(default_factory=list)
+    pending_decision: "DecisionOut | None" = None
+
+
+# ── Budget detail ────────────────────────────────────────────────────────────
+class SpendEntryOut(ORMModel):
+    id: uuid.UUID
+    category: str
+    amount_cents: int
+    vendor: str | None = None
+    sku: str | None = None
+    description: str | None = None
+    task_id: uuid.UUID | None = None
+    created_at: datetime
+
+
+class AgentSpendOut(BaseModel):
+    agent_id: uuid.UUID | None
+    agent_name: str | None = None
+    agent_role: str | None = None
+    total_cents: int
+    entries: list[SpendEntryOut] = Field(default_factory=list)
 
 
 # ── Governance ───────────────────────────────────────────────────────────────
@@ -218,11 +239,20 @@ class ReputationOut(ORMModel):
 class DecisionOut(ORMModel):
     id: uuid.UUID
     agent_id: uuid.UUID | None
+    agent_name: str | None = None
     task_id: uuid.UUID | None
     kind: str
     summary: str
     status: str
     created_at: datetime
+
+
+class DecisionChatRequest(BaseModel):
+    message: str = Field(min_length=1)
+
+
+class DecisionResolveRequest(BaseModel):
+    note: str | None = None
 
 
 # ── Memory / Copilot ─────────────────────────────────────────────────────────
@@ -259,3 +289,7 @@ class AgentListingOut(ORMModel):
 
 class HireAgentRequest(BaseModel):
     listing_id: uuid.UUID
+
+
+# Resolve the forward reference from TaskDetailOut -> DecisionOut.
+TaskDetailOut.model_rebuild()

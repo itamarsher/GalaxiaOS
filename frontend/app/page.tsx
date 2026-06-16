@@ -234,7 +234,7 @@ function GeneratingCard({ progress }: { progress: GenerationProgress | null }) {
       </div>
       <div className="bar" style={{ marginTop: 8 }}><span style={{ width: `${pct}%` }} /></div>
       <div className="kv" style={{ marginTop: 8 }}>
-        <span className="muted">This usually takes 20–40 seconds.</span>
+        <span className="muted">It usually takes a couple of minutes.</span>
         <span className="muted">{pct}%</span>
       </div>
       {events.length > 0 && (

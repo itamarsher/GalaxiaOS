@@ -1,8 +1,9 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
-import { api, fmtUsd, type Task } from "@/lib/api";
+import { api, fmtUsd, statusLabel, type Task } from "@/lib/api";
 import { usePoll } from "@/lib/useApi";
 
 interface EventFrame {
@@ -88,17 +89,17 @@ export default function Overview() {
           {recent.length > 0 ? (
             <div style={{ marginTop: 12 }}>
               {recent.map((t) => (
-                <div key={t.id} className="kv">
-                  <span>{"— ".repeat(t.depth)}{t.goal.slice(0, 70)}</span>
-                  <span className={`status ${t.status}`}>{t.status}</span>
-                </div>
+                <Link key={t.id} href={`/c/${id}/tasks?task=${t.id}`} className="actrow">
+                  <span className="goal">{"— ".repeat(t.depth)}{t.goal}</span>
+                  <span className={`status ${t.status}`}>{statusLabel(t.status)}</span>
+                </Link>
               ))}
             </div>
           ) : (
             <p className="muted" style={{ marginTop: 10 }}>Agents are kicking off the first initiatives…</p>
           )}
           <p className="muted" style={{ marginTop: 10, fontSize: 12 }}>
-            This updates live. Open the Tasks tab for the full tree.
+            This updates live — tap a task for details. Open the Tasks tab for the full tree.
           </p>
         </div>
       )}

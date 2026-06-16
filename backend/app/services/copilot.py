@@ -160,6 +160,55 @@ async def _execute_command(db: AsyncSession, *, company_id: uuid.UUID, action: d
     return "I couldn't map that to a supported command. Try: pause/resume agents, or pause agents below an ROI threshold."
 
 
+async def discuss_decision(
+    db: AsyncSession, *, company_id: uuid.UUID, decision, message: str
+) -> str:
+    """Answer a founder's question about a specific pending decision.
+
+    Grounded in the decision itself (kind, summary, proposed action) plus current
+    company state, so the founder can interrogate the trade-offs and reshape the
+    call before approving/rejecting it.
+    """
+    resolved = await apikeys.resolve_provider(db, company_id=company_id)
+    if resolved is None:
+        return "Add a provider API key to discuss decisions with the agent."
+    provider, api_key = resolved
+
+    agent = await db.get(Agent, decision.agent_id) if decision.agent_id else None
+    decision_ctx = (
+        f"You raised this decision for the founder.\n"
+        f"Agent: {agent.name if agent else 'unknown'} "
+        f"({agent.role.value if agent else 'n/a'})\n"
+        f"Kind: {decision.kind.value}\n"
+        f"Summary: {decision.summary}\n"
+        f"Proposed action / details: {json.dumps(decision.payload or {})}"
+    )
+    state = await _company_state(db, company_id)
+    meter = CostMeter(SessionLocal)
+    resp = await meter.run_llm(
+        provider,
+        api_key=api_key,
+        company_id=company_id,
+        agent_id=None,
+        task_id=None,
+        model=provider.default_models["cheap"],
+        system=(
+            "You are the agent that raised this decision. Explain your reasoning, answer the "
+            "founder's questions, and help them decide whether to approve, reject, or adjust it. "
+            "Be concise, concrete, and honest about trade-offs and risks. If the founder asks for "
+            "a change, describe exactly what you would do differently."
+        ),
+        messages=[
+            Message(
+                role="user",
+                content=f"{decision_ctx}\n\nCompany state:\n{state}\n\nFounder: {message}",
+            )
+        ],
+        max_tokens=600,
+    )
+    return resp.text
+
+
 async def _pending_decisions(db: AsyncSession, company_id: uuid.UUID) -> int:
     """Count items actually sitting in the founder's decision inbox.
 

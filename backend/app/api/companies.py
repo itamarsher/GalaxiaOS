@@ -8,12 +8,13 @@ from fastapi import APIRouter, HTTPException, status
 from sqlalchemy import select
 
 from app.deps import CompanyDep, DbDep
-from app.models import Agent, AgentEdge, MemoryEntry, Task
-from app.models.enums import AgentStatus, TaskStatus
+from app.models import Agent, AgentEdge, DecisionRequest, MemoryEntry, Task
+from app.models.enums import AgentStatus, DecisionStatus, TaskStatus
 from app.schemas import (
     AgentEdgeOut,
     AgentOut,
     CompanyOut,
+    DecisionOut,
     MemoryOut,
     OrgChartOut,
     TaskDetailOut,
@@ -95,6 +96,20 @@ async def get_task(company: CompanyDep, task_id: uuid.UUID, db: DbDep):
     detail.agent_name = agent.name if agent else None
     detail.agent_role = agent.role.value if agent else None
     detail.children = [TaskOut.model_validate(c) for c in children]
+    # Surface the pending decision (if any) so the UI can show the task is
+    # blocked on the founder and offer approve/reject inline.
+    pending = await db.scalar(
+        select(DecisionRequest)
+        .where(
+            DecisionRequest.task_id == task.id,
+            DecisionRequest.status == DecisionStatus.pending,
+        )
+        .order_by(DecisionRequest.created_at.desc())
+    )
+    if pending is not None:
+        decision_out = DecisionOut.model_validate(pending)
+        decision_out.agent_name = agent.name if agent else None
+        detail.pending_decision = decision_out
     return detail
 
 
