@@ -22,11 +22,17 @@ def test_fleet_specs_backfills_empty_llm_output():
     assert len(roles) >= 4
 
 
-def test_fleet_specs_guarantees_ceo_and_governance():
+def test_fleet_specs_guarantees_ceo_governance_and_auditor():
     roles = [s["role"] for s in onboarding._fleet_specs([{"role": "growth", "name": "G"}])]
     assert "ceo" in roles
     assert "growth" in roles
     assert "governance" in roles
+    # The auditor is a must-have role (financial records + paper trail).
+    assert "auditor" in roles
+
+
+def test_default_fleet_includes_auditor():
+    assert any(s["role"] == "auditor" for s in onboarding._DEFAULT_FLEET)
 
 
 def test_weighted_split_sums_to_total_and_weights_ceo_lower():

@@ -43,12 +43,22 @@ export interface BudgetView {
   by_agent: Record<string, number>;
 }
 export interface Task { id: string; agent_id: string; goal: string; status: string; depth: number; cost_cents: number; output: Record<string, unknown> | null }
+export interface Decision { id: string; agent_id: string | null; agent_name: string | null; task_id: string | null; kind: string; summary: string; status: string; created_at: string }
 export interface TaskDetail extends Task {
   parent_task_id: string | null; created_at: string;
   agent_name: string | null; agent_role: string | null;
   input: Record<string, unknown> | null; children: Task[];
+  pending_decision: Decision | null;
 }
-export interface Decision { id: string; agent_id: string | null; task_id: string | null; kind: string; summary: string; status: string; created_at: string }
+export interface SpendEntry {
+  id: string; category: string; amount_cents: number;
+  vendor: string | null; sku: string | null; description: string | null;
+  task_id: string | null; created_at: string;
+}
+export interface AgentSpend {
+  agent_id: string | null; agent_name: string | null; agent_role: string | null;
+  total_cents: number; entries: SpendEntry[];
+}
 export interface Policy { id: string; name: string; enabled: boolean; scope: string; rule: Record<string, unknown>; effect: string; priority: number }
 export interface Breaker { id: string; type: string; state: string; tripped_reason: string | null }
 export interface Reputation {
@@ -123,6 +133,7 @@ export const api = {
     req<Agent>(`/companies/${companyId}/agents/${agentId}/resume`, { method: "POST" }),
 
   budget: (companyId: string) => req<BudgetView>(`/companies/${companyId}/budget`),
+  budgetByAgent: (companyId: string) => req<AgentSpend[]>(`/companies/${companyId}/budget/by-agent`),
   runway: (companyId: string) => req<Runway>(`/companies/${companyId}/runway`),
   recomputeRunway: (companyId: string) =>
     req<Runway>(`/companies/${companyId}/runway/recompute`, { method: "POST" }),
@@ -139,8 +150,12 @@ export const api = {
 
   decisions: (companyId: string, onlyPending = true) =>
     req<Decision[]>(`/companies/${companyId}/decisions?only_pending=${onlyPending}`),
-  approveDecision: (id: string) => req<Decision>(`/decisions/${id}/approve`, { method: "POST" }),
-  rejectDecision: (id: string) => req<Decision>(`/decisions/${id}/reject`, { method: "POST" }),
+  approveDecision: (id: string, note?: string) =>
+    req<Decision>(`/decisions/${id}/approve`, { method: "POST", body: JSON.stringify({ note: note ?? null }) }),
+  rejectDecision: (id: string, note?: string) =>
+    req<Decision>(`/decisions/${id}/reject`, { method: "POST", body: JSON.stringify({ note: note ?? null }) }),
+  decisionChat: (id: string, message: string) =>
+    req<{ answer: string }>(`/decisions/${id}/chat`, { method: "POST", body: JSON.stringify({ message }) }),
 
   memory: (companyId: string, q?: string) =>
     req<Memory[]>(`/companies/${companyId}/memory${q ? `?q=${encodeURIComponent(q)}` : ""}`),
@@ -172,3 +187,7 @@ export const api = {
 
 export const fmtUsd = (cents: number | null | undefined) =>
   cents == null ? "—" : `$${(cents / 100).toFixed(2)}`;
+
+/** Human-friendly label for a task/decision status (the raw value still drives CSS). */
+export const statusLabel = (s: string): string =>
+  s === "waiting_approval" ? "Needs approval" : s.replace(/_/g, " ");

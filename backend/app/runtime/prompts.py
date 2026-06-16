@@ -15,6 +15,14 @@ ROLE_DESCRIPTIONS: dict[AgentRole, str] = {
     AgentRole.product: "You are the Product agent. You own product planning and roadmap.",
     AgentRole.finance: "You are the Finance agent. You own budget monitoring and unit economics.",
     AgentRole.governance: "You are the Governance agent. You own safety, compliance, and oversight.",
+    AgentRole.auditor: (
+        "You are the Auditor (Controller) agent. You own the integrity of the company's financial "
+        "records and the audit/paper trail: every revenue and expense must be recorded, every "
+        "invoice and receipt accounted for, and the books must reconcile against the budget ledger. "
+        "Use read_financials to inspect the real numbers, record_transaction to log any "
+        "revenue/expense that is missing, and generate_invoice to issue invoices and keep "
+        "documentation accurate. Flag and escalate any discrepancy you cannot reconcile."
+    ),
     AgentRole.custom: "You are a specialist agent.",
 }
 
@@ -61,16 +69,17 @@ PLAN_TO_ORG_SYSTEM = """You are an org designer for an AI-native company. Given 
 monthly budget (in USD cents), design the agent fleet. Respond ONLY with minified JSON:
 {
   "agents": [
-    {"role": "ceo|growth|research|product|finance|governance",
+    {"role": "ceo|growth|research|product|finance|governance|auditor",
      "name": "...", "responsibility": "...",
-     "autonomy_level": "suggest|approve_required|autonomous",
-     "monthly_budget_cents": 12345}
+     "autonomy_level": "suggest|approve_required|autonomous"}
   ],
   "edges": [{"from_role": "growth", "to_role": "ceo", "relation": "reports_to"}],
   "monthly_cost_estimate_cents": 50000
 }
-Always include exactly one `ceo` and one `governance` agent. Allocate per-agent budgets that sum
-to at most the provided monthly budget. Functional agents report_to the ceo."""
+Always include exactly one `ceo`, one `governance`, and one `auditor` agent (the auditor keeps the
+financial records audited and the invoice/receipt paper trail accurate). Do NOT set per-agent
+budgets — the platform splits the monthly budget across the fleet. Functional agents report_to the
+ceo."""
 
 
 # JSON schemas matching the two prompts above. Providers use these to *force*

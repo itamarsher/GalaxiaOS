@@ -265,6 +265,12 @@ _DEFAULT_FLEET: list[dict] = [
         "autonomy_level": "approve_required",
     },
     {
+        "role": "auditor",
+        "name": "Auditor",
+        "responsibility": "Keep the financial records audited and the invoice/receipt paper trail accurate.",
+        "autonomy_level": "approve_required",
+    },
+    {
         "role": "governance",
         "name": "Governance Lead",
         "responsibility": "Own safety, compliance, and oversight.",
@@ -284,10 +290,13 @@ def _fleet_specs(parsed: list[dict]) -> list[dict]:
     if not specs:
         return [dict(s) for s in _DEFAULT_FLEET]
     roles = {str(s.get("role")) for s in specs}
+    defaults = {s["role"]: s for s in _DEFAULT_FLEET}
     if "ceo" not in roles:
-        specs.insert(0, dict(_DEFAULT_FLEET[0]))
-    if "governance" not in roles:
-        specs.append(dict(_DEFAULT_FLEET[-1]))
+        specs.insert(0, dict(defaults["ceo"]))
+    # Must-have oversight roles: governance and the financial auditor.
+    for required in ("auditor", "governance"):
+        if required not in roles:
+            specs.append(dict(defaults[required]))
     return specs
 
 
@@ -299,6 +308,7 @@ _DEFAULT_BUDGET_WEIGHT = 2.0
 _ROLE_BUDGET_WEIGHTS: dict[AgentRole, float] = {
     AgentRole.ceo: 1.0,
     AgentRole.governance: 1.0,
+    AgentRole.auditor: 1.0,
     AgentRole.finance: 1.5,
     AgentRole.research: 2.0,
     AgentRole.product: 2.0,
