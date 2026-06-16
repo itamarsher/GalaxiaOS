@@ -12,9 +12,10 @@ from app.config import settings
 from app.integrations.base import RegistrarError
 from app.integrations.registry import get_registrar
 from app.integrations.websearch import WebSearchError, get_web_search
-from app.models import Agent, DecisionRequest, Task
+from app.models import Agent, Budget, DecisionRequest, Task
 from app.models.enums import (
     AgentRole,
+    BudgetPeriod,
     DecisionKind,
     DecisionStatus,
     MemoryType,
@@ -23,10 +24,55 @@ from app.models.enums import (
 )
 from app.providers.base import ToolSpec
 from app.runtime.breakers import loop_signature
-from app.runtime.tools.base import ToolOutcome
+from app.runtime.tools.base import ToolOutcome, consume_approval_grant
 from app.services import metrics as metrics_svc
 
 SPECS: list[ToolSpec] = [
+    ToolSpec(
+        name="submit_plan",
+        description=(
+            "CEO only. Submit your high-level execution plan to the founder for "
+            "approval BEFORE dispatching any work. The task pauses until the "
+            "founder approves; once approved, proceed to dispatch the initiatives."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "plan": {
+                    "type": "string",
+                    "description": (
+                        "The plan: for each objective, the 1-3 concrete "
+                        "initiatives you intend to pursue and which agent owns each."
+                    ),
+                }
+            },
+            "required": ["plan"],
+        },
+    ),
+    ToolSpec(
+        name="request_budget",
+        description=(
+            "Request budget headroom for an upcoming spend. If the amount fits "
+            "within the company's remaining monthly budget the CEO approves it "
+            "automatically; if it would go over budget it is escalated to the "
+            "founder as a decision (who can authorise additional funds). Use this "
+            "before a large external charge so you know whether you're cleared to spend."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "amount_cents": {
+                    "type": "integer",
+                    "description": "Amount you want to spend, in cents.",
+                },
+                "reason": {
+                    "type": "string",
+                    "description": "What the budget is for.",
+                },
+            },
+            "required": ["amount_cents", "reason"],
+        },
+    ),
     ToolSpec(
         name="dispatch_task",
         description="Delegate a sub-task to another functional agent by role.",
@@ -172,9 +218,128 @@ async def _spawn_child(db, ctx, parent: Task, agent: Agent, role: str, goal: str
     await ctx.enqueue_task(child.id)
 
 
+async def _plan_is_approved(db, task_id) -> bool:
+    """True once the founder has approved this task's plan (a plan_approval grant)."""
+    return (
+        await db.scalar(
+            select(DecisionRequest.id).where(
+                DecisionRequest.task_id == task_id,
+                DecisionRequest.kind == DecisionKind.plan_approval,
+                DecisionRequest.status == DecisionStatus.approved,
+            )
+        )
+    ) is not None
+
+
 async def _dispatch_task(db, ctx, *, agent: Agent, task: Task, args: dict) -> ToolOutcome:
+    # Plan-approval gate: on a launch run the CEO must get the founder's sign-off
+    # on the plan before any functional work is dispatched. Other runs (scheduled
+    # business cycles, sub-tasks) carry no flag and dispatch freely.
+    if (task.input or {}).get("requires_plan_approval") and not await _plan_is_approved(
+        db, task.id
+    ):
+        return ToolOutcome(
+            observation=(
+                "Hold on — the founder hasn't approved the plan yet. Call "
+                "`submit_plan` with your proposed execution plan and wait for "
+                "approval before dispatching any work."
+            ),
+            is_error=True,
+        )
     await _spawn_child(db, ctx, task, agent, args["role"], args["goal"])
     return ToolOutcome(observation=f"dispatched {args['role']}: {args['goal'][:80]}")
+
+
+async def _submit_plan(db, ctx, *, agent: Agent, task: Task, args: dict) -> ToolOutcome:
+    plan = str(args["plan"]).strip()
+    # On resume after approval, a one-shot grant lets the CEO proceed instead of
+    # re-submitting the same plan forever.
+    if await consume_approval_grant(db, task_id=task.id, tool="submit_plan"):
+        return ToolOutcome(
+            observation=(
+                "The founder approved your plan. Proceed now: dispatch the "
+                "initiatives to the functional agents."
+            )
+        )
+    db.add(
+        DecisionRequest(
+            company_id=task.company_id,
+            agent_id=agent.id,
+            task_id=task.id,
+            kind=DecisionKind.plan_approval,
+            summary=f"Proposed execution plan:\n\n{plan}",
+            payload={"tool": "submit_plan", "plan": plan},
+            status=DecisionStatus.pending,
+        )
+    )
+    row = await db.get(Task, task.id)
+    if row is not None:
+        row.status = TaskStatus.waiting_approval
+    task.status = TaskStatus.waiting_approval  # keep the in-memory copy consistent
+    await db.flush()
+    return ToolOutcome(observation="submitted plan to the founder for approval", park=True)
+
+
+async def _request_budget(db, ctx, *, agent: Agent, task: Task, args: dict) -> ToolOutcome:
+    amount_cents = int(args["amount_cents"])
+    reason = str(args.get("reason") or "").strip()
+    budget = await db.scalar(
+        select(Budget).where(
+            Budget.company_id == task.company_id, Budget.period == BudgetPeriod.monthly
+        )
+    )
+    remaining = (
+        int(budget.limit_cents) - int(budget.spent_cents) - int(budget.reserved_cents)
+        if budget is not None
+        else 0
+    )
+    if amount_cents <= 0:
+        return ToolOutcome(observation="Budget request must be a positive amount.", is_error=True)
+
+    # Within the budget the founder already set → the CEO approves it; no need to
+    # bother the founder.
+    if amount_cents <= remaining:
+        return ToolOutcome(
+            observation=(
+                f"Approved by the CEO: ${amount_cents / 100:.2f} for {reason or 'this spend'} "
+                f"fits within the remaining monthly budget (${remaining / 100:.2f} left). "
+                "You're cleared to spend."
+            )
+        )
+
+    # Over budget → escalate to the founder. Approving lifts the cap by the
+    # shortfall so the spend can go through (payment is wired in separately).
+    shortfall = amount_cents - max(0, remaining)
+    db.add(
+        DecisionRequest(
+            company_id=task.company_id,
+            agent_id=agent.id,
+            task_id=task.id,
+            kind=DecisionKind.spend_approval,
+            summary=(
+                f"Budget request over budget: ${amount_cents / 100:.2f} for "
+                f"{reason or 'an upcoming spend'}, but only ${max(0, remaining) / 100:.2f} "
+                f"is left this month. Approve to add ${shortfall / 100:.2f} of headroom."
+            ),
+            payload={
+                "tool": "request_budget",
+                "reason": reason,
+                "requested_cents": amount_cents,
+                "available_cents": max(0, remaining),
+                "budget_increase_cents": shortfall,
+            },
+            status=DecisionStatus.pending,
+        )
+    )
+    row = await db.get(Task, task.id)
+    if row is not None:
+        row.status = TaskStatus.waiting_approval
+    task.status = TaskStatus.waiting_approval
+    await db.flush()
+    return ToolOutcome(
+        observation="Over budget — escalated to the founder to authorise the extra funds.",
+        park=True,
+    )
 
 
 async def _write_memory(db, ctx, *, agent: Agent, task: Task, args: dict) -> ToolOutcome:
@@ -330,6 +495,8 @@ async def _report_result(db, ctx, *, agent: Agent, task: Task, args: dict) -> To
 
 HANDLERS = {
     "dispatch_task": _dispatch_task,
+    "submit_plan": _submit_plan,
+    "request_budget": _request_budget,
     "write_memory": _write_memory,
     "register_domain": _register_domain,
     "send_email": _send_email,

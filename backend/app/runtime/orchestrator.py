@@ -29,6 +29,7 @@ async def _create_ceo_run(
     trigger: RunTrigger,
     goal: str,
     loop_seed: str,
+    task_input: dict | None = None,
 ) -> uuid.UUID | None:
     """Create a root run + CEO root task. Returns the CEO task id to enqueue."""
     ceo = await db.scalar(
@@ -49,6 +50,7 @@ async def _create_ceo_run(
         agent_id=ceo.id,
         depth=0,
         goal=goal,
+        input=task_input,
         status=TaskStatus.queued,
         loop_signature=breakers.loop_signature(ceo.id, loop_seed),
     )
@@ -58,13 +60,26 @@ async def _create_ceo_run(
 
 
 async def create_launch_run(db: AsyncSession, company_id: uuid.UUID) -> uuid.UUID | None:
-    """Create the root run + CEO task. Returns the CEO task id to enqueue."""
+    """Create the root run + CEO task. Returns the CEO task id to enqueue.
+
+    The launch run starts with a plan-approval phase: the CEO drafts a high-level
+    plan and submits it to the founder (``submit_plan``) before any functional
+    work is dispatched. The ``requires_plan_approval`` flag enforces that gate in
+    ``dispatch_task``.
+    """
     return await _create_ceo_run(
         db,
         company_id,
         trigger=RunTrigger.onboarding,
-        goal="Execute the company mission: decompose objectives and dispatch initiatives.",
+        goal=(
+            "Plan the company's execution, then run it. FIRST, draft a concise "
+            "high-level plan: for each objective, the 1-3 initiatives you will "
+            "pursue and which functional agent owns each. Call `submit_plan` with "
+            "that plan and wait for the founder's approval. ONLY after the founder "
+            "approves may you dispatch the initiatives to the functional agents."
+        ),
         loop_seed="execute mission",
+        task_input={"requires_plan_approval": True},
     )
 
 

@@ -240,11 +240,16 @@ class DecisionOut(ORMModel):
     id: uuid.UUID
     agent_id: uuid.UUID | None
     agent_name: str | None = None
+    agent_role: str | None = None
     task_id: uuid.UUID | None
     kind: str
     summary: str
     status: str
     created_at: datetime
+    # Bigger-picture context, attached at read time (see decisions API _to_out).
+    task_goal: str | None = None  # the ask that triggered this decision
+    initiative: str | None = None  # the higher-level initiative it belongs to
+    objective_title: str | None = None  # best-effort related objective
 
 
 class DecisionChatRequest(BaseModel):

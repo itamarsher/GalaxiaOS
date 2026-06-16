@@ -43,7 +43,11 @@ export interface BudgetView {
   by_agent: Record<string, number>;
 }
 export interface Task { id: string; agent_id: string; goal: string; status: string; depth: number; cost_cents: number; output: Record<string, unknown> | null }
-export interface Decision { id: string; agent_id: string | null; agent_name: string | null; task_id: string | null; kind: string; summary: string; status: string; created_at: string }
+export interface Decision {
+  id: string; agent_id: string | null; agent_name: string | null; agent_role: string | null;
+  task_id: string | null; kind: string; summary: string; status: string; created_at: string;
+  task_goal: string | null; initiative: string | null; objective_title: string | null;
+}
 export interface TaskDetail extends Task {
   parent_task_id: string | null; created_at: string;
   agent_name: string | null; agent_role: string | null;
@@ -191,3 +195,12 @@ export const fmtUsd = (cents: number | null | undefined) =>
 /** Human-friendly label for a task/decision status (the raw value still drives CSS). */
 export const statusLabel = (s: string): string =>
   s === "waiting_approval" ? "Needs approval" : s.replace(/_/g, " ");
+
+/** Human-friendly label for a decision kind. */
+export const decisionKindLabel = (kind: string): string =>
+  ({
+    spend_approval: "Budget request",
+    risky_action: "Risky action",
+    strategy: "Strategy",
+    plan_approval: "Plan approval",
+  }[kind] ?? kind.replace(/_/g, " "));
