@@ -37,7 +37,7 @@ from app.models.enums import (
     PolicyScope,
 )
 from app.observability import get_logger
-from app.providers.base import Message
+from app.providers.base import LLMResponse, Message
 from app.runtime import orchestrator
 from app.runtime.cost_meter import CostMeter
 from app.runtime.prompts import MISSION_TO_PLAN_SYSTEM, PLAN_TO_ORG_SYSTEM
@@ -87,8 +87,29 @@ def _extract_json_object(text: str) -> str | None:
     return None
 
 
-def _parse_json(text: str) -> dict:
-    text = text.strip()
+# Stop reasons the providers report when generation hit the token ceiling
+# (Anthropic: "max_tokens"; OpenAI: "length"). When this happens the JSON is
+# almost certainly cut off mid-object, so we surface a specific error rather
+# than a generic "malformed JSON" — the founder can't fix a truncation.
+_TRUNCATED_STOP_REASONS = {"max_tokens", "length"}
+
+
+def _parse_llm_json(resp: LLMResponse) -> dict:
+    """Parse the JSON body of an onboarding LLM response.
+
+    Distinguishes the three failure modes a founder can actually hit:
+    a truncated response (token limit), no JSON at all, and balanced-but-invalid
+    JSON — each gets a handled :class:`OnboardingError` (400) instead of an
+    unhandled decode error bubbling up as a 500.
+    """
+    if resp.stop_reason in _TRUNCATED_STOP_REASONS:
+        _log.warning("LLM response truncated (stop_reason=%s)", resp.stop_reason)
+        raise OnboardingError(
+            "The model's response was cut off before it finished. Please try "
+            "generating again."
+        )
+
+    text = resp.text.strip()
     if text.startswith("```"):
         text = text.split("```", 2)[1] if text.count("```") >= 2 else text
         text = text.lstrip("json").strip().strip("`")
@@ -155,9 +176,9 @@ async def generate(db: AsyncSession, *, company: Company) -> dict:
         model=planner_model,
         system=MISSION_TO_PLAN_SYSTEM,
         messages=[Message(role="user", content=mission.raw_text)],
-        max_tokens=1500,
+        max_tokens=4096,
     )
-    plan = _parse_json(plan_resp.text)
+    plan = _parse_llm_json(plan_resp)
 
     mission.generated_summary = plan.get("summary")
     mission.business_model_assumptions = plan.get("business_model_assumptions")
@@ -201,9 +222,9 @@ async def generate(db: AsyncSession, *, company: Company) -> dict:
         model=planner_model,
         system=PLAN_TO_ORG_SYSTEM,
         messages=[Message(role="user", content=org_input)],
-        max_tokens=1500,
+        max_tokens=4096,
     )
-    org = _parse_json(org_resp.text)
+    org = _parse_llm_json(org_resp)
 
     role_to_agent: dict[str, uuid.UUID] = {}
     for spec in org.get("agents", []):
