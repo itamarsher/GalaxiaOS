@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import uuid
 
+import json_repair
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -119,8 +120,36 @@ def _parse_llm_json(resp: LLMResponse) -> dict:
     try:
         return json.loads(candidate)
     except json.JSONDecodeError as exc:
-        _log.warning("failed to parse LLM JSON response: %s", exc)
+        # The model emitted structurally-invalid JSON (most often an unescaped
+        # quote inside a free-text field). Brace-extraction can't recover that —
+        # and an unescaped quote can even desync it — so fall back to a tolerant
+        # repair pass over the whole response before giving up.
+        repaired = _repair_json(text)
+        if repaired is not None:
+            _log.warning("LLM JSON was malformed (%s); recovered via repair", exc)
+            return repaired
+        _log.warning(
+            "failed to parse LLM JSON response (model=%s, stop_reason=%s): %s | raw=%r",
+            resp.model,
+            resp.stop_reason,
+            exc,
+            text[:2000],
+        )
         raise OnboardingError("LLM returned malformed JSON; please try again.") from exc
+
+
+def _repair_json(text: str) -> dict | None:
+    """Best-effort recovery of a JSON object from slightly-broken model output.
+
+    ``json_repair`` fixes the common LLM breakages (unescaped quotes, trailing
+    commas, missing delimiters). Returns the object only if the repair yields a
+    non-empty ``dict``; anything else means the recovery isn't trustworthy.
+    """
+    try:
+        obj = json_repair.loads(text)
+    except (ValueError, RecursionError):
+        return None
+    return obj if isinstance(obj, dict) and obj else None
 
 
 async def start(
