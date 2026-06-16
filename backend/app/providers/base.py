@@ -127,6 +127,10 @@ class LLMProvider(Protocol):
 
     def price(self, model: str) -> Price: ...
 
+    def max_output_tokens(self, model: str) -> int:
+        """Largest ``max_tokens`` value this model accepts for one response."""
+        ...
+
     def estimate_input_tokens(
         self, *, api_key: str, model: str, system: str, messages: list[Message]
     ) -> int: ...

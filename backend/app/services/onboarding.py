@@ -37,7 +37,7 @@ from app.models.enums import (
     PolicyScope,
 )
 from app.observability import get_logger
-from app.providers.base import Message
+from app.providers.base import LLMResponse, Message
 from app.runtime import orchestrator
 from app.runtime.cost_meter import CostMeter
 from app.runtime.prompts import MISSION_TO_PLAN_SYSTEM, PLAN_TO_ORG_SYSTEM
@@ -51,15 +51,76 @@ class OnboardingError(Exception):
     pass
 
 
-def _parse_json(text: str) -> dict:
-    text = text.strip()
+def _extract_json_object(text: str) -> str | None:
+    """Return the first balanced ``{...}`` span in *text*, or ``None``.
+
+    Naive ``find("{")``/``rfind("}")`` slicing breaks when the model wraps the
+    JSON in prose, emits more than one object, or gets truncated mid-output: the
+    outermost braces no longer delimit a valid object. Here we walk the text and
+    track brace depth (ignoring braces inside strings) to pull out the first
+    complete object.
+    """
+    depth = 0
+    start = -1
+    in_string = False
+    escaped = False
+    for i, ch in enumerate(text):
+        if in_string:
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == '"':
+                in_string = False
+            continue
+        if ch == '"':
+            in_string = True
+        elif ch == "{":
+            if depth == 0:
+                start = i
+            depth += 1
+        elif ch == "}":
+            if depth > 0:
+                depth -= 1
+                if depth == 0 and start != -1:
+                    return text[start : i + 1]
+    return None
+
+
+# Stop reasons the providers report when generation hit the token ceiling
+# (Anthropic: "max_tokens"; OpenAI: "length"). When this happens the JSON is
+# almost certainly cut off mid-object, so we surface a specific error rather
+# than a generic "malformed JSON" — the founder can't fix a truncation.
+_TRUNCATED_STOP_REASONS = {"max_tokens", "length"}
+
+
+def _parse_llm_json(resp: LLMResponse) -> dict:
+    """Parse the JSON body of an onboarding LLM response.
+
+    Distinguishes the three failure modes a founder can actually hit:
+    a truncated response (token limit), no JSON at all, and balanced-but-invalid
+    JSON — each gets a handled :class:`OnboardingError` (400) instead of an
+    unhandled decode error bubbling up as a 500.
+    """
+    if resp.stop_reason in _TRUNCATED_STOP_REASONS:
+        _log.warning("LLM response truncated (stop_reason=%s)", resp.stop_reason)
+        raise OnboardingError(
+            "The model's response was cut off before it finished. Please try "
+            "generating again."
+        )
+
+    text = resp.text.strip()
     if text.startswith("```"):
         text = text.split("```", 2)[1] if text.count("```") >= 2 else text
         text = text.lstrip("json").strip().strip("`")
-    start, end = text.find("{"), text.rfind("}")
-    if start == -1 or end == -1:
+    candidate = _extract_json_object(text)
+    if candidate is None:
         raise OnboardingError("LLM did not return JSON")
-    return json.loads(text[start : end + 1])
+    try:
+        return json.loads(candidate)
+    except json.JSONDecodeError as exc:
+        _log.warning("failed to parse LLM JSON response: %s", exc)
+        raise OnboardingError("LLM returned malformed JSON; please try again.") from exc
 
 
 async def start(
@@ -100,6 +161,9 @@ async def generate(db: AsyncSession, *, company: Company) -> dict:
         raise OnboardingError("Add a provider API key before generating the organization.")
     provider, api_key = resolved
     planner_model = provider.default_models["planner"]
+    # Use the model's full output ceiling so generation is never truncated; the
+    # provider streams internally above its safe non-streaming size.
+    gen_max_tokens = provider.max_output_tokens(planner_model)
 
     mission = await db.scalar(select(Mission).where(Mission.company_id == company.id))
     budget = await db.scalar(select(Budget).where(Budget.company_id == company.id))
@@ -115,9 +179,9 @@ async def generate(db: AsyncSession, *, company: Company) -> dict:
         model=planner_model,
         system=MISSION_TO_PLAN_SYSTEM,
         messages=[Message(role="user", content=mission.raw_text)],
-        max_tokens=1500,
+        max_tokens=gen_max_tokens,
     )
-    plan = _parse_json(plan_resp.text)
+    plan = _parse_llm_json(plan_resp)
 
     mission.generated_summary = plan.get("summary")
     mission.business_model_assumptions = plan.get("business_model_assumptions")
@@ -161,9 +225,9 @@ async def generate(db: AsyncSession, *, company: Company) -> dict:
         model=planner_model,
         system=PLAN_TO_ORG_SYSTEM,
         messages=[Message(role="user", content=org_input)],
-        max_tokens=1500,
+        max_tokens=gen_max_tokens,
     )
-    org = _parse_json(org_resp.text)
+    org = _parse_llm_json(org_resp)
 
     role_to_agent: dict[str, uuid.UUID] = {}
     for spec in org.get("agents", []):
