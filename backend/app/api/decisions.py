@@ -56,7 +56,12 @@ async def approve(decision_id: uuid.UUID, db: DbDep, user: CurrentUser):
     resumed_task_id: uuid.UUID | None = None
     if decision.task_id:
         task = await db.get(Task, decision.task_id)
-        if task is not None and task.status is TaskStatus.waiting_approval:
+        # ``running`` is accepted alongside ``waiting_approval`` to recover tasks
+        # that an earlier bug parked without flipping their status off ``running``.
+        if task is not None and task.status in (
+            TaskStatus.waiting_approval,
+            TaskStatus.running,
+        ):
             task.status = TaskStatus.queued
             resumed_task_id = task.id
     await db.commit()
@@ -73,7 +78,10 @@ async def reject(decision_id: uuid.UUID, db: DbDep, user: CurrentUser):
     decision.resolved_at = datetime.now(UTC)
     if decision.task_id:
         task = await db.get(Task, decision.task_id)
-        if task is not None and task.status is TaskStatus.waiting_approval:
+        if task is not None and task.status in (
+            TaskStatus.waiting_approval,
+            TaskStatus.running,
+        ):
             task.status = TaskStatus.failed
             task.output = {"rejected": True}
     await db.commit()

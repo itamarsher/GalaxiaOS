@@ -112,4 +112,18 @@ async def run_task(ctx: RuntimeContext, task_id: uuid.UUID) -> dict:
         backend_type = agent.backend_type.value
 
     backend = get_backend(backend_type)
-    return await backend.run(ctx, agent, task)
+    try:
+        return await backend.run(ctx, agent, task)
+    except Exception as exc:  # noqa: BLE001
+        # A task is flipped to ``running`` before dispatch; if the backend raises
+        # (provider/network error, a bug, …) we must not leave it orphaned in
+        # ``running`` — the run gate skips anything that isn't queued/waiting, so
+        # it could never recover. Mark it failed (visible, terminal) instead.
+        async with ctx.session_factory() as db:
+            await set_tenant(db, task.company_id)
+            row = await db.get(Task, task.id)
+            if row is not None and row.status is TaskStatus.running:
+                row.status = TaskStatus.failed
+                row.output = {"error": f"{type(exc).__name__}: {exc}"[:1000]}
+                await db.commit()
+        raise
