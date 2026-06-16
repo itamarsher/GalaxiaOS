@@ -101,6 +101,30 @@ class PreviewOut(BaseModel):
     investment_reviews: list[InvestmentReviewOut] = Field(default_factory=list)
 
 
+class GenerationEvent(BaseModel):
+    ts: float
+    label: str
+    pct: int
+
+
+class GenerationProgressOut(BaseModel):
+    phase: str
+    pct: int
+    message: str
+    status: str  # "idle" | "running" | "done" | "error"
+    error: str | None = None
+    events: list[GenerationEvent] = Field(default_factory=list)
+
+
+class RefineRequest(BaseModel):
+    message: str = Field(min_length=1)
+
+
+class RefineResponse(BaseModel):
+    reply: str
+    preview: PreviewOut
+
+
 # ── API keys ─────────────────────────────────────────────────────────────────
 class ApiKeyCreateRequest(BaseModel):
     provider: str = "anthropic"
@@ -146,6 +170,13 @@ class TaskOut(ORMModel):
     created_at: datetime
 
 
+class TaskDetailOut(TaskOut):
+    agent_name: str | None = None
+    agent_role: str | None = None
+    input: dict | None = None
+    children: list[TaskOut] = Field(default_factory=list)
+
+
 # ── Governance ───────────────────────────────────────────────────────────────
 class PolicyOut(ORMModel):
     id: uuid.UUID
@@ -175,6 +206,8 @@ class BreakerOut(ORMModel):
 
 class ReputationOut(ORMModel):
     agent_id: uuid.UUID
+    agent_name: str | None = None
+    agent_role: str | None = None
     trust: float
     accuracy: float
     roi: float

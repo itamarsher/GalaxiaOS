@@ -12,11 +12,14 @@ from app.schemas import (
     AgentEdgeOut,
     AgentOut,
     CompanyOut,
+    GenerationProgressOut,
     InvestmentReviewOut,
     ObjectiveOut,
     OnboardingStartRequest,
     OrgChartOut,
     PreviewOut,
+    RefineRequest,
+    RefineResponse,
 )
 from app.services import investors, onboarding
 
@@ -38,14 +41,53 @@ async def start(body: OnboardingStartRequest, db: DbDep, user: CurrentUser):
 
 @router.post("/onboarding/{company_id}/generate", response_model=PreviewOut)
 async def generate(company: CompanyDep, db: DbDep):
+    onboarding.reset_progress(company.id)
     try:
         result = await onboarding.generate(db, company=company)
+    except onboarding.OnboardingError as exc:
+        onboarding.set_progress(
+            company.id, phase="error", pct=100, message=str(exc), status="error", error=str(exc)
+        )
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001 - surface a terminal state to the poller, then re-raise
+        onboarding.set_progress(
+            company.id,
+            phase="error",
+            pct=100,
+            message="Generation failed",
+            status="error",
+            error=str(exc),
+        )
+        raise
+    await db.commit()
+    preview = await _build_preview(db, company)
+    preview.cost_estimate_cents = result.get("cost_estimate_cents")
+    onboarding.set_progress(
+        company.id, phase="done", pct=100, message="Organization ready", status="done"
+    )
+    return preview
+
+
+@router.get("/onboarding/{company_id}/generate/status", response_model=GenerationProgressOut)
+async def generate_status(company: CompanyDep):
+    progress = onboarding.get_progress(company.id)
+    if progress is None:
+        return GenerationProgressOut(
+            phase="idle", pct=0, message="Not started", status="idle"
+        )
+    return GenerationProgressOut(**progress)
+
+
+@router.post("/onboarding/{company_id}/refine", response_model=RefineResponse)
+async def refine(company: CompanyDep, body: RefineRequest, db: DbDep):
+    try:
+        result = await onboarding.refine(db, company=company, message=body.message)
     except onboarding.OnboardingError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
     await db.commit()
     preview = await _build_preview(db, company)
     preview.cost_estimate_cents = result.get("cost_estimate_cents")
-    return preview
+    return RefineResponse(reply=result["reply"], preview=preview)
 
 
 @router.post(

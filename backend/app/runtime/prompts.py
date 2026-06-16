@@ -151,3 +151,44 @@ PLAN_TO_ORG_SCHEMA: dict = {
         "monthly_cost_estimate_cents": {"type": "integer"},
     },
 }
+
+
+# ── Conversational onboarding refinement ──────────────────────────────────────
+# During onboarding (before launch) the founder can chat to tweak the generated
+# objectives and agent fleet. The model returns a structured patch that code
+# applies — never free-form mutations.
+REFINE_SYSTEM = """You help a founder refine their not-yet-launched AI company during onboarding.
+You are given the current plan (objectives and agent fleet) and the founder's instruction.
+Apply the instruction and respond ONLY with minified JSON:
+{
+  "reply": "a short, friendly one-or-two-sentence summary of exactly what you changed",
+  "company_name": "optional: a new one-line company summary if the instruction changes it",
+  "objectives": [
+    {"title": "...", "rationale": "...", "priority": 1,
+     "key_results": [{"metric": "...", "target_value": 1000, "unit": "USD"}]}
+  ],
+  "agents": [
+    {"role": "ceo|growth|research|product|finance|governance", "name": "...",
+     "responsibility": "...", "autonomy_level": "suggest|approve_required|autonomous",
+     "monthly_budget_cents": 12345}
+  ]
+}
+Rules:
+- Always include "reply".
+- Include "objectives" ONLY if the instruction changes objectives or key results; if so return
+  the COMPLETE new list (3-5 objectives), not a diff.
+- Include "agents" ONLY if the instruction changes the fleet; include just the agents to add or
+  modify (each matched to an existing agent by its role). Keep exactly one ceo.
+- If the instruction is just a question or cannot be applied, return only "reply" and omit the
+  other keys.
+- Keep everything consistent with the founder's mission and budget."""
+
+REFINE_SCHEMA: dict = {
+    "type": "object",
+    "properties": {
+        "reply": {"type": "string"},
+        "company_name": {"type": "string"},
+        "objectives": MISSION_TO_PLAN_SCHEMA["properties"]["objectives"],
+        "agents": PLAN_TO_ORG_SCHEMA["properties"]["agents"],
+    },
+}

@@ -8,7 +8,7 @@ from fastapi import APIRouter, HTTPException, status
 from sqlalchemy import select
 
 from app.deps import CompanyDep, DbDep
-from app.models import CircuitBreaker, Policy, ReputationScore
+from app.models import Agent, CircuitBreaker, Policy, ReputationScore
 from app.models.enums import BreakerState, PolicyEffect, PolicyScope
 from app.schemas import (
     BreakerOut,
@@ -70,8 +70,30 @@ async def reset_breaker(company: CompanyDep, breaker_id: uuid.UUID, db: DbDep):
 
 @router.get("/reputation", response_model=list[ReputationOut])
 async def list_reputation(company: CompanyDep, db: DbDep):
-    return (
+    scores = (
         await db.scalars(
             select(ReputationScore).where(ReputationScore.company_id == company.id)
         )
     ).all()
+    # Join in the agent's human-readable name/role so the UI doesn't have to show
+    # an opaque agent id the founder can't recognize.
+    agents = {
+        a.id: a
+        for a in (await db.scalars(select(Agent).where(Agent.company_id == company.id))).all()
+    }
+    out = []
+    for r in scores:
+        agent = agents.get(r.agent_id)
+        out.append(
+            ReputationOut(
+                agent_id=r.agent_id,
+                agent_name=agent.name if agent else None,
+                agent_role=agent.role.value if agent else None,
+                trust=r.trust,
+                accuracy=r.accuracy,
+                roi=r.roi,
+                reliability=r.reliability,
+                sample_count=r.sample_count,
+            )
+        )
+    return out

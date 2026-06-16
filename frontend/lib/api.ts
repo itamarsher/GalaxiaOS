@@ -43,10 +43,24 @@ export interface BudgetView {
   by_agent: Record<string, number>;
 }
 export interface Task { id: string; agent_id: string; goal: string; status: string; depth: number; cost_cents: number; output: Record<string, unknown> | null }
+export interface TaskDetail extends Task {
+  parent_task_id: string | null; created_at: string;
+  agent_name: string | null; agent_role: string | null;
+  input: Record<string, unknown> | null; children: Task[];
+}
 export interface Decision { id: string; agent_id: string | null; task_id: string | null; kind: string; summary: string; status: string; created_at: string }
 export interface Policy { id: string; name: string; enabled: boolean; scope: string; rule: Record<string, unknown>; effect: string; priority: number }
 export interface Breaker { id: string; type: string; state: string; tripped_reason: string | null }
-export interface Reputation { agent_id: string; trust: number; accuracy: number; roi: number; reliability: number; sample_count: number }
+export interface Reputation {
+  agent_id: string; agent_name: string | null; agent_role: string | null;
+  trust: number; accuracy: number; roi: number; reliability: number; sample_count: number;
+}
+export interface GenerationEvent { ts: number; label: string; pct: number }
+export interface GenerationProgress {
+  phase: string; pct: number; message: string;
+  status: "idle" | "running" | "done" | "error"; error: string | null; events: GenerationEvent[];
+}
+export interface RefineResponse { reply: string; preview: Preview }
 export interface Memory { id: string; type: string; title: string; content: string; created_at: string }
 export interface Runway { projected_days_remaining: number | null; burn_rate_cents_per_day: number; balance_cents: number | null }
 export interface Digest { summary_md: string | null; open_decisions: number; period_date: string | null }
@@ -88,10 +102,19 @@ export const api = {
     }),
 
   generate: (companyId: string) => req<Preview>(`/onboarding/${companyId}/generate`, { method: "POST" }),
+  generateStatus: (companyId: string) =>
+    req<GenerationProgress>(`/onboarding/${companyId}/generate/status`),
+  refineOnboarding: (companyId: string, message: string) =>
+    req<RefineResponse>(`/onboarding/${companyId}/refine`, {
+      method: "POST",
+      body: JSON.stringify({ message }),
+    }),
   preview: (companyId: string) => req<Preview>(`/onboarding/${companyId}/preview`),
   launch: (companyId: string) => req<Company>(`/onboarding/${companyId}/launch`, { method: "POST" }),
 
   company: (companyId: string) => req<Company>(`/companies/${companyId}`),
+  deleteCompany: (companyId: string) =>
+    req<void>(`/companies/${companyId}`, { method: "DELETE" }),
   org: (companyId: string) => req<{ agents: Agent[]; edges: AgentEdge[] }>(`/companies/${companyId}/org`),
   agents: (companyId: string) => req<Agent[]>(`/companies/${companyId}/agents`),
   pauseAgent: (companyId: string, agentId: string) =>
@@ -105,6 +128,8 @@ export const api = {
     req<Runway>(`/companies/${companyId}/runway/recompute`, { method: "POST" }),
 
   tasks: (companyId: string) => req<Task[]>(`/companies/${companyId}/tasks`),
+  task: (companyId: string, taskId: string) =>
+    req<TaskDetail>(`/companies/${companyId}/tasks/${taskId}`),
 
   policies: (companyId: string) => req<Policy[]>(`/companies/${companyId}/policies`),
   breakers: (companyId: string) => req<Breaker[]>(`/companies/${companyId}/circuit-breakers`),

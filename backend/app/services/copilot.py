@@ -9,6 +9,7 @@ changes) return a confirmation instead of mutating.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import uuid
 from datetime import date
@@ -18,8 +19,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.db import SessionLocal
-from app.models import Agent, FounderDigest, Task
-from app.models.enums import AgentRole, AgentStatus, TaskStatus
+from app.models import Agent, DecisionRequest, FounderDigest, MemoryEntry, Task
+from app.models.enums import AgentRole, AgentStatus, DecisionStatus
 from app.providers.base import Message
 from app.runtime.cost_meter import CostMeter
 from app.services import apikeys
@@ -159,14 +160,67 @@ async def _execute_command(db: AsyncSession, *, company_id: uuid.UUID, action: d
     return "I couldn't map that to a supported command. Try: pause/resume agents, or pause agents below an ROI threshold."
 
 
-async def generate_digest(db: AsyncSession, *, company_id: uuid.UUID) -> FounderDigest:
+async def _pending_decisions(db: AsyncSession, company_id: uuid.UUID) -> int:
+    """Count items actually sitting in the founder's decision inbox.
+
+    The digest's ``open_decisions`` must match what the Decisions tab shows, so
+    it counts pending :class:`DecisionRequest` rows — *not* waiting-approval
+    tasks, which can drift out of sync with the inbox.
+    """
+    count = await db.scalar(
+        select(func.count())
+        .select_from(DecisionRequest)
+        .where(
+            DecisionRequest.company_id == company_id,
+            DecisionRequest.status == DecisionStatus.pending,
+        )
+    )
+    return int(count or 0)
+
+
+async def _state_fingerprint(db: AsyncSession, company_id: uuid.UUID) -> str:
+    """A cheap hash of the company state that a digest summarizes.
+
+    Used to decide whether the cached digest is still current: if nothing that a
+    digest would mention has changed (spend, task mix, pending decisions, newest
+    task/memory timestamps), the fingerprint is identical and we skip the LLM.
+    """
+    budget = await budget_svc.get_active_budget(db, company_id)
+    task_counts = await db.execute(
+        select(Task.status, func.count(Task.id))
+        .where(Task.company_id == company_id)
+        .group_by(Task.status)
+    )
+    counts = {s.value: c for s, c in task_counts.all()}
+    last_task = await db.scalar(
+        select(func.max(Task.updated_at)).where(Task.company_id == company_id)
+    )
+    last_memory = await db.scalar(
+        select(func.max(MemoryEntry.created_at)).where(MemoryEntry.company_id == company_id)
+    )
+    raw = json.dumps(
+        {
+            "spent": budget.spent_cents if budget else 0,
+            "reserved": budget.reserved_cents if budget else 0,
+            "limit": budget.limit_cents if budget else 0,
+            "tasks": counts,
+            "pending_decisions": await _pending_decisions(db, company_id),
+            "last_task": last_task.isoformat() if last_task else None,
+            "last_memory": last_memory.isoformat() if last_memory else None,
+        },
+        sort_keys=True,
+    )
+    return hashlib.sha256(raw.encode()).hexdigest()
+
+
+async def generate_digest(
+    db: AsyncSession, *, company_id: uuid.UUID, state_hash: str | None = None
+) -> FounderDigest:
     """Produce a board-level daily digest for a company."""
     state = await _company_state(db, company_id)
-    pending = await db.scalar(
-        select(func.count())
-        .select_from(Task)
-        .where(Task.company_id == company_id, Task.status == TaskStatus.waiting_approval)
-    )
+    if state_hash is None:
+        state_hash = await _state_fingerprint(db, company_id)
+    pending = await _pending_decisions(db, company_id)
     resolved = await apikeys.resolve_provider(db, company_id=company_id)
     summary = state
     if resolved is not None:
@@ -192,8 +246,30 @@ async def generate_digest(db: AsyncSession, *, company_id: uuid.UUID) -> Founder
         company_id=company_id,
         period_date=date.today(),
         summary_md=summary,
-        open_decisions=int(pending or 0),
+        open_decisions=pending,
+        metrics={"state_hash": state_hash},
     )
     db.add(digest)
     await db.flush()
     return digest
+
+
+async def get_or_refresh_digest(
+    db: AsyncSession, *, company_id: uuid.UUID
+) -> FounderDigest:
+    """Return the latest digest, regenerating only when state has changed.
+
+    Called when the Overview tab loads: the first visit auto-creates a digest,
+    subsequent visits return the cached one for free, and a new digest is
+    produced only once there is genuinely new information to summarize.
+    """
+    fingerprint = await _state_fingerprint(db, company_id)
+    latest = await db.scalar(
+        select(FounderDigest)
+        .where(FounderDigest.company_id == company_id)
+        .order_by(FounderDigest.period_date.desc(), FounderDigest.created_at.desc())
+        .limit(1)
+    )
+    if latest is not None and (latest.metrics or {}).get("state_hash") == fingerprint:
+        return latest
+    return await generate_digest(db, company_id=company_id, state_hash=fingerprint)
