@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useParams } from "next/navigation";
 import { api, decisionKindLabel, type Decision } from "@/lib/api";
 import { usePoll } from "@/lib/useApi";
+import { Markdown } from "@/lib/markdown";
 
 interface ChatTurn { who: "you" | "agent"; text: string }
 
@@ -98,7 +99,7 @@ function DecisionCard({ decision: d, onResolved }: { decision: Decision; onResol
       </div>
 
       <label style={{ marginTop: 0 }}>Details</label>
-      <p style={{ margin: "0 0 4px", whiteSpace: "pre-wrap" }}>{d.summary}</p>
+      <Markdown>{d.summary}</Markdown>
 
       <label>Guidance for the agent (optional — applied whether you approve or reject)</label>
       <textarea
@@ -121,7 +122,9 @@ function DecisionCard({ decision: d, onResolved }: { decision: Decision; onResol
           {chat.length > 0 && (
             <div className="chat" style={{ marginBottom: 10 }}>
               {chat.map((t, i) => (
-                <div key={i} className={`msg ${t.who === "you" ? "user" : "bot"}`}>{t.text}</div>
+                <div key={i} className={`msg ${t.who === "you" ? "user" : "bot"}`}>
+                  {t.who === "agent" ? <Markdown>{t.text}</Markdown> : t.text}
+                </div>
               ))}
               {thinking && <div className="msg bot muted">thinking…</div>}
             </div>

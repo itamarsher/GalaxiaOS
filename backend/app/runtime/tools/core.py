@@ -41,7 +41,8 @@ SPECS: list[ToolSpec] = [
                 "plan": {
                     "type": "string",
                     "description": (
-                        "The plan: for each objective, the 1-3 concrete "
+                        "The plan, written in Markdown: for each objective, a "
+                        "subheading and a short bulleted list of the 1-3 concrete "
                         "initiatives you intend to pursue and which agent owns each."
                     ),
                 }
@@ -143,7 +144,14 @@ SPECS: list[ToolSpec] = [
                     "type": "string",
                     "enum": ["spend_approval", "risky_action", "strategy"],
                 },
-                "summary": {"type": "string"},
+                "summary": {
+                    "type": "string",
+                    "description": (
+                        "What you need decided, written in Markdown. Use a short "
+                        "**bold** headline, then concise bullets for the context, "
+                        "options, and your recommendation so the founder can scan it."
+                    ),
+                },
             },
             "required": ["kind", "summary"],
         },
@@ -317,9 +325,10 @@ async def _request_budget(db, ctx, *, agent: Agent, task: Task, args: dict) -> T
             task_id=task.id,
             kind=DecisionKind.spend_approval,
             summary=(
-                f"Budget request over budget: ${amount_cents / 100:.2f} for "
-                f"{reason or 'an upcoming spend'}, but only ${max(0, remaining) / 100:.2f} "
-                f"is left this month. Approve to add ${shortfall / 100:.2f} of headroom."
+                f"**Budget request — over budget**\n\n"
+                f"**${amount_cents / 100:.2f}** requested for {reason or 'an upcoming spend'}, "
+                f"but only **${max(0, remaining) / 100:.2f}** is left this month.\n\n"
+                f"Approve to add **${shortfall / 100:.2f}** of headroom."
             ),
             payload={
                 "tool": "request_budget",

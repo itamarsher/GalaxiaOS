@@ -109,6 +109,13 @@ class Settings(BaseSettings):
     # Continuous operation: a recurring "business cycle" re-wakes the org.
     business_cycle_enabled: bool = True
     business_cycle_hour_utc: int = 12
+    # Keep the org working without waiting for the daily cron: when a run finishes
+    # (every task terminal, nothing awaiting the founder), automatically start the
+    # next cycle after a short delay — as long as the company is active and has
+    # budget headroom left. This is what makes the agents loop continuously.
+    business_cycle_continuous: bool = True
+    business_cycle_interval_seconds: int = 120  # delay between auto-continued cycles
+    business_cycle_min_budget_cents: int = 50  # pause auto-continuation below this
 
     # Web search seam (agents' window on the world); "simulated" is offline.
     web_search_provider: str = "simulated"  # simulated | tavily

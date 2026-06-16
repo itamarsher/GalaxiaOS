@@ -24,8 +24,10 @@ async def run_task(ctx: dict, task_id: str) -> dict:
 async def startup(ctx: dict) -> None:
     redis = ctx["redis"]
 
-    async def enqueue_task(task_id: uuid.UUID) -> None:
-        await redis.enqueue_job("run_task", str(task_id))
+    async def enqueue_task(task_id: uuid.UUID, *, delay_seconds: float = 0) -> None:
+        await redis.enqueue_job(
+            "run_task", str(task_id), _defer_by=delay_seconds if delay_seconds > 0 else None
+        )
 
     ctx["runtime"] = RuntimeContext(
         session_factory=SessionLocal,
