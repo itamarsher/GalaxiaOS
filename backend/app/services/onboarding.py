@@ -51,15 +51,55 @@ class OnboardingError(Exception):
     pass
 
 
+def _extract_json_object(text: str) -> str | None:
+    """Return the first balanced ``{...}`` span in *text*, or ``None``.
+
+    Naive ``find("{")``/``rfind("}")`` slicing breaks when the model wraps the
+    JSON in prose, emits more than one object, or gets truncated mid-output: the
+    outermost braces no longer delimit a valid object. Here we walk the text and
+    track brace depth (ignoring braces inside strings) to pull out the first
+    complete object.
+    """
+    depth = 0
+    start = -1
+    in_string = False
+    escaped = False
+    for i, ch in enumerate(text):
+        if in_string:
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == '"':
+                in_string = False
+            continue
+        if ch == '"':
+            in_string = True
+        elif ch == "{":
+            if depth == 0:
+                start = i
+            depth += 1
+        elif ch == "}":
+            if depth > 0:
+                depth -= 1
+                if depth == 0 and start != -1:
+                    return text[start : i + 1]
+    return None
+
+
 def _parse_json(text: str) -> dict:
     text = text.strip()
     if text.startswith("```"):
         text = text.split("```", 2)[1] if text.count("```") >= 2 else text
         text = text.lstrip("json").strip().strip("`")
-    start, end = text.find("{"), text.rfind("}")
-    if start == -1 or end == -1:
+    candidate = _extract_json_object(text)
+    if candidate is None:
         raise OnboardingError("LLM did not return JSON")
-    return json.loads(text[start : end + 1])
+    try:
+        return json.loads(candidate)
+    except json.JSONDecodeError as exc:
+        _log.warning("failed to parse LLM JSON response: %s", exc)
+        raise OnboardingError("LLM returned malformed JSON; please try again.") from exc
 
 
 async def start(
