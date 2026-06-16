@@ -236,11 +236,11 @@ class NativeBackend:
                         task_id=task.id,
                         kind=DecisionKind.spend_approval,
                         summary=(
-                            f"Over budget: {call.name} needs "
-                            f"${exc.requested_cents / 100:.2f} but only "
-                            f"${max(0, exc.available_cents) / 100:.2f} is left in the "
-                            f"{exc.scope} budget. Approve to add "
-                            f"${shortfall / 100:.2f} of headroom and proceed."
+                            f"**Over budget — approval needed**\n\n"
+                            f"`{call.name}` needs **${exc.requested_cents / 100:.2f}**, "
+                            f"but only **${max(0, exc.available_cents) / 100:.2f}** is left "
+                            f"in the {exc.scope} budget.\n\n"
+                            f"Approve to add **${shortfall / 100:.2f}** of headroom and proceed."
                         ),
                         payload={
                             "tool": call.name,

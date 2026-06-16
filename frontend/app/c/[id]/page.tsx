@@ -19,9 +19,12 @@ export default function Overview() {
   const decisions = usePoll(() => api.decisions(id, true), 5000, [id]);
   const digest = usePoll(() => api.digestLatest(id), 0, [id]);
 
-  // Live task stream (SSE) so the founder sees the initial work happening right
-  // after launch, auto-updating without a refresh (task 3).
+  // Live task stream (SSE) so the founder sees work happening, auto-updating
+  // without a refresh. Falls back to polling the task list so the Overview always
+  // shows the task list (the same view as right after onboarding), even when the
+  // org is idle and no SSE frames are arriving.
   const [liveTasks, setLiveTasks] = useState<Task[] | null>(null);
+  const polledTasks = usePoll(() => api.tasks(id), 5000, [id]);
   const [justLaunched, setJustLaunched] = useState(false);
   const [deleting, setDeleting] = useState(false);
 
@@ -42,7 +45,7 @@ export default function Overview() {
   const b = budget.data?.budget;
   const pct = b && b.limit_cents ? Math.min(100, (b.spent_cents / b.limit_cents) * 100) : 0;
 
-  const tasks = liveTasks ?? [];
+  const tasks = liveTasks ?? polledTasks.data ?? [];
   const counts = tasks.reduce<Record<string, number>>((acc, t) => {
     acc[t.status] = (acc[t.status] ?? 0) + 1;
     return acc;
@@ -72,37 +75,43 @@ export default function Overview() {
         Status: <span className={`status ${company.data?.status}`}>{company.data?.status ?? "—"}</span>
       </p>
 
-      {(justLaunched || inFlight > 0) && (
-        <div className="card">
-          <div className="step" style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            {inFlight > 0 && <span className="spinner" style={{ width: 14, height: 14 }} />}
-            <span>{justLaunched ? "🚀 Launched — initial work in progress" : "Live activity"}</span>
-          </div>
-          <div className="row" style={{ marginTop: 10 }}>
-            <span className="pill">{counts["running"] ?? 0} running</span>
-            <span className="pill">{counts["queued"] ?? 0} queued</span>
-            <span className="pill">{counts["done"] ?? 0} done</span>
-            {(counts["waiting_approval"] ?? 0) > 0 && (
-              <span className="pill">{counts["waiting_approval"]} awaiting you</span>
-            )}
-          </div>
-          {recent.length > 0 ? (
-            <div style={{ marginTop: 12 }}>
-              {recent.map((t) => (
-                <Link key={t.id} href={`/c/${id}/tasks?task=${t.id}`} className="actrow">
-                  <span className="goal">{"— ".repeat(t.depth)}{t.goal}</span>
-                  <span className={`status ${t.status}`}>{statusLabel(t.status)}</span>
-                </Link>
-              ))}
-            </div>
-          ) : (
-            <p className="muted" style={{ marginTop: 10 }}>Agents are kicking off the first initiatives…</p>
-          )}
-          <p className="muted" style={{ marginTop: 10, fontSize: 12 }}>
-            This updates live — tap a task for details. Open the Tasks tab for the full tree.
-          </p>
+      <div className="card">
+        <div className="step" style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          {inFlight > 0 && <span className="spinner" style={{ width: 14, height: 14 }} />}
+          <span>
+            {justLaunched && inFlight > 0
+              ? "🚀 Launched — initial work in progress"
+              : inFlight > 0
+                ? "Live activity"
+                : "Tasks"}
+          </span>
         </div>
-      )}
+        <div className="row" style={{ marginTop: 10 }}>
+          <span className="pill">{counts["running"] ?? 0} running</span>
+          <span className="pill">{counts["queued"] ?? 0} queued</span>
+          <span className="pill">{counts["done"] ?? 0} done</span>
+          {(counts["waiting_approval"] ?? 0) > 0 && (
+            <span className="pill">{counts["waiting_approval"]} awaiting you</span>
+          )}
+        </div>
+        {recent.length > 0 ? (
+          <div style={{ marginTop: 12 }}>
+            {recent.map((t) => (
+              <Link key={t.id} href={`/c/${id}/tasks?task=${t.id}`} className="actrow">
+                <span className="goal">{"— ".repeat(t.depth)}{t.goal}</span>
+                <span className={`status ${t.status}`}>{statusLabel(t.status)}</span>
+              </Link>
+            ))}
+          </div>
+        ) : (
+          <p className="muted" style={{ marginTop: 10 }}>
+            {inFlight > 0 ? "Agents are kicking off the first initiatives…" : "No tasks yet."}
+          </p>
+        )}
+        <p className="muted" style={{ marginTop: 10, fontSize: 12 }}>
+          This updates live — tap a task for details. Open the Tasks tab for the full tree.
+        </p>
+      </div>
 
       <div className="grid2">
         <div className="card">

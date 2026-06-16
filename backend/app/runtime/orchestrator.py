@@ -11,15 +11,33 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
 from app.db import set_tenant
-from app.models import Agent, AgentRun, Task
-from app.models.enums import AgentRole, AgentStatus, RunStatus, RunTrigger, TaskStatus
+from app.models import Agent, AgentRun, CircuitBreaker, Company, Task
+from app.models.enums import (
+    AgentRole,
+    AgentStatus,
+    BreakerState,
+    BreakerType,
+    CompanyStatus,
+    RunStatus,
+    RunTrigger,
+    TaskStatus,
+)
 from app.runtime import breakers
 from app.runtime.backends import get_backend
 from app.runtime.context import RuntimeContext
+from app.services import budget as budget_svc
+
+#: Task statuses that mean the run is still doing (or waiting to do) work.
+_ACTIVE_TASK_STATUSES = (
+    TaskStatus.queued,
+    TaskStatus.running,
+    TaskStatus.waiting_approval,
+)
 
 
 async def _create_ceo_run(
@@ -128,7 +146,7 @@ async def run_task(ctx: RuntimeContext, task_id: uuid.UUID) -> dict:
 
     backend = get_backend(backend_type)
     try:
-        return await backend.run(ctx, agent, task)
+        result = await backend.run(ctx, agent, task)
     except Exception as exc:  # noqa: BLE001
         # A task is flipped to ``running`` before dispatch; if the backend raises
         # (provider/network error, a bug, …) we must not leave it orphaned in
@@ -142,3 +160,87 @@ async def run_task(ctx: RuntimeContext, task_id: uuid.UUID) -> dict:
                 row.output = {"error": f"{type(exc).__name__}: {exc}"[:1000]}
                 await db.commit()
         raise
+
+    # Keep the org alive: if this task completing means the whole run is now
+    # finished (nothing queued/running/awaiting the founder), automatically start
+    # the next business cycle. Without this the org goes quiet after its first
+    # burst of work until the once-a-day cron fires.
+    await _maybe_continue_cycle(ctx, company_id=task.company_id, root_run_id=task.root_run_id)
+    return result
+
+
+async def has_active_tasks(db: AsyncSession, company_id: uuid.UUID) -> bool:
+    """True if the company has any task still queued/running/awaiting the founder."""
+    count = await db.scalar(
+        select(func.count(Task.id)).where(
+            Task.company_id == company_id, Task.status.in_(_ACTIVE_TASK_STATUSES)
+        )
+    )
+    return bool(count and count > 0)
+
+
+async def _maybe_continue_cycle(
+    ctx: RuntimeContext, *, company_id: uuid.UUID, root_run_id: uuid.UUID
+) -> None:
+    """Start the next cycle once the current run has fully wound down.
+
+    Idempotent under races: the finishing task that first flips the run row to
+    ``done`` (under ``FOR UPDATE``) is the only one that enqueues the next cycle,
+    so concurrent finishers can't double-launch it.
+    """
+    if not (settings.business_cycle_enabled and settings.business_cycle_continuous):
+        return
+
+    next_task_id: uuid.UUID | None = None
+    async with ctx.session_factory() as db:
+        await set_tenant(db, company_id)
+
+        # Anything in this run still active? Then the run isn't finished yet.
+        active = await db.scalar(
+            select(func.count(Task.id)).where(
+                Task.root_run_id == root_run_id, Task.status.in_(_ACTIVE_TASK_STATUSES)
+            )
+        )
+        if active and active > 0:
+            return
+
+        # Claim the run: only the first finisher flips it to done and continues.
+        run = await db.scalar(
+            select(AgentRun).where(AgentRun.id == root_run_id).with_for_update().limit(1)
+        )
+        if run is None or run.status is not RunStatus.running:
+            return
+        run.status = RunStatus.done
+        await db.flush()
+
+        if await _can_continue(db, company_id):
+            next_task_id = await create_scheduled_run(db, company_id)
+        await db.commit()
+
+    if next_task_id is not None:
+        await ctx.enqueue_task(
+            next_task_id, delay_seconds=settings.business_cycle_interval_seconds
+        )
+
+
+async def _can_continue(db: AsyncSession, company_id: uuid.UUID) -> bool:
+    """Gate auto-continuation on company health: active, un-tripped, with budget."""
+    company = await db.get(Company, company_id)
+    if company is None or company.status is not CompanyStatus.active:
+        return False
+
+    spend_tripped = await db.scalar(
+        select(CircuitBreaker.id).where(
+            CircuitBreaker.company_id == company_id,
+            CircuitBreaker.type == BreakerType.spend,
+            CircuitBreaker.state == BreakerState.tripped,
+        )
+    )
+    if spend_tripped is not None:
+        return False
+
+    budget = await budget_svc.get_active_budget(db, company_id)
+    if budget is None:
+        return False
+    remaining = budget.limit_cents - budget.spent_cents - budget.reserved_cents
+    return remaining >= settings.business_cycle_min_budget_cents

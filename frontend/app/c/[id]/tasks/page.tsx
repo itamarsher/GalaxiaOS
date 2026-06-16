@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import { api, fmtUsd, statusLabel, type Task, type TaskDetail } from "@/lib/api";
 import { usePoll } from "@/lib/useApi";
+import { Markdown } from "@/lib/markdown";
 
 interface EventFrame {
   tasks: Task[];
@@ -135,7 +136,7 @@ function TaskDrawer({ companyId, taskId, onClose }: { companyId: string; taskId:
             {task.pending_decision && (
               <div className="card" style={{ borderColor: "var(--warn)", marginTop: 12 }}>
                 <div className="step" style={{ color: "var(--warn)" }}>⏳ Waiting for your decision</div>
-                <p style={{ margin: "8px 0" }}>{task.pending_decision.summary}</p>
+                <Markdown>{task.pending_decision.summary}</Markdown>
                 <div className="btnrow">
                   <button disabled={busy} onClick={() => resolve(true)}>Approve</button>
                   <button className="ghost" disabled={busy} onClick={() => resolve(false)}>Reject</button>
