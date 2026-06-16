@@ -79,6 +79,30 @@ async def reserve(
     return budget
 
 
+async def increase_limit(
+    db: AsyncSession, *, company_id: uuid.UUID, additional_cents: int
+) -> Budget | None:
+    """Raise the company's budget ceiling by ``additional_cents``.
+
+    Used when the founder approves an over-budget request: the spend the agent
+    asked for didn't fit, so the founder authorises more headroom (the actual
+    top-up payment is wired in separately — this just lifts the cap so the
+    approved action can proceed on resume). Locks the row ``FOR UPDATE`` and
+    bumps ``version`` to stay consistent with the reserve/commit path.
+    """
+    if additional_cents <= 0:
+        return None
+    budget = await db.scalar(
+        select(Budget).where(Budget.company_id == company_id).with_for_update().limit(1)
+    )
+    if budget is None:
+        return None
+    budget.limit_cents += additional_cents
+    budget.version += 1
+    await db.flush()
+    return budget
+
+
 async def commit_spend(
     db: AsyncSession,
     *,

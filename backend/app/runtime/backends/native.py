@@ -31,8 +31,10 @@ from app.providers.base import LLMProvider, Message, TextBlock, ToolResultBlock,
 from app.runtime.context import RuntimeContext
 from app.runtime.prompts import AGENT_LOOP_SYSTEM, ROLE_DESCRIPTIONS
 from app.runtime.tools import TOOL_SPECS, execute_tool
+from app.runtime.tools.base import consume_approval_grant as _consume_approval_grant
 from app.services import apikeys, memory, metrics, reputation
 from app.services import governance as gov
+from app.services.budget import BudgetExceeded
 
 # Model tiers, cheapest -> most capable. Used for reputation-driven escalation.
 _MODEL_TIERS = ("cheap", "planner", "strategic")
@@ -81,32 +83,6 @@ def _model_for(agent: Agent, provider: LLMProvider, trust: float | None = None) 
     tier = "planner" if agent.role is AgentRole.ceo else "cheap"
     tier = _escalate_tier(tier, trust)
     return provider.default_models.get(tier, provider.default_models["cheap"])
-
-
-async def _consume_approval_grant(db, *, task_id, tool: str) -> bool:
-    """Use up a founder approval for ``tool`` on this task, if one is pending.
-
-    When the founder approves a gated action the task is re-queued and re-run
-    from the top; without this, the same governance gate would just re-trigger
-    and ask for approval again forever. An approved ``DecisionRequest`` therefore
-    acts as a one-shot grant: the first matching tool call on resume consumes it
-    and proceeds instead of escalating again.
-    """
-    grants = (
-        await db.scalars(
-            select(DecisionRequest).where(
-                DecisionRequest.task_id == task_id,
-                DecisionRequest.status == DecisionStatus.approved,
-            )
-        )
-    ).all()
-    for grant in grants:
-        payload = grant.payload or {}
-        if payload.get("tool") == tool and not payload.get("consumed"):
-            grant.payload = {**payload, "consumed": True}
-            await db.flush()
-            return True
-    return False
 
 
 class NativeBackend:
@@ -241,9 +217,49 @@ class NativeBackend:
                     "result": {"status": "waiting_approval", "tool": call.name},
                 }
 
-            outcome = await execute_tool(
-                db, ctx, agent=agent, task=task, name=call.name, args=call.arguments
-            )
+            try:
+                outcome = await execute_tool(
+                    db, ctx, agent=agent, task=task, name=call.name, args=call.arguments
+                )
+            except BudgetExceeded as exc:
+                # The action would blow the budget. Rather than fail the task
+                # outright (the old behaviour: "error": "BudgetExceeded"), treat
+                # it like a spend the CEO can't authorise alone and escalate it to
+                # the founder. Approving raises the budget ceiling by the shortfall
+                # so the action goes through on resume.
+                await db.rollback()
+                shortfall = max(0, exc.requested_cents - exc.available_cents)
+                db.add(
+                    DecisionRequest(
+                        company_id=task.company_id,
+                        agent_id=agent.id,
+                        task_id=task.id,
+                        kind=DecisionKind.spend_approval,
+                        summary=(
+                            f"Over budget: {call.name} needs "
+                            f"${exc.requested_cents / 100:.2f} but only "
+                            f"${max(0, exc.available_cents) / 100:.2f} is left in the "
+                            f"{exc.scope} budget. Approve to add "
+                            f"${shortfall / 100:.2f} of headroom and proceed."
+                        ),
+                        payload={
+                            "tool": call.name,
+                            "args": call.arguments,
+                            "requested_cents": exc.requested_cents,
+                            "available_cents": exc.available_cents,
+                            "budget_increase_cents": shortfall,
+                        },
+                        status=DecisionStatus.pending,
+                    )
+                )
+                task_row = await db.get(Task, task.id)
+                if task_row is not None:
+                    task_row.status = TaskStatus.waiting_approval
+                await db.commit()
+                return {
+                    "terminal": True,
+                    "result": {"status": "waiting_approval", "tool": call.name},
+                }
             await db.commit()
 
         if outcome.stop:

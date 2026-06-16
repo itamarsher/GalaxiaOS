@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useParams } from "next/navigation";
-import { api, statusLabel, type Decision } from "@/lib/api";
+import { api, decisionKindLabel, type Decision } from "@/lib/api";
 import { usePoll } from "@/lib/useApi";
 
 interface ChatTurn { who: "you" | "agent"; text: string }
@@ -59,14 +59,46 @@ function DecisionCard({ decision: d, onResolved }: { decision: Decision; onResol
     }
   };
 
+  const raisedBy = d.agent_name
+    ? `${d.agent_name}${d.agent_role ? ` · ${d.agent_role}` : ""}`
+    : null;
+
   return (
     <div className="card">
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
-        <span className="status pending">{statusLabel(d.kind)}</span>
+        <span className="status pending">{decisionKindLabel(d.kind)}</span>
         <span className="muted" style={{ fontSize: 12 }}>{new Date(d.created_at).toLocaleString()}</span>
       </div>
-      <p style={{ margin: "10px 0 4px" }}>{d.summary}</p>
-      {d.agent_name && <p className="muted" style={{ fontSize: 12, marginTop: 0 }}>Raised by {d.agent_name}</p>}
+
+      {/* Bigger picture first: what objective / initiative / agent this is about,
+          so the founder has context before reading the specifics. */}
+      <div className="dctx">
+        {d.objective_title && (
+          <div className="row">
+            <span className="lbl">Objective</span>
+            <span className="val accent">{d.objective_title}</span>
+          </div>
+        )}
+        <div className="row">
+          <span className="lbl">Triggered by</span>
+          <span className="val">{d.task_goal ?? "—"}</span>
+        </div>
+        {d.initiative && d.initiative !== d.task_goal && (
+          <div className="row">
+            <span className="lbl">Initiative</span>
+            <span className="val">{d.initiative}</span>
+          </div>
+        )}
+        {raisedBy && (
+          <div className="row">
+            <span className="lbl">Raised by</span>
+            <span className="val">{raisedBy}</span>
+          </div>
+        )}
+      </div>
+
+      <label style={{ marginTop: 0 }}>Details</label>
+      <p style={{ margin: "0 0 4px", whiteSpace: "pre-wrap" }}>{d.summary}</p>
 
       <label>Guidance for the agent (optional — applied whether you approve or reject)</label>
       <textarea

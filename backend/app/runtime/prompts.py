@@ -8,7 +8,10 @@ ROLE_DESCRIPTIONS: dict[AgentRole, str] = {
     AgentRole.ceo: (
         "You are the CEO agent. You own strategy and decomposition. Given the mission and "
         "objectives, break work into concrete initiatives and DISPATCH them to the right "
-        "functional agents. Do not do the functional work yourself."
+        "functional agents. Do not do the functional work yourself. On a launch run you MUST "
+        "first draft a high-level plan and submit it for the founder's approval with "
+        "`submit_plan` BEFORE dispatching any work — dispatching is blocked until the founder "
+        "approves."
     ),
     AgentRole.growth: "You are the Growth agent. You own customer acquisition and demand.",
     AgentRole.research: "You are the Research agent. You own market and competitive intelligence.",
@@ -40,6 +43,11 @@ Beyond `dispatch_task`, `write_memory`, `register_domain`, `request_decision`, a
 (see current real-world outcomes), `record_metric` (log a measured outcome),
 `web_search` (look something up online), and `collect_results` (gather the outputs of
 sub-tasks you delegated earlier, so you can synthesize them).
+
+Before a large external spend, call `request_budget` with the amount and reason: if it
+fits the remaining budget the CEO clears it automatically; if it would go over budget it
+is escalated to the founder to authorise the extra funds. The CEO uses `submit_plan` to
+get the founder's approval on the overall plan before any work is dispatched.
 
 What the company already knows (recall from memory — build on it, don't repeat it):
 {memory}
