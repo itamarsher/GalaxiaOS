@@ -136,6 +136,37 @@ def _parse_llm_json(resp: LLMResponse) -> dict:
         raise OnboardingError("LLM returned malformed JSON; please try again.") from exc
 
 
+def _as_dicts(items: object, key: str) -> list[dict]:
+    """Normalize an LLM list into dicts, tolerating bare strings.
+
+    JSON mode guarantees valid JSON but not the schema, so a list element may
+    arrive as a plain string (e.g. ``"ceo"``) instead of an object. Coerce
+    strings to ``{key: value}`` and drop anything that isn't a string or dict —
+    a wrong shape should never crash persistence.
+    """
+    if not isinstance(items, list):
+        return []
+    out: list[dict] = []
+    for item in items:
+        if isinstance(item, dict):
+            out.append(item)
+        elif isinstance(item, str):
+            out.append({key: item})
+    return out
+
+
+def _as_int(value: object, default: int | None) -> int | None:
+    """Coerce a possibly-stringy numeric field to ``int``; fall back on failure."""
+    if isinstance(value, bool):
+        return default
+    if isinstance(value, int):
+        return value
+    try:
+        return int(float(value))  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return default
+
+
 async def start(
     db: AsyncSession,
     *,
@@ -200,24 +231,24 @@ async def generate(db: AsyncSession, *, company: Company) -> dict:
     mission.generated_summary = plan.get("summary")
     mission.business_model_assumptions = plan.get("business_model_assumptions")
     mission.target_market = plan.get("target_market")
-    company.name = (plan.get("summary") or company.name)[:120]
+    company.name = str(plan.get("summary") or company.name)[:120]
 
-    for i, obj in enumerate(plan.get("objectives", [])):
+    for i, obj in enumerate(_as_dicts(plan.get("objectives"), "title")):
         objective = Objective(
             company_id=company.id,
             mission_id=mission.id,
-            title=obj.get("title", f"Objective {i+1}")[:500],
+            title=str(obj.get("title") or f"Objective {i+1}")[:500],
             rationale=obj.get("rationale"),
-            priority=obj.get("priority", i + 1),
+            priority=_as_int(obj.get("priority"), i + 1),
         )
         db.add(objective)
         await db.flush()
-        for kr in obj.get("key_results", []):
+        for kr in _as_dicts(obj.get("key_results"), "metric"):
             db.add(
                 KeyResult(
                     company_id=company.id,
                     objective_id=objective.id,
-                    metric=kr.get("metric", "metric")[:255],
+                    metric=str(kr.get("metric") or "metric")[:255],
                     target_value=kr.get("target_value"),
                     unit=kr.get("unit"),
                 )
@@ -245,7 +276,7 @@ async def generate(db: AsyncSession, *, company: Company) -> dict:
     org = _parse_llm_json(org_resp)
 
     role_to_agent: dict[str, uuid.UUID] = {}
-    for spec in org.get("agents", []):
+    for spec in _as_dicts(org.get("agents"), "role"):
         try:
             role = AgentRole(spec.get("role", "custom"))
         except ValueError:
@@ -253,10 +284,10 @@ async def generate(db: AsyncSession, *, company: Company) -> dict:
         agent = Agent(
             company_id=company.id,
             role=role,
-            name=spec.get("name", role.value.title()),
-            system_prompt=spec.get("responsibility", ""),
+            name=str(spec.get("name") or role.value.title())[:255],
+            system_prompt=str(spec.get("responsibility") or ""),
             autonomy_level=_parse_autonomy(spec.get("autonomy_level")),
-            monthly_budget_cents=spec.get("monthly_budget_cents"),
+            monthly_budget_cents=_as_int(spec.get("monthly_budget_cents"), None),
         )
         db.add(agent)
         await db.flush()
@@ -294,7 +325,7 @@ async def generate(db: AsyncSession, *, company: Company) -> dict:
             _log.exception("investment review failed for company %s", company.id)
 
     return {
-        "cost_estimate_cents": org.get("monthly_cost_estimate_cents"),
+        "cost_estimate_cents": _as_int(org.get("monthly_cost_estimate_cents"), None),
         "agent_roles": list(role_to_agent.keys()),
         "investor_reviews": investor_reviews,
     }
