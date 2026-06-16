@@ -71,3 +71,83 @@ monthly budget (in USD cents), design the agent fleet. Respond ONLY with minifie
 }
 Always include exactly one `ceo` and one `governance` agent. Allocate per-agent budgets that sum
 to at most the provided monthly budget. Functional agents report_to the ceo."""
+
+
+# JSON schemas matching the two prompts above. Providers use these to *force*
+# structured JSON output (Anthropic via a pinned tool, OpenAI via JSON mode), so
+# generation no longer depends on the model hand-writing valid JSON. Kept
+# permissive (no ``additionalProperties``/``required`` strictness) — downstream
+# parsing already tolerates missing keys via ``.get()`` defaults.
+MISSION_TO_PLAN_SCHEMA: dict = {
+    "type": "object",
+    "properties": {
+        "summary": {"type": "string"},
+        "business_model_assumptions": {
+            "type": "object",
+            "properties": {
+                "how_it_makes_money": {"type": "string"},
+                "key_risks": {"type": "array", "items": {"type": "string"}},
+            },
+        },
+        "target_market": {
+            "type": "object",
+            "properties": {
+                "segment": {"type": "string"},
+                "why": {"type": "string"},
+            },
+        },
+        "objectives": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "title": {"type": "string"},
+                    "rationale": {"type": "string"},
+                    "priority": {"type": "integer"},
+                    "key_results": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "metric": {"type": "string"},
+                                "target_value": {"type": "number"},
+                                "unit": {"type": "string"},
+                            },
+                        },
+                    },
+                },
+            },
+        },
+    },
+}
+
+PLAN_TO_ORG_SCHEMA: dict = {
+    "type": "object",
+    "properties": {
+        "agents": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "role": {"type": "string"},
+                    "name": {"type": "string"},
+                    "responsibility": {"type": "string"},
+                    "autonomy_level": {"type": "string"},
+                    "monthly_budget_cents": {"type": "integer"},
+                },
+            },
+        },
+        "edges": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "from_role": {"type": "string"},
+                    "to_role": {"type": "string"},
+                    "relation": {"type": "string"},
+                },
+            },
+        },
+        "monthly_cost_estimate_cents": {"type": "integer"},
+    },
+}

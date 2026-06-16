@@ -6,6 +6,7 @@ boundary is enforced by ``make check-providers`` in CI.
 
 from __future__ import annotations
 
+import json
 import math
 
 import anthropic
@@ -29,6 +30,9 @@ from app.providers.base import (
 # request (it estimates the response could exceed the ~10-min HTTP timeout), so
 # we transparently switch to streaming and reassemble the final message.
 _STREAM_THRESHOLD = 16_000
+
+# Internal tool used to force structured JSON output (see ``complete``).
+_JSON_TOOL_NAME = "emit_result"
 
 
 def _block_text(block: object) -> str:
@@ -113,6 +117,7 @@ class AnthropicProvider(LLMProvider):
         messages: list[Message],
         tools: list[ToolSpec] | None = None,
         max_tokens: int = 4096,
+        json_schema: dict | None = None,
     ) -> LLMResponse:
         client = anthropic.AsyncAnthropic(api_key=api_key)
         kwargs: dict = {
@@ -122,7 +127,19 @@ class AnthropicProvider(LLMProvider):
         }
         if system:
             kwargs["system"] = system
-        if tools:
+        if json_schema is not None:
+            # Force structured JSON by pinning a single tool: the model must call
+            # it, and the SDK returns the arguments already parsed — no
+            # hand-written JSON to mis-format.
+            kwargs["tools"] = [
+                {
+                    "name": _JSON_TOOL_NAME,
+                    "description": "Return the requested result as structured JSON.",
+                    "input_schema": json_schema,
+                }
+            ]
+            kwargs["tool_choice"] = {"type": "tool", "name": _JSON_TOOL_NAME}
+        elif tools:
             kwargs["tools"] = [
                 {"name": t.name, "description": t.description, "input_schema": t.input_schema}
                 for t in tools
@@ -164,6 +181,23 @@ class AnthropicProvider(LLMProvider):
             raise ProviderError(f"Anthropic API call failed: {type(exc).__name__}.") from exc
         finally:
             await client.close()
+
+        if json_schema is not None:
+            # Pinned-tool path: the result is the tool call's parsed input.
+            payload: dict = {}
+            for block in resp.content:
+                if block.type == "tool_use":
+                    payload = dict(block.input or {})
+                    break
+            return LLMResponse(
+                text=json.dumps(payload),
+                usage=Usage(
+                    input_tokens=resp.usage.input_tokens,
+                    output_tokens=resp.usage.output_tokens,
+                ),
+                model=resp.model,
+                stop_reason=resp.stop_reason or "",
+            )
 
         text_parts: list[str] = []
         tool_calls: list[ToolCall] = []

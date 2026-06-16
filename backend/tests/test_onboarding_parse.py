@@ -45,18 +45,11 @@ def test_truncated_response_raises_specific_error(stop_reason):
         _parse_llm_json(resp)
 
 
-def test_unescaped_quote_in_value_recovered_via_repair():
-    # The production failure mode: an unescaped quote inside a free-text field
-    # makes the whole response invalid JSON (and desyncs brace extraction).
-    # The repair fallback recovers the structure instead of failing generation.
-    text = (
-        '{"agents": [{"role": "ceo", "name": "CEO", '
-        '"responsibility": "Own the "north star" metric"}], '
-        '"monthly_cost_estimate_cents": 5000}'
-    )
-    out = _parse_llm_json(_resp(text))
-    assert out["monthly_cost_estimate_cents"] == 5000
-    assert out["agents"][0]["role"] == "ceo"
+def test_malformed_json_raises_onboarding_error():
+    # Generation forces structured JSON at the provider, so this is rare — but if
+    # a provider returns invalid JSON, fail with a handled error, not a 500.
+    with pytest.raises(OnboardingError):
+        _parse_llm_json(_resp('{"a" 1, "b": 2}'))
 
 
 def test_no_json_raises_onboarding_error():

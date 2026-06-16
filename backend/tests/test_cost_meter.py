@@ -33,7 +33,9 @@ class FakeProvider(LLMProvider):
     def estimate_input_tokens(self, *, api_key, model, system, messages) -> int:
         return self._in
 
-    async def complete(self, *, api_key, model, system, messages, tools=None, max_tokens=4096):
+    async def complete(
+        self, *, api_key, model, system, messages, tools=None, max_tokens=4096, json_schema=None
+    ):
         return LLMResponse(
             text="ok",
             usage=Usage(input_tokens=self._in, output_tokens=self._out),
