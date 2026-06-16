@@ -1,18 +1,68 @@
 "use client";
 
-import { useParams } from "next/navigation";
-import { api, fmtUsd } from "@/lib/api";
+import { useEffect, useState } from "react";
+import { useParams, useRouter } from "next/navigation";
+import { api, fmtUsd, type Task } from "@/lib/api";
 import { usePoll } from "@/lib/useApi";
+
+interface EventFrame {
+  tasks: Task[];
+  budget: { spent_cents: number; reserved_cents: number; limit_cents: number } | null;
+}
 
 export default function Overview() {
   const { id } = useParams<{ id: string }>();
+  const router = useRouter();
   const company = usePoll(() => api.company(id), 0, [id]);
   const budget = usePoll(() => api.budget(id), 5000, [id]);
   const decisions = usePoll(() => api.decisions(id, true), 5000, [id]);
   const digest = usePoll(() => api.digestLatest(id), 0, [id]);
 
+  // Live task stream (SSE) so the founder sees the initial work happening right
+  // after launch, auto-updating without a refresh (task 3).
+  const [liveTasks, setLiveTasks] = useState<Task[] | null>(null);
+  const [justLaunched, setJustLaunched] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      setJustLaunched(new URLSearchParams(window.location.search).get("launched") === "1");
+    }
+    const url = api.eventsUrl(id);
+    if (typeof window === "undefined" || typeof EventSource === "undefined" || !url) return;
+    const es = new EventSource(url);
+    es.onmessage = (e: MessageEvent) => {
+      try { setLiveTasks((JSON.parse(e.data) as EventFrame).tasks); } catch { /* ignore */ }
+    };
+    es.onerror = () => es.close();
+    return () => es.close();
+  }, [id]);
+
   const b = budget.data?.budget;
   const pct = b && b.limit_cents ? Math.min(100, (b.spent_cents / b.limit_cents) * 100) : 0;
+
+  const tasks = liveTasks ?? [];
+  const counts = tasks.reduce<Record<string, number>>((acc, t) => {
+    acc[t.status] = (acc[t.status] ?? 0) + 1;
+    return acc;
+  }, {});
+  const inFlight = (counts["running"] ?? 0) + (counts["queued"] ?? 0);
+  const recent = tasks.slice(0, 6);
+
+  const deleteCompany = async () => {
+    if (!window.confirm(
+      "Delete this company and ALL its data (agents, tasks, budget, history)? " +
+      "This stops it running and cannot be undone."
+    )) return;
+    setDeleting(true);
+    try {
+      await api.deleteCompany(id);
+      router.push("/");
+    } catch (e) {
+      alert(String(e instanceof Error ? e.message : e));
+      setDeleting(false);
+    }
+  };
 
   return (
     <div>
@@ -20,6 +70,38 @@ export default function Overview() {
       <p className="muted">
         Status: <span className={`status ${company.data?.status}`}>{company.data?.status ?? "—"}</span>
       </p>
+
+      {(justLaunched || inFlight > 0) && (
+        <div className="card">
+          <div className="step" style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            {inFlight > 0 && <span className="spinner" style={{ width: 14, height: 14 }} />}
+            <span>{justLaunched ? "🚀 Launched — initial work in progress" : "Live activity"}</span>
+          </div>
+          <div className="row" style={{ marginTop: 10 }}>
+            <span className="pill">{counts["running"] ?? 0} running</span>
+            <span className="pill">{counts["queued"] ?? 0} queued</span>
+            <span className="pill">{counts["done"] ?? 0} done</span>
+            {(counts["waiting_approval"] ?? 0) > 0 && (
+              <span className="pill">{counts["waiting_approval"]} awaiting you</span>
+            )}
+          </div>
+          {recent.length > 0 ? (
+            <div style={{ marginTop: 12 }}>
+              {recent.map((t) => (
+                <div key={t.id} className="kv">
+                  <span>{"— ".repeat(t.depth)}{t.goal.slice(0, 70)}</span>
+                  <span className={`status ${t.status}`}>{t.status}</span>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="muted" style={{ marginTop: 10 }}>Agents are kicking off the first initiatives…</p>
+          )}
+          <p className="muted" style={{ marginTop: 10, fontSize: 12 }}>
+            This updates live. Open the Tasks tab for the full tree.
+          </p>
+        </div>
+      )}
 
       <div className="grid2">
         <div className="card">
@@ -41,23 +123,31 @@ export default function Overview() {
       </div>
 
       <div className="card">
-        <div className="step" style={{ display: "flex", justifyContent: "space-between" }}>
+        <div className="step" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <span>Latest digest{digest.data?.period_date ? ` · ${digest.data.period_date}` : ""}</span>
+          <button className="ghost" style={{ marginTop: 0, padding: "6px 12px", fontSize: 12 }}
+            onClick={() => api.generateDigest(id).then(() => digest.reload())}>
+            Refresh
+          </button>
         </div>
         {digest.data?.summary_md ? (
           <pre style={{ whiteSpace: "pre-wrap", fontFamily: "inherit", margin: "8px 0 0" }}>
             {digest.data.summary_md}
           </pre>
         ) : (
-          <div className="empty">
-            No digest yet.
-            <div style={{ marginTop: 8 }}>
-              <button onClick={() => api.generateDigest(id).then(() => digest.reload())}>
-                Generate now
-              </button>
-            </div>
-          </div>
+          <div className="empty">Preparing your first digest…</div>
         )}
+      </div>
+
+      <div className="card danger-zone">
+        <div className="step">Danger zone</div>
+        <p className="muted">
+          Permanently delete this company and stop all of its agents. This removes every
+          task, budget record, and memory — there is no undo.
+        </p>
+        <button className="ghost danger" disabled={deleting} onClick={deleteCompany}>
+          {deleting ? "Deleting…" : "Delete company"}
+        </button>
       </div>
     </div>
   );

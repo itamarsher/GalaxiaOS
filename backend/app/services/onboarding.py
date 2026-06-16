@@ -7,7 +7,9 @@ so even company generation respects the founder's budget.
 from __future__ import annotations
 
 import json
+import time
 import uuid
+from threading import Lock
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -45,6 +47,8 @@ from app.runtime.prompts import (
     MISSION_TO_PLAN_SYSTEM,
     PLAN_TO_ORG_SCHEMA,
     PLAN_TO_ORG_SYSTEM,
+    REFINE_SCHEMA,
+    REFINE_SYSTEM,
 )
 from app.services import apikeys, investors
 from app.services import governance as gov
@@ -54,6 +58,65 @@ _log = get_logger("abos.onboarding")
 
 class OnboardingError(Exception):
     pass
+
+
+# ── Generation progress telemetry ─────────────────────────────────────────────
+# Organization generation runs two sequential LLM calls and an investor review,
+# so it is far from instant. The handler updates this in-process registry as it
+# moves through phases; ``GET /onboarding/{id}/generate/status`` reads it
+# concurrently (the generate request is still in flight) so the founder sees a
+# live spinner with real progress instead of a frozen button. Single-instance
+# scope is sufficient for onboarding; if a multi-worker deploy ever splits the
+# two requests across processes, the status simply reads "running" until the
+# generate POST returns the finished preview.
+_PROGRESS: dict[str, dict] = {}
+_PROGRESS_LOCK = Lock()
+_MAX_EVENTS = 40
+
+
+def reset_progress(company_id: uuid.UUID) -> None:
+    with _PROGRESS_LOCK:
+        _PROGRESS[str(company_id)] = {
+            "phase": "queued",
+            "pct": 0,
+            "message": "Starting…",
+            "status": "running",
+            "error": None,
+            "events": [],
+            "updated_at": time.time(),
+        }
+
+
+def set_progress(
+    company_id: uuid.UUID,
+    *,
+    phase: str,
+    pct: int,
+    message: str,
+    status: str = "running",
+    error: str | None = None,
+) -> None:
+    key = str(company_id)
+    with _PROGRESS_LOCK:
+        prev = _PROGRESS.get(key) or {}
+        events = list(prev.get("events", []))
+        events.append({"ts": time.time(), "label": message, "pct": pct})
+        del events[:-_MAX_EVENTS]
+        _PROGRESS[key] = {
+            "phase": phase,
+            "pct": pct,
+            "message": message,
+            "status": status,
+            "error": error,
+            "events": events,
+            "updated_at": time.time(),
+        }
+
+
+def get_progress(company_id: uuid.UUID) -> dict | None:
+    with _PROGRESS_LOCK:
+        state = _PROGRESS.get(str(company_id))
+        return dict(state) if state else None
 
 
 def _extract_json_object(text: str) -> str | None:
@@ -212,6 +275,9 @@ async def generate(db: AsyncSession, *, company: Company) -> dict:
     mission = await db.scalar(select(Mission).where(Mission.company_id == company.id))
     budget = await db.scalar(select(Budget).where(Budget.company_id == company.id))
     meter = CostMeter(SessionLocal)
+    set_progress(
+        company.id, phase="planning", pct=10, message="Reading your mission and budget"
+    )
 
     # ── LLM #1: mission → plan ────────────────────────────────────────────────
     plan_resp = await meter.run_llm(
@@ -227,6 +293,12 @@ async def generate(db: AsyncSession, *, company: Company) -> dict:
         json_schema=MISSION_TO_PLAN_SCHEMA,
     )
     plan = _parse_llm_json(plan_resp)
+    set_progress(
+        company.id,
+        phase="objectives",
+        pct=40,
+        message="Drafting objectives and key results",
+    )
 
     mission.generated_summary = plan.get("summary")
     mission.business_model_assumptions = plan.get("business_model_assumptions")
@@ -255,6 +327,9 @@ async def generate(db: AsyncSession, *, company: Company) -> dict:
             )
 
     # ── LLM #2: plan + budget → org design ────────────────────────────────────
+    set_progress(
+        company.id, phase="org", pct=55, message="Designing the agent fleet"
+    )
     org_input = json.dumps(
         {
             "objectives": plan.get("objectives", []),
@@ -274,6 +349,9 @@ async def generate(db: AsyncSession, *, company: Company) -> dict:
         json_schema=PLAN_TO_ORG_SCHEMA,
     )
     org = _parse_llm_json(org_resp)
+    set_progress(
+        company.id, phase="wiring", pct=80, message="Wiring the org chart"
+    )
 
     role_to_agent: dict[str, uuid.UUID] = {}
     for spec in _as_dicts(org.get("agents"), "role"):
@@ -318,6 +396,9 @@ async def generate(db: AsyncSession, *, company: Company) -> dict:
     # ── Investment review (best-effort; never breaks generation) ──────────────
     investor_reviews = 0
     if settings.investor_review_enabled:
+        set_progress(
+            company.id, phase="review", pct=90, message="Running the investor review"
+        )
         try:
             reviews = await investors.review(db, company=company)
             investor_reviews = len(reviews)
@@ -336,6 +417,185 @@ def _parse_autonomy(value: str | None) -> AutonomyLevel:
         return AutonomyLevel(value)
     except (ValueError, TypeError):
         return AutonomyLevel.approve_required
+
+
+async def _current_plan_snapshot(db: AsyncSession, company: Company) -> dict:
+    """Serialize the current objectives + agent fleet for the refine prompt."""
+    objectives = (
+        await db.scalars(
+            select(Objective)
+            .where(Objective.company_id == company.id)
+            .order_by(Objective.priority)
+        )
+    ).all()
+    obj_payload = []
+    for o in objectives:
+        krs = (
+            await db.scalars(select(KeyResult).where(KeyResult.objective_id == o.id))
+        ).all()
+        obj_payload.append(
+            {
+                "title": o.title,
+                "rationale": o.rationale,
+                "priority": o.priority,
+                "key_results": [
+                    {"metric": k.metric, "target_value": k.target_value, "unit": k.unit}
+                    for k in krs
+                ],
+            }
+        )
+    agents = (
+        await db.scalars(select(Agent).where(Agent.company_id == company.id))
+    ).all()
+    agent_payload = [
+        {
+            "role": a.role.value,
+            "name": a.name,
+            "responsibility": a.system_prompt,
+            "autonomy_level": a.autonomy_level.value,
+            "monthly_budget_cents": a.monthly_budget_cents,
+        }
+        for a in agents
+    ]
+    return {"company_name": company.name, "objectives": obj_payload, "agents": agent_payload}
+
+
+async def refine(db: AsyncSession, *, company: Company, message: str) -> dict:
+    """Conversationally edit a draft company's objectives / agent fleet.
+
+    Returns ``{"reply": str}``. The LLM emits a structured patch (validated
+    against an allow-list of fields) that *code* applies — objectives are
+    replaced wholesale, agents are upserted by role. Never deletes agents, so
+    the CEO and the org wiring stay intact.
+    """
+    if company.status is not CompanyStatus.draft:
+        return {"reply": "This company has already launched, so its plan is now live and can't be edited here."}
+
+    resolved = await apikeys.resolve_provider(db, company_id=company.id)
+    if resolved is None:
+        return {"reply": "Add a provider API key first, then I can refine the plan."}
+    provider, api_key = resolved
+    planner_model = provider.default_models["planner"]
+
+    snapshot = await _current_plan_snapshot(db, company)
+    meter = CostMeter(SessionLocal)
+    resp = await meter.run_llm(
+        provider,
+        api_key=api_key,
+        company_id=company.id,
+        agent_id=None,
+        task_id=None,
+        model=planner_model,
+        system=REFINE_SYSTEM,
+        messages=[
+            Message(
+                role="user",
+                content=(
+                    f"Current plan:\n{json.dumps(snapshot)}\n\n"
+                    f"Founder instruction: {message}"
+                ),
+            )
+        ],
+        max_tokens=provider.max_output_tokens(planner_model),
+        json_schema=REFINE_SCHEMA,
+    )
+    try:
+        patch = _parse_llm_json(resp)
+    except OnboardingError:
+        return {"reply": "I couldn't process that change — please rephrase and try again."}
+
+    mission = await db.scalar(select(Mission).where(Mission.company_id == company.id))
+
+    new_name = patch.get("company_name")
+    if isinstance(new_name, str) and new_name.strip():
+        company.name = new_name.strip()[:120]
+
+    new_objectives = _as_dicts(patch.get("objectives"), "title")
+    if new_objectives and mission is not None:
+        # Replace the objective tree wholesale (KRs cascade on delete).
+        existing = (
+            await db.scalars(select(Objective).where(Objective.company_id == company.id))
+        ).all()
+        for o in existing:
+            await db.delete(o)
+        await db.flush()
+        for i, obj in enumerate(new_objectives):
+            objective = Objective(
+                company_id=company.id,
+                mission_id=mission.id,
+                title=str(obj.get("title") or f"Objective {i+1}")[:500],
+                rationale=obj.get("rationale"),
+                priority=_as_int(obj.get("priority"), i + 1),
+            )
+            db.add(objective)
+            await db.flush()
+            for kr in _as_dicts(obj.get("key_results"), "metric"):
+                db.add(
+                    KeyResult(
+                        company_id=company.id,
+                        objective_id=objective.id,
+                        metric=str(kr.get("metric") or "metric")[:255],
+                        target_value=kr.get("target_value"),
+                        unit=kr.get("unit"),
+                    )
+                )
+
+    new_agents = _as_dicts(patch.get("agents"), "role")
+    if new_agents:
+        by_role = {
+            a.role.value: a
+            for a in (
+                await db.scalars(select(Agent).where(Agent.company_id == company.id))
+            ).all()
+        }
+        ceo = by_role.get(AgentRole.ceo.value)
+        for spec in new_agents:
+            try:
+                role = AgentRole(spec.get("role", "custom"))
+            except ValueError:
+                role = AgentRole.custom
+            agent = by_role.get(role.value)
+            if agent is None:
+                # Add a new functional agent, wired under the CEO.
+                agent = Agent(
+                    company_id=company.id,
+                    role=role,
+                    name=str(spec.get("name") or role.value.title())[:255],
+                    system_prompt=str(spec.get("responsibility") or ""),
+                    autonomy_level=_parse_autonomy(spec.get("autonomy_level")),
+                    monthly_budget_cents=_as_int(spec.get("monthly_budget_cents"), None),
+                    reports_to_agent_id=ceo.id if (ceo and role is not AgentRole.ceo) else None,
+                )
+                db.add(agent)
+                await db.flush()
+                by_role[role.value] = agent
+                if ceo and role is not AgentRole.ceo:
+                    db.add(
+                        AgentEdge(
+                            company_id=company.id,
+                            from_agent_id=agent.id,
+                            to_agent_id=ceo.id,
+                            relation=EdgeRelation.reports_to,
+                        )
+                    )
+            else:
+                if spec.get("name"):
+                    agent.name = str(spec["name"])[:255]
+                if spec.get("responsibility"):
+                    agent.system_prompt = str(spec["responsibility"])
+                if spec.get("autonomy_level"):
+                    agent.autonomy_level = _parse_autonomy(spec.get("autonomy_level"))
+                if "monthly_budget_cents" in spec:
+                    agent.monthly_budget_cents = _as_int(
+                        spec.get("monthly_budget_cents"), agent.monthly_budget_cents
+                    )
+        await db.flush()
+
+    reply = patch.get("reply")
+    return {
+        "reply": str(reply) if reply else "Done — I've updated the plan.",
+        "cost_estimate_cents": _as_int(patch.get("monthly_cost_estimate_cents"), None),
+    }
 
 
 async def launch(db: AsyncSession, *, company: Company) -> uuid.UUID | None:

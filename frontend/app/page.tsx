@@ -1,10 +1,11 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { api, fmtUsd, type Preview } from "@/lib/api";
+import { api, fmtUsd, type GenerationProgress, type Preview } from "@/lib/api";
 
-type Step = "auth" | "mission" | "key" | "review";
+type Step = "auth" | "mission" | "key" | "generating" | "review";
+interface ChatTurn { who: "user" | "bot"; text: string }
 
 export default function Home() {
   const router = useRouter();
@@ -19,6 +20,14 @@ export default function Home() {
   const [companyId, setCompanyId] = useState<string | null>(null);
   const [apiKey, setApiKey] = useState("");
   const [preview, setPreview] = useState<Preview | null>(null);
+
+  // Generation telemetry (task 1).
+  const [progress, setProgress] = useState<GenerationProgress | null>(null);
+
+  // Refinement chat (task 2).
+  const [chat, setChat] = useState<ChatTurn[]>([]);
+  const [chatInput, setChatInput] = useState("");
+  const [refining, setRefining] = useState(false);
 
   async function guard(fn: () => Promise<void>) {
     setErr(null); setBusy(true);
@@ -40,19 +49,56 @@ export default function Home() {
       setStep("key");
     });
 
+  // Kick off generation and poll for progress telemetry in parallel. The POST is
+  // a single long request; while it runs we poll the status endpoint so the
+  // founder sees a live spinner with real phases instead of a frozen button.
   const submitKeyAndGenerate = () =>
     guard(async () => {
       if (!companyId) return;
       await api.addApiKey(companyId, apiKey);
-      setPreview(await api.generate(companyId));
-      setStep("review");
+      setProgress({ phase: "queued", pct: 0, message: "Starting…", status: "running", error: null, events: [] });
+      setStep("generating");
+      const poll = setInterval(async () => {
+        try { setProgress(await api.generateStatus(companyId)); } catch { /* keep last */ }
+      }, 1000);
+      try {
+        const p = await api.generate(companyId);
+        setPreview(p);
+        setStep("review");
+      } catch (e) {
+        setStep("key"); // let them retry
+        throw e;
+      } finally {
+        clearInterval(poll);
+      }
     });
+
+  const sendRefine = async () => {
+    const q = chatInput.trim();
+    if (!q || refining || !companyId) return;
+    setChatInput("");
+    setChat((c) => [...c, { who: "user", text: q }]);
+    setRefining(true);
+    try {
+      const res = await api.refineOnboarding(companyId, q);
+      // Refinement doesn't recompute the cost estimate, so keep the prior one.
+      setPreview((prev) => ({
+        ...res.preview,
+        cost_estimate_cents: res.preview.cost_estimate_cents ?? prev?.cost_estimate_cents ?? null,
+      }));
+      setChat((c) => [...c, { who: "bot", text: res.reply }]);
+    } catch (e) {
+      setChat((c) => [...c, { who: "bot", text: String(e instanceof Error ? e.message : e) }]);
+    } finally {
+      setRefining(false);
+    }
+  };
 
   const launch = () =>
     guard(async () => {
       if (!companyId) return;
       await api.launch(companyId);
-      router.push(`/c/${companyId}`);
+      router.push(`/c/${companyId}?launched=1`);
     });
 
   return (
@@ -96,10 +142,12 @@ export default function Home() {
           <label>Anthropic API key</label>
           <input type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)} placeholder="sk-ant-..." />
           <button disabled={busy || !apiKey} onClick={submitKeyAndGenerate}>
-            {busy ? "Generating organization…" : "Generate organization"}
+            Generate organization
           </button>
         </div>
       )}
+
+      {step === "generating" && <GeneratingCard progress={progress} />}
 
       {step === "review" && preview && (
         <div>
@@ -128,6 +176,33 @@ export default function Home() {
               </div>
             ))}
           </div>
+
+          <div className="card">
+            <div className="step">Refine · Chat to change the plan</div>
+            <p className="muted">
+              Not quite right? Ask for changes — e.g. &ldquo;drop the finance agent&rdquo; or
+              &ldquo;add an objective about enterprise sales&rdquo;.
+            </p>
+            {chat.length > 0 && (
+              <div className="chat" style={{ marginBottom: 12 }}>
+                {chat.map((t, i) => (
+                  <div key={i} className={`msg ${t.who}`}>{t.text}</div>
+                ))}
+                {refining && <div className="msg bot muted">updating the plan…</div>}
+              </div>
+            )}
+            <div className="chatbar">
+              <input
+                placeholder="Ask for a change…"
+                value={chatInput}
+                onChange={(e) => setChatInput(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && sendRefine()}
+                disabled={refining}
+              />
+              <button onClick={sendRefine} disabled={refining || !chatInput.trim()}>Send</button>
+            </div>
+          </div>
+
           <div className="card">
             <div className="step">Step 4 · Approve launch</div>
             <p className="muted">The company will start operating autonomously under your budget and governance.</p>
@@ -137,6 +212,41 @@ export default function Home() {
       )}
 
       {err && <div className="err">{err}</div>}
+    </div>
+  );
+}
+
+function GeneratingCard({ progress }: { progress: GenerationProgress | null }) {
+  const logRef = useRef<HTMLDivElement>(null);
+  const pct = progress?.pct ?? 0;
+  const events = progress?.events ?? [];
+
+  useEffect(() => {
+    logRef.current?.scrollTo({ top: logRef.current.scrollHeight });
+  }, [events.length]);
+
+  return (
+    <div className="card">
+      <div className="step">Step 2 · Generating your organization</div>
+      <div style={{ display: "flex", alignItems: "center", gap: 12, margin: "14px 0 6px" }}>
+        <span className="spinner" />
+        <strong>{progress?.message ?? "Starting…"}</strong>
+      </div>
+      <div className="bar" style={{ marginTop: 8 }}><span style={{ width: `${pct}%` }} /></div>
+      <div className="kv" style={{ marginTop: 8 }}>
+        <span className="muted">This usually takes 20–40 seconds.</span>
+        <span className="muted">{pct}%</span>
+      </div>
+      {events.length > 0 && (
+        <div ref={logRef} className="genlog">
+          {events.map((e, i) => (
+            <div key={i} className="genlog-row">
+              <span className="genlog-dot" />
+              <span>{e.label}</span>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

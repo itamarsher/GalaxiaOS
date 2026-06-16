@@ -16,6 +16,7 @@ from app.schemas import (
     CompanyOut,
     MemoryOut,
     OrgChartOut,
+    TaskDetailOut,
     TaskOut,
 )
 
@@ -25,6 +26,20 @@ router = APIRouter(prefix="/companies/{company_id}", tags=["companies"])
 @router.get("", response_model=CompanyOut)
 async def get_company(company: CompanyDep):
     return company
+
+
+@router.delete("", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_company(company: CompanyDep, db: DbDep):
+    """Permanently delete a company and everything under it.
+
+    This is the founder's hard stop: removing the company row cascades (via the
+    ``company_id`` ON DELETE CASCADE on every tenant table) to its agents, runs,
+    tasks, budget, governance, memory and digests, so no further scheduled or
+    in-flight work can run for it.
+    """
+    await db.delete(company)
+    await db.commit()
+    return None
 
 
 @router.get("/org", response_model=OrgChartOut)
@@ -58,6 +73,29 @@ async def list_tasks(company: CompanyDep, db: DbDep, status: TaskStatus | None =
     if status is not None:
         stmt = stmt.where(Task.status == status)
     return (await db.scalars(stmt.limit(200))).all()
+
+
+@router.get("/tasks/{task_id}", response_model=TaskDetailOut)
+async def get_task(company: CompanyDep, task_id: uuid.UUID, db: DbDep):
+    """A single task with its executing agent and any dispatched sub-tasks."""
+    task = await db.scalar(
+        select(Task).where(Task.company_id == company.id, Task.id == task_id)
+    )
+    if task is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Task not found")
+    agent = await db.get(Agent, task.agent_id)
+    children = (
+        await db.scalars(
+            select(Task)
+            .where(Task.parent_task_id == task.id)
+            .order_by(Task.created_at.asc())
+        )
+    ).all()
+    detail = TaskDetailOut.model_validate(task)
+    detail.agent_name = agent.name if agent else None
+    detail.agent_role = agent.role.value if agent else None
+    detail.children = [TaskOut.model_validate(c) for c in children]
+    return detail
 
 
 @router.get("/memory", response_model=list[MemoryOut])
