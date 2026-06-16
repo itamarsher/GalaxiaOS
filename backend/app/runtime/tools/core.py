@@ -312,7 +312,14 @@ async def _request_decision(db, ctx, *, agent: Agent, task: Task, args: dict) ->
             status=DecisionStatus.pending,
         )
     )
-    task.status = TaskStatus.waiting_approval
+    # ``task`` is detached from this session (it was loaded in the worker's
+    # session, which has since closed), so mutating it directly would never be
+    # persisted — leaving the task stuck in ``running`` even though it's parked.
+    # Re-fetch the live row so the ``waiting_approval`` status actually commits.
+    row = await db.get(Task, task.id)
+    if row is not None:
+        row.status = TaskStatus.waiting_approval
+    task.status = TaskStatus.waiting_approval  # keep the in-memory copy consistent
     await db.flush()
     return ToolOutcome(observation="escalated to founder", park=True)
 
