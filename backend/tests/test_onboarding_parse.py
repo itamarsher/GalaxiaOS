@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from app.providers.base import LLMResponse
-from app.services.onboarding import OnboardingError, _parse_llm_json
+from app.services.onboarding import OnboardingError, _as_dicts, _as_int, _parse_llm_json
 
 
 def _resp(text: str, stop_reason: str = "end_turn") -> LLMResponse:
@@ -55,3 +55,24 @@ def test_malformed_json_raises_onboarding_error():
 def test_no_json_raises_onboarding_error():
     with pytest.raises(OnboardingError):
         _parse_llm_json(_resp("sorry, I cannot help with that"))
+
+
+def test_as_dicts_coerces_bare_strings():
+    # JSON mode can return agents/objectives as a list of strings — coerce to
+    # dicts keyed by the primary field so persistence never crashes.
+    assert _as_dicts(["ceo", "growth"], "role") == [{"role": "ceo"}, {"role": "growth"}]
+    assert _as_dicts([{"role": "ceo"}], "role") == [{"role": "ceo"}]
+    # mixed + junk: keep dicts and strings, drop everything else
+    assert _as_dicts([{"a": 1}, "x", 5, None], "role") == [{"a": 1}, {"role": "x"}]
+    # non-list inputs degrade to empty
+    assert _as_dicts(None, "role") == []
+    assert _as_dicts("ceo", "role") == []
+
+
+def test_as_int_coerces_or_falls_back():
+    assert _as_int(5, 0) == 5
+    assert _as_int("12345", None) == 12345
+    assert _as_int("50.0", None) == 50
+    assert _as_int(None, 7) == 7
+    assert _as_int("not a number", None) is None
+    assert _as_int(True, 3) == 3  # bools are not valid cents
