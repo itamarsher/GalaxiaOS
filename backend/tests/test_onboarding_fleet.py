@@ -29,12 +29,17 @@ def test_fleet_specs_guarantees_ceo_and_governance():
     assert "governance" in roles
 
 
-def test_split_budget_sums_to_total_and_is_even():
-    parts = onboarding._split_budget(50_000, 6)
-    assert sum(parts) == 50_000
-    assert max(parts) - min(parts) <= 1
-    assert onboarding._split_budget(0, 3) == [None, None, None]
-    assert onboarding._split_budget(100, 0) == []
+def test_weighted_split_sums_to_total_and_weights_ceo_lower():
+    # ceo, growth, research, governance weights: 1, 3, 2, 1
+    weights = [1.0, 3.0, 2.0, 1.0]
+    parts = onboarding._weighted_split(weights, 70_000)
+    assert sum(parts) == 70_000  # no cents lost to rounding
+    # Growth (weight 3) gets the most; CEO/Governance (weight 1) the least.
+    assert parts[1] == max(parts)
+    assert parts[0] < parts[1]
+    assert parts[0] <= parts[2]
+    assert onboarding._weighted_split([1.0, 1.0, 1.0], 0) == [None, None, None]
+    assert onboarding._weighted_split([], 100) == []
 
 
 @requires_db
@@ -54,7 +59,12 @@ async def test_reallocate_agent_budgets(session_factory, company_with_budget):
 
     async with session_factory() as db:
         agents = (await db.scalars(select(Agent).where(Agent.company_id == company_id))).all()
-        allocated = [a.monthly_budget_cents for a in agents]
+        by_role = {a.role: a.monthly_budget_cents for a in agents}
         assert len(agents) == 4
-        assert all(c is not None for c in allocated)
-        assert sum(allocated) == 10_000  # the whole budget is distributed
+        assert all(c is not None for c in by_role.values())
+        assert sum(by_role.values()) == 10_000  # the whole budget is distributed
+        # Weighted: growth (3) > finance (1.5) > ceo ~= governance (both 1;
+        # may differ by a single leftover cent from largest-remainder rounding).
+        assert by_role[AgentRole.growth] > by_role[AgentRole.finance]
+        assert by_role[AgentRole.finance] > by_role[AgentRole.ceo]
+        assert abs(by_role[AgentRole.ceo] - by_role[AgentRole.governance]) <= 1

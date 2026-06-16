@@ -291,20 +291,50 @@ def _fleet_specs(parsed: list[dict]) -> list[dict]:
     return specs
 
 
-def _split_budget(total_cents: int | None, n: int) -> list[int | None]:
-    """Split a total budget into ``n`` near-equal integer parts (remainder first)."""
-    if n <= 0:
+# Relative share of the monthly budget by role. Coordination/oversight roles
+# (CEO, Governance) carry a smaller operational share than the functional agents
+# that actually spend on the world (Growth runs the most spend-heavy work:
+# acquisition, outreach, ads). Tunable — only the ratios matter.
+_DEFAULT_BUDGET_WEIGHT = 2.0
+_ROLE_BUDGET_WEIGHTS: dict[AgentRole, float] = {
+    AgentRole.ceo: 1.0,
+    AgentRole.governance: 1.0,
+    AgentRole.finance: 1.5,
+    AgentRole.research: 2.0,
+    AgentRole.product: 2.0,
+    AgentRole.growth: 3.0,
+    AgentRole.custom: 2.0,
+}
+
+
+def _weighted_split(weights: list[float], total_cents: int | None) -> list[int | None]:
+    """Split ``total_cents`` across items proportional to ``weights``.
+
+    Uses the largest-remainder method so the integer parts sum to exactly
+    ``total_cents`` (no cents lost to rounding).
+    """
+    n = len(weights)
+    if n == 0:
         return []
     if not total_cents or total_cents <= 0:
         return [None] * n
-    base, rem = divmod(int(total_cents), n)
-    return [base + (1 if i < rem else 0) for i in range(n)]
+    wsum = sum(weights)
+    if wsum <= 0:  # degenerate — fall back to an even split
+        weights = [1.0] * n
+        wsum = float(n)
+    raw = [total_cents * w / wsum for w in weights]
+    parts = [int(x) for x in raw]
+    remainder = int(total_cents) - sum(parts)
+    # Hand the leftover cents to the largest fractional remainders, biggest first.
+    for i in sorted(range(n), key=lambda i: raw[i] - parts[i], reverse=True)[:remainder]:
+        parts[i] += 1
+    return parts
 
 
 async def _reallocate_agent_budgets(
     db: AsyncSession, *, company_id: uuid.UUID, total_cents: int | None
 ) -> None:
-    """Re-split the company's monthly budget evenly across its current agents."""
+    """Re-split the company's monthly budget across agents, weighted by role."""
     agents = (
         await db.scalars(
             select(Agent)
@@ -312,7 +342,8 @@ async def _reallocate_agent_budgets(
             .order_by(Agent.created_at.asc(), Agent.id.asc())
         )
     ).all()
-    for agent, cents in zip(agents, _split_budget(total_cents, len(agents)), strict=True):
+    weights = [_ROLE_BUDGET_WEIGHTS.get(a.role, _DEFAULT_BUDGET_WEIGHT) for a in agents]
+    for agent, cents in zip(agents, _weighted_split(weights, total_cents), strict=True):
         agent.monthly_budget_cents = cents
     await db.flush()
 
