@@ -126,6 +126,7 @@ PLAN_TO_ORG_SCHEMA: dict = {
     "properties": {
         "agents": {
             "type": "array",
+            "minItems": 2,
             "items": {
                 "type": "object",
                 "properties": {
@@ -135,6 +136,7 @@ PLAN_TO_ORG_SCHEMA: dict = {
                     "autonomy_level": {"type": "string"},
                     "monthly_budget_cents": {"type": "integer"},
                 },
+                "required": ["role", "name"],
             },
         },
         "edges": {
@@ -150,6 +152,9 @@ PLAN_TO_ORG_SCHEMA: dict = {
         },
         "monthly_cost_estimate_cents": {"type": "integer"},
     },
+    # Force the model to actually populate the fleet — an empty/missing agents
+    # list is the difference between a working org and a blank one.
+    "required": ["agents"],
 }
 
 
@@ -158,27 +163,32 @@ PLAN_TO_ORG_SCHEMA: dict = {
 # objectives and agent fleet. The model returns a structured patch that code
 # applies — never free-form mutations.
 REFINE_SYSTEM = """You help a founder refine their not-yet-launched AI company during onboarding.
-You are given the current plan (objectives and agent fleet) and the founder's instruction.
-Apply the instruction and respond ONLY with minified JSON:
+You are given the current plan (objectives, agent fleet, and monthly budget) and the founder's
+instruction. Apply the instruction and respond ONLY with minified JSON:
 {
   "reply": "a short, friendly one-or-two-sentence summary of exactly what you changed",
   "company_name": "optional: a new one-line company summary if the instruction changes it",
+  "monthly_budget_cents": 50000,
   "objectives": [
     {"title": "...", "rationale": "...", "priority": 1,
      "key_results": [{"metric": "...", "target_value": 1000, "unit": "USD"}]}
   ],
   "agents": [
     {"role": "ceo|growth|research|product|finance|governance", "name": "...",
-     "responsibility": "...", "autonomy_level": "suggest|approve_required|autonomous",
-     "monthly_budget_cents": 12345}
-  ]
+     "responsibility": "...", "autonomy_level": "suggest|approve_required|autonomous"}
+  ],
+  "remove_roles": ["finance"]
 }
 Rules:
 - Always include "reply".
+- Include "monthly_budget_cents" ONLY if the instruction changes the company's total monthly
+  budget (in USD cents). Do NOT set per-agent budgets — the platform splits the total across the
+  fleet automatically.
 - Include "objectives" ONLY if the instruction changes objectives or key results; if so return
   the COMPLETE new list (3-5 objectives), not a diff.
-- Include "agents" ONLY if the instruction changes the fleet; include just the agents to add or
-  modify (each matched to an existing agent by its role). Keep exactly one ceo.
+- Include "agents" ONLY to add or modify agents (each matched to an existing agent by its role).
+  Keep exactly one ceo; never remove the ceo.
+- Include "remove_roles" ONLY to remove agents, listing their roles.
 - If the instruction is just a question or cannot be applied, return only "reply" and omit the
   other keys.
 - Keep everything consistent with the founder's mission and budget."""
@@ -188,7 +198,10 @@ REFINE_SCHEMA: dict = {
     "properties": {
         "reply": {"type": "string"},
         "company_name": {"type": "string"},
+        "monthly_budget_cents": {"type": "integer"},
         "objectives": MISSION_TO_PLAN_SCHEMA["properties"]["objectives"],
         "agents": PLAN_TO_ORG_SCHEMA["properties"]["agents"],
+        "remove_roles": {"type": "array", "items": {"type": "string"}},
     },
+    "required": ["reply"],
 }

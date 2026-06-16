@@ -230,6 +230,93 @@ def _as_int(value: object, default: int | None) -> int | None:
         return default
 
 
+# A sensible default fleet, used to backfill whatever the org-design LLM omits so
+# the company is never left without a working org (it must at least have a CEO to
+# plan/dispatch and a Governance agent to oversee).
+_DEFAULT_FLEET: list[dict] = [
+    {
+        "role": "ceo",
+        "name": "CEO",
+        "responsibility": "Own strategy: decompose the mission into initiatives and dispatch them to the team.",
+        "autonomy_level": "approve_required",
+    },
+    {
+        "role": "growth",
+        "name": "Growth Lead",
+        "responsibility": "Own customer acquisition and demand generation.",
+        "autonomy_level": "approve_required",
+    },
+    {
+        "role": "research",
+        "name": "Research Lead",
+        "responsibility": "Own market and competitive intelligence.",
+        "autonomy_level": "approve_required",
+    },
+    {
+        "role": "product",
+        "name": "Product Lead",
+        "responsibility": "Own product planning and roadmap.",
+        "autonomy_level": "approve_required",
+    },
+    {
+        "role": "finance",
+        "name": "Finance Lead",
+        "responsibility": "Own budget monitoring and unit economics.",
+        "autonomy_level": "approve_required",
+    },
+    {
+        "role": "governance",
+        "name": "Governance Lead",
+        "responsibility": "Own safety, compliance, and oversight.",
+        "autonomy_level": "approve_required",
+    },
+]
+
+
+def _fleet_specs(parsed: list[dict]) -> list[dict]:
+    """Return the agent specs to build, backfilling a usable fleet.
+
+    The org-design LLM can return an empty or partial ``agents`` list (the JSON
+    schema permits it). Rather than ship an empty org, fall back to the default
+    fleet when nothing usable came back, and always guarantee a CEO + Governance.
+    """
+    specs = [s for s in parsed if s.get("role")]
+    if not specs:
+        return [dict(s) for s in _DEFAULT_FLEET]
+    roles = {str(s.get("role")) for s in specs}
+    if "ceo" not in roles:
+        specs.insert(0, dict(_DEFAULT_FLEET[0]))
+    if "governance" not in roles:
+        specs.append(dict(_DEFAULT_FLEET[-1]))
+    return specs
+
+
+def _split_budget(total_cents: int | None, n: int) -> list[int | None]:
+    """Split a total budget into ``n`` near-equal integer parts (remainder first)."""
+    if n <= 0:
+        return []
+    if not total_cents or total_cents <= 0:
+        return [None] * n
+    base, rem = divmod(int(total_cents), n)
+    return [base + (1 if i < rem else 0) for i in range(n)]
+
+
+async def _reallocate_agent_budgets(
+    db: AsyncSession, *, company_id: uuid.UUID, total_cents: int | None
+) -> None:
+    """Re-split the company's monthly budget evenly across its current agents."""
+    agents = (
+        await db.scalars(
+            select(Agent)
+            .where(Agent.company_id == company_id)
+            .order_by(Agent.created_at.asc(), Agent.id.asc())
+        )
+    ).all()
+    for agent, cents in zip(agents, _split_budget(total_cents, len(agents)), strict=True):
+        agent.monthly_budget_cents = cents
+    await db.flush()
+
+
 async def start(
     db: AsyncSession,
     *,
@@ -354,7 +441,7 @@ async def generate(db: AsyncSession, *, company: Company) -> dict:
     )
 
     role_to_agent: dict[str, uuid.UUID] = {}
-    for spec in _as_dicts(org.get("agents"), "role"):
+    for spec in _fleet_specs(_as_dicts(org.get("agents"), "role")):
         try:
             role = AgentRole(spec.get("role", "custom"))
         except ValueError:
@@ -365,7 +452,6 @@ async def generate(db: AsyncSession, *, company: Company) -> dict:
             name=str(spec.get("name") or role.value.title())[:255],
             system_prompt=str(spec.get("responsibility") or ""),
             autonomy_level=_parse_autonomy(spec.get("autonomy_level")),
-            monthly_budget_cents=_as_int(spec.get("monthly_budget_cents"), None),
         )
         db.add(agent)
         await db.flush()
@@ -392,6 +478,9 @@ async def generate(db: AsyncSession, *, company: Company) -> dict:
             )
 
     await db.flush()
+    # Split the monthly budget across the fleet (ignore any per-agent figures the
+    # LLM guessed — the platform owns the allocation so it always sums correctly).
+    await _reallocate_agent_budgets(db, company_id=company.id, total_cents=budget.limit_cents)
 
     # ── Investment review (best-effort; never breaks generation) ──────────────
     investor_reviews = 0
@@ -465,8 +554,9 @@ async def refine(db: AsyncSession, *, company: Company, message: str) -> dict:
 
     Returns ``{"reply": str}``. The LLM emits a structured patch (validated
     against an allow-list of fields) that *code* applies — objectives are
-    replaced wholesale, agents are upserted by role. Never deletes agents, so
-    the CEO and the org wiring stay intact.
+    replaced wholesale; agents are upserted by role and may be removed (never the
+    CEO). The company budget can be changed too, and any change to the budget or
+    the fleet size re-splits the budget evenly across the agents.
     """
     if company.status is not CompanyStatus.draft:
         return {"reply": "This company has already launched, so its plan is now live and can't be edited here."}
@@ -505,10 +595,18 @@ async def refine(db: AsyncSession, *, company: Company, message: str) -> dict:
         return {"reply": "I couldn't process that change — please rephrase and try again."}
 
     mission = await db.scalar(select(Mission).where(Mission.company_id == company.id))
+    budget = await db.scalar(select(Budget).where(Budget.company_id == company.id))
+    budget_changed = False
+    fleet_changed = False
 
     new_name = patch.get("company_name")
     if isinstance(new_name, str) and new_name.strip():
         company.name = new_name.strip()[:120]
+
+    new_budget = _as_int(patch.get("monthly_budget_cents"), None)
+    if new_budget and new_budget > 0 and budget is not None and budget.limit_cents != new_budget:
+        budget.limit_cents = new_budget
+        budget_changed = True
 
     new_objectives = _as_dicts(patch.get("objectives"), "title")
     if new_objectives and mission is not None:
@@ -540,14 +638,27 @@ async def refine(db: AsyncSession, *, company: Company, message: str) -> dict:
                     )
                 )
 
+    by_role = {
+        a.role.value: a
+        for a in (
+            await db.scalars(select(Agent).where(Agent.company_id == company.id))
+        ).all()
+    }
+
+    # Remove agents the founder asked to drop (never the CEO).
+    for role_name in patch.get("remove_roles") or []:
+        if not isinstance(role_name, str):
+            continue
+        agent = by_role.get(role_name)
+        if agent is not None and agent.role is not AgentRole.ceo:
+            await db.delete(agent)
+            by_role.pop(role_name, None)
+            fleet_changed = True
+    if fleet_changed:
+        await db.flush()
+
     new_agents = _as_dicts(patch.get("agents"), "role")
     if new_agents:
-        by_role = {
-            a.role.value: a
-            for a in (
-                await db.scalars(select(Agent).where(Agent.company_id == company.id))
-            ).all()
-        }
         ceo = by_role.get(AgentRole.ceo.value)
         for spec in new_agents:
             try:
@@ -556,19 +667,20 @@ async def refine(db: AsyncSession, *, company: Company, message: str) -> dict:
                 role = AgentRole.custom
             agent = by_role.get(role.value)
             if agent is None:
-                # Add a new functional agent, wired under the CEO.
+                # Add a new functional agent, wired under the CEO. Per-agent
+                # budget is set by the reallocation step below, not here.
                 agent = Agent(
                     company_id=company.id,
                     role=role,
                     name=str(spec.get("name") or role.value.title())[:255],
                     system_prompt=str(spec.get("responsibility") or ""),
                     autonomy_level=_parse_autonomy(spec.get("autonomy_level")),
-                    monthly_budget_cents=_as_int(spec.get("monthly_budget_cents"), None),
                     reports_to_agent_id=ceo.id if (ceo and role is not AgentRole.ceo) else None,
                 )
                 db.add(agent)
                 await db.flush()
                 by_role[role.value] = agent
+                fleet_changed = True
                 if ceo and role is not AgentRole.ceo:
                     db.add(
                         AgentEdge(
@@ -585,11 +697,14 @@ async def refine(db: AsyncSession, *, company: Company, message: str) -> dict:
                     agent.system_prompt = str(spec["responsibility"])
                 if spec.get("autonomy_level"):
                     agent.autonomy_level = _parse_autonomy(spec.get("autonomy_level"))
-                if "monthly_budget_cents" in spec:
-                    agent.monthly_budget_cents = _as_int(
-                        spec.get("monthly_budget_cents"), agent.monthly_budget_cents
-                    )
         await db.flush()
+
+    # Reallocate the monthly budget across the fleet whenever the budget or the
+    # number of agents changed (the two things that should move the split).
+    if budget_changed or fleet_changed:
+        await _reallocate_agent_budgets(
+            db, company_id=company.id, total_cents=budget.limit_cents if budget else None
+        )
 
     reply = patch.get("reply")
     return {
