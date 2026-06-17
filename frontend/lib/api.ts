@@ -93,6 +93,10 @@ export const api = {
   signup: (email: string, password: string) =>
     req<TokenResponse>("/auth/signup", { method: "POST", body: JSON.stringify({ email, password }) }),
 
+  // TEMP dev tool — remove before launch (see backend app/api/dev.py).
+  deleteAllAccounts: () =>
+    req<{ deleted_accounts: number }>("/dev/delete-all-accounts", { method: "POST" }),
+
   login: async (email: string, password: string) => {
     const form = new URLSearchParams({ username: email, password });
     const res = await fetch(`${BASE}/auth/login`, {
