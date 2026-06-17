@@ -231,8 +231,11 @@ PLAN_TO_ORG_SCHEMA: dict = {
 # objectives and agent fleet. The model returns a structured patch that code
 # applies — never free-form mutations.
 REFINE_SYSTEM = """You help a founder refine their not-yet-launched AI company during onboarding.
-You are given the current plan (objectives, agent fleet, and monthly budget) and the founder's
-instruction. Apply the instruction and respond ONLY with minified JSON:
+You are given the current plan (objectives, agent fleet, and monthly budget) and, when a review
+has been run, the investor reviews of that plan (each investor's stance, conviction, thesis,
+strengths, risks, and conditions). The founder may ask about the investor reviews — use them to
+answer and to inform the changes you suggest. Apply the founder's instruction and respond ONLY
+with minified JSON:
 {
   "reply": "a short, friendly one-or-two-sentence summary of exactly what you changed",
   "company_name": "optional: a new one-line company summary if the instruction changes it",

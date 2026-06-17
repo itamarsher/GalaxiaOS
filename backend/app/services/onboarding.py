@@ -21,6 +21,7 @@ from app.models import (
     AgentEdge,
     Budget,
     Company,
+    InvestmentReview,
     KeyResult,
     Membership,
     Mission,
@@ -625,6 +626,34 @@ async def _current_plan_snapshot(db: AsyncSession, company: Company) -> dict:
     return {"company_name": company.name, "objectives": obj_payload, "agents": agent_payload}
 
 
+async def _investor_reviews_context(db: AsyncSession, company: Company) -> str:
+    """The investor verdicts as compact JSON, so the founder can discuss them with
+    the AI while refining the plan. Empty string when no review has been run."""
+    reviews = (
+        await db.scalars(
+            select(InvestmentReview)
+            .where(InvestmentReview.company_id == company.id)
+            .order_by(InvestmentReview.created_at)
+        )
+    ).all()
+    if not reviews:
+        return ""
+    payload = [
+        {
+            "persona": r.persona.value,
+            "stance": r.stance.value,
+            "conviction": r.conviction,
+            "headline": r.headline,
+            "thesis": r.thesis,
+            "strengths": r.strengths,
+            "risks": r.risks,
+            "conditions": r.conditions,
+        }
+        for r in reviews
+    ]
+    return json.dumps(payload)
+
+
 async def refine(db: AsyncSession, *, company: Company, message: str) -> dict:
     """Conversationally edit a draft company's objectives / agent fleet.
 
@@ -644,6 +673,7 @@ async def refine(db: AsyncSession, *, company: Company, message: str) -> dict:
     planner_model = provider.default_models["planner"]
 
     snapshot = await _current_plan_snapshot(db, company)
+    reviews_ctx = await _investor_reviews_context(db, company)
     meter = CostMeter(SessionLocal)
     resp = await meter.run_llm(
         provider,
@@ -658,7 +688,12 @@ async def refine(db: AsyncSession, *, company: Company, message: str) -> dict:
                 role="user",
                 content=(
                     f"Current plan:\n{json.dumps(snapshot)}\n\n"
-                    f"Founder instruction: {message}"
+                    + (
+                        f"Investor reviews of this plan:\n{reviews_ctx}\n\n"
+                        if reviews_ctx
+                        else ""
+                    )
+                    + f"Founder instruction: {message}"
                 ),
             )
         ],
