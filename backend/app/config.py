@@ -132,7 +132,7 @@ class Settings(BaseSettings):
     # across the starting fleet and leaves the rest as an unallocated pool the CEO
     # can deploy later (with the founder's approval) by hiring agents. Keeps the
     # team from committing the entire budget up front.
-    launch_budget_reserve_fraction: float = 0.3
+    launch_budget_reserve_fraction: float = 0.7
 
     # Restart safety: the durable business state lives in Postgres, but the work
     # queue is arq-on-Redis and ephemeral on this deployment. On worker startup,
