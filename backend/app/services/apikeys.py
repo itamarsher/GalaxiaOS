@@ -77,6 +77,28 @@ async def list_keys(db: AsyncSession, *, company_id: uuid.UUID) -> list[ApiKey]:
     return list(rows)
 
 
+async def revoke_key(
+    db: AsyncSession, *, company_id: uuid.UUID, key_id: uuid.UUID
+) -> bool:
+    """Revoke a single active key (so the founder can remove/rotate it). Tenant-scoped.
+
+    Returns ``False`` if there's no active key with that id for the company (already
+    revoked or never existed), so the delete endpoint can 404 rather than no-op.
+    """
+    row = await db.scalar(
+        select(ApiKey).where(
+            ApiKey.id == key_id,
+            ApiKey.company_id == company_id,
+            ApiKey.status == ApiKeyStatus.active,
+        )
+    )
+    if row is None:
+        return False
+    row.status = ApiKeyStatus.revoked
+    await db.flush()
+    return True
+
+
 async def get_active_key(db: AsyncSession, *, company_id: uuid.UUID) -> ApiKey | None:
     """The company's active key for a *supported* provider (most recent first)."""
     rows = await db.scalars(

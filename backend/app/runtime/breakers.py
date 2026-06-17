@@ -104,4 +104,5 @@ async def trip_spend_breaker(db: AsyncSession, company_id: uuid.UUID, reason: st
 async def block_task(db: AsyncSession, task: Task, reason: str) -> None:
     task.status = TaskStatus.blocked
     task.output = {"blocked_reason": reason}
+    task.transcript = None  # terminal: drop any working-memory checkpoint
     await db.flush()

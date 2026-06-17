@@ -1,14 +1,15 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { api, fmtUsd, type Preview } from "@/lib/api";
+import { api, fmtUsd, type Company, type GenerationProgress, type Preview } from "@/lib/api";
 
-type Step = "auth" | "mission" | "key" | "review";
+type Step = "loading" | "auth" | "businesses" | "mission" | "key" | "generating" | "review";
+interface ChatTurn { who: "user" | "bot"; text: string }
 
 export default function Home() {
   const router = useRouter();
-  const [step, setStep] = useState<Step>("auth");
+  const [step, setStep] = useState<Step>("loading");
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -18,7 +19,20 @@ export default function Home() {
   const [budget, setBudget] = useState("500");
   const [companyId, setCompanyId] = useState<string | null>(null);
   const [apiKey, setApiKey] = useState("");
+  const [githubKey, setGithubKey] = useState("");
+  const [tavilyKey, setTavilyKey] = useState("");
   const [preview, setPreview] = useState<Preview | null>(null);
+
+  // Multi-business: a user can run several companies, listed after auth.
+  const [businesses, setBusinesses] = useState<Company[]>([]);
+
+  // Generation telemetry.
+  const [progress, setProgress] = useState<GenerationProgress | null>(null);
+
+  // Refinement chat.
+  const [chat, setChat] = useState<ChatTurn[]>([]);
+  const [chatInput, setChatInput] = useState("");
+  const [refining, setRefining] = useState(false);
 
   async function guard(fn: () => Promise<void>) {
     setErr(null); setBusy(true);
@@ -26,12 +40,54 @@ export default function Home() {
     finally { setBusy(false); }
   }
 
+  // After authentication, route to the right place: a fresh account starts
+  // onboarding; an account with businesses lands on its list. When we got here
+  // via the dev auto-login and a business already exists, jump straight to its
+  // dashboard (fast iteration — no clicks).
+  async function afterAuth(autoLoggedIn: boolean) {
+    const list = await api.myCompanies();
+    setBusinesses(list);
+    if (autoLoggedIn && list.length > 0) {
+      router.push(`/c/${list[0].id}`);
+      return;
+    }
+    setStep(list.length > 0 ? "businesses" : "mission");
+  }
+
+  // Bootstrap: use an existing session; else try the dev default account
+  // (auto-login); else fall back to the normal auth screen.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        if (api.hasToken()) { await afterAuth(false); return; }
+        const status = await api.devStatus().catch(() => ({ enabled: false }));
+        if (!cancelled && status.enabled) {
+          const res = await api.defaultLogin();
+          api.setToken(res.access_token);
+          await afterAuth(true);
+          return;
+        }
+      } catch { /* fall through to auth */ }
+      if (!cancelled) setStep("auth");
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const doAuth = (signup: boolean) =>
     guard(async () => {
       const res = signup ? await api.signup(email, password) : await api.login(email, password);
       api.setToken(res.access_token);
-      setStep("mission");
+      await afterAuth(false);
     });
+
+  const newBusiness = () => {
+    // Reset the onboarding wizard so creating an Nth business starts clean.
+    setCompanyId(null); setApiKey(""); setGithubKey(""); setTavilyKey(""); setPreview(null);
+    setChat([]); setProgress(null); setMission(""); setBudget("500"); setErr(null);
+    setStep("mission");
+  };
 
   const startOnboarding = () =>
     guard(async () => {
@@ -40,25 +96,71 @@ export default function Home() {
       setStep("key");
     });
 
+  // Kick off generation and poll for progress telemetry in parallel.
   const submitKeyAndGenerate = () =>
     guard(async () => {
       if (!companyId) return;
       await api.addApiKey(companyId, apiKey);
-      setPreview(await api.generate(companyId));
-      setStep("review");
+      // Optional: a GitHub token lets the platform agent file real issues.
+      if (githubKey.trim()) await api.addApiKey(companyId, githubKey.trim(), "github");
+      // Optional: a Tavily key enables real web search (else it's simulated).
+      if (tavilyKey.trim()) await api.addApiKey(companyId, tavilyKey.trim(), "tavily");
+      setProgress({ phase: "queued", pct: 0, message: "Starting…", status: "running", error: null, events: [] });
+      setStep("generating");
+      const poll = setInterval(async () => {
+        try { setProgress(await api.generateStatus(companyId)); } catch { /* keep last */ }
+      }, 1000);
+      try {
+        const p = await api.generate(companyId);
+        setPreview(p);
+        setStep("review");
+      } catch (e) {
+        setStep("key"); // let them retry
+        throw e;
+      } finally {
+        clearInterval(poll);
+      }
     });
+
+  const sendRefine = async () => {
+    const q = chatInput.trim();
+    if (!q || refining || !companyId) return;
+    setChatInput("");
+    setChat((c) => [...c, { who: "user", text: q }]);
+    setRefining(true);
+    try {
+      const res = await api.refineOnboarding(companyId, q);
+      setPreview((prev) => ({
+        ...res.preview,
+        cost_estimate_cents: res.preview.cost_estimate_cents ?? prev?.cost_estimate_cents ?? null,
+      }));
+      setChat((c) => [...c, { who: "bot", text: res.reply }]);
+    } catch (e) {
+      setChat((c) => [...c, { who: "bot", text: String(e instanceof Error ? e.message : e) }]);
+    } finally {
+      setRefining(false);
+    }
+  };
 
   const launch = () =>
     guard(async () => {
       if (!companyId) return;
       await api.launch(companyId);
-      router.push(`/c/${companyId}`);
+      router.push(`/c/${companyId}?launched=1`);
     });
 
   return (
     <div className="wrap">
       <h1>ABOS</h1>
       <p className="sub">What&apos;s your mission? What&apos;s your budget? Launch.</p>
+
+      {step === "loading" && (
+        <div className="card">
+          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+            <span className="spinner" /> <span className="muted">Loading…</span>
+          </div>
+        </div>
+      )}
 
       {step === "auth" && (
         <div className="card">
@@ -74,9 +176,36 @@ export default function Home() {
         </div>
       )}
 
+      {step === "businesses" && (
+        <div className="card">
+          <div className="step" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <span>Your businesses</span>
+            <button style={{ marginTop: 0, padding: "6px 12px", fontSize: 13 }} onClick={newBusiness}>+ New business</button>
+          </div>
+          <p className="muted" style={{ fontSize: 13 }}>Run as many companies as you like from one account.</p>
+          {businesses.map((b) => (
+            <button
+              key={b.id}
+              className="ghost"
+              style={{ display: "flex", justifyContent: "space-between", width: "100%", marginTop: 8 }}
+              onClick={() => router.push(`/c/${b.id}`)}
+            >
+              <span>{b.name}</span>
+              <span className={`status ${b.status}`}>{b.status}</span>
+            </button>
+          ))}
+        </div>
+      )}
+
       {step === "mission" && (
         <div className="card">
-          <div className="step">Step 1 · Mission &amp; Budget</div>
+          <div className="step" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <span>Step 1 · Mission &amp; Budget</span>
+            {businesses.length > 0 && (
+              <button className="ghost" style={{ marginTop: 0, padding: "6px 12px", fontSize: 12 }}
+                onClick={() => setStep("businesses")}>← Your businesses</button>
+            )}
+          </div>
           <label>Mission</label>
           <textarea
             value={mission}
@@ -95,11 +224,21 @@ export default function Home() {
           <p className="muted">Your Claude API key is encrypted at rest. Only a fingerprint is ever shown.</p>
           <label>Anthropic API key</label>
           <input type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)} placeholder="sk-ant-..." />
+          <label>GitHub token <span className="muted">(optional)</span></label>
+          <input type="password" value={githubKey} onChange={(e) => setGithubKey(e.target.value)} placeholder="ghp_… — lets the platform agent file real issues" />
+          <label>Tavily API key <span className="muted">(optional)</span></label>
+          <input type="password" value={tavilyKey} onChange={(e) => setTavilyKey(e.target.value)} placeholder="tvly-… — enables real web search" />
+          <p className="muted" style={{ fontSize: 12, marginTop: 4 }}>
+            Optional. Without GitHub, bug/capability requests use an offline tracker; without
+            Tavily, web search returns simulated results. You can add or change these later in Settings.
+          </p>
           <button disabled={busy || !apiKey} onClick={submitKeyAndGenerate}>
-            {busy ? "Generating organization…" : "Generate organization"}
+            Generate organization
           </button>
         </div>
       )}
+
+      {step === "generating" && <GeneratingCard progress={progress} />}
 
       {step === "review" && preview && (
         <div>
@@ -128,6 +267,33 @@ export default function Home() {
               </div>
             ))}
           </div>
+
+          <div className="card">
+            <div className="step">Refine · Chat to change the plan</div>
+            <p className="muted">
+              Not quite right? Ask for changes — e.g. &ldquo;drop the finance agent&rdquo; or
+              &ldquo;add an objective about enterprise sales&rdquo;.
+            </p>
+            {chat.length > 0 && (
+              <div className="chat" style={{ marginBottom: 12 }}>
+                {chat.map((t, i) => (
+                  <div key={i} className={`msg ${t.who}`}>{t.text}</div>
+                ))}
+                {refining && <div className="msg bot muted">updating the plan…</div>}
+              </div>
+            )}
+            <div className="chatbar">
+              <input
+                placeholder="Ask for a change…"
+                value={chatInput}
+                onChange={(e) => setChatInput(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && sendRefine()}
+                disabled={refining}
+              />
+              <button onClick={sendRefine} disabled={refining || !chatInput.trim()}>Send</button>
+            </div>
+          </div>
+
           <div className="card">
             <div className="step">Step 4 · Approve launch</div>
             <p className="muted">The company will start operating autonomously under your budget and governance.</p>
@@ -137,6 +303,41 @@ export default function Home() {
       )}
 
       {err && <div className="err">{err}</div>}
+    </div>
+  );
+}
+
+function GeneratingCard({ progress }: { progress: GenerationProgress | null }) {
+  const logRef = useRef<HTMLDivElement>(null);
+  const pct = progress?.pct ?? 0;
+  const events = progress?.events ?? [];
+
+  useEffect(() => {
+    logRef.current?.scrollTo({ top: logRef.current.scrollHeight });
+  }, [events.length]);
+
+  return (
+    <div className="card">
+      <div className="step">Step 2 · Generating your organization</div>
+      <div style={{ display: "flex", alignItems: "center", gap: 12, margin: "14px 0 6px" }}>
+        <span className="spinner" />
+        <strong>{progress?.message ?? "Starting…"}</strong>
+      </div>
+      <div className="bar" style={{ marginTop: 8 }}><span style={{ width: `${pct}%` }} /></div>
+      <div className="kv" style={{ marginTop: 8 }}>
+        <span className="muted">It usually takes a couple of minutes.</span>
+        <span className="muted">{pct}%</span>
+      </div>
+      {events.length > 0 && (
+        <div ref={logRef} className="genlog">
+          {events.map((e, i) => (
+            <div key={i} className="genlog-row">
+              <span className="genlog-dot" />
+              <span>{e.label}</span>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

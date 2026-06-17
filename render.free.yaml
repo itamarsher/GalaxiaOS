@@ -52,6 +52,10 @@ services:
         sync: false   # set in dashboard: `make gen-key`
       - key: ABOS_JWT_SECRET
         generateValue: true
+      # Browser origins allowed to call the API. Set to the abos-web origin
+      # (comma-separated for multiple), e.g. https://abos-web.onrender.com.
+      - key: ABOS_CORS_ALLOW_ORIGINS
+        sync: false
       - fromGroup: abos-shared
 
   # Next.js frontend.

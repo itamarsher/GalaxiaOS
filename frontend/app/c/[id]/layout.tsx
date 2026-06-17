@@ -15,6 +15,7 @@ const TABS = [
   ["memory", "Memory"],
   ["marketplace", "Marketplace"],
   ["copilot", "Copilot"],
+  ["settings", "Settings"],
 ] as const;
 
 export default function DashboardLayout({ children }: { children: ReactNode }) {

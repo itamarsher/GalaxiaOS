@@ -31,8 +31,11 @@ from app.providers.base import LLMProvider, Message, TextBlock, ToolResultBlock,
 from app.runtime.context import RuntimeContext
 from app.runtime.prompts import AGENT_LOOP_SYSTEM, ROLE_DESCRIPTIONS
 from app.runtime.tools import TOOL_SPECS, execute_tool
+from app.runtime.tools.base import consume_approval_grant as _consume_approval_grant
+from app.runtime.transcript import dump_messages, load_messages
 from app.services import apikeys, memory, metrics, reputation
 from app.services import governance as gov
+from app.services.budget import BudgetExceeded
 
 # Model tiers, cheapest -> most capable. Used for reputation-driven escalation.
 _MODEL_TIERS = ("cheap", "planner", "strategic")
@@ -123,7 +126,7 @@ class NativeBackend:
             memory=memory_summary,
             metrics=metrics_summary,
         )
-        messages: list[Message] = [Message(role="user", content=f"Begin: {task.goal}")]
+        messages = self._resume_or_seed(task)
         model = _model_for(agent, provider, trust)
 
         for _ in range(settings.max_steps_per_task):
@@ -170,7 +173,44 @@ class NativeBackend:
             # User turn: one tool_result per executed tool, matched by id.
             messages.append(Message(role="user", content=list(results)))
 
+            # Checkpoint working memory at the step boundary: the conversation is
+            # now a complete, valid resume point (every tool_use has its
+            # tool_result), so a restart can pick the task back up here.
+            await self._save_transcript(ctx, task, messages)
+
         return await self._finish(ctx, task, TaskStatus.done, {"summary": "step cap reached"})
+
+    def _resume_or_seed(self, task: Task) -> list[Message]:
+        """Resume the loop from a persisted checkpoint, else seed a fresh start.
+
+        A task orphaned by a restart is reset to ``queued`` and re-dispatched by
+        :mod:`app.jobs.recovery`; if it had checkpointed its conversation we
+        replay those turns so it continues where it left off instead of redoing
+        work already paid for.
+        """
+        if settings.persist_task_transcript and task.transcript:
+            resumed = load_messages(task.transcript)
+            if resumed:
+                return resumed
+        return [Message(role="user", content=f"Begin: {task.goal}")]
+
+    async def _save_transcript(
+        self, ctx: RuntimeContext, task: Task, messages: list[Message]
+    ) -> None:
+        """Checkpoint the loop's working memory so a restart can resume it.
+
+        Best-effort and called only at step boundaries, so the persisted
+        conversation is always a valid resume point — never a half-applied step
+        with a dangling ``tool_use``.
+        """
+        if not settings.persist_task_transcript:
+            return
+        async with ctx.session_factory() as db:
+            await set_tenant(db, task.company_id)
+            row = await db.get(Task, task.id)
+            if row is not None:
+                row.transcript = dump_messages(messages)
+                await db.commit()
 
     async def _handle_call(self, ctx: RuntimeContext, agent: Agent, task: Task, call) -> dict:
         async with ctx.session_factory() as db:
@@ -190,7 +230,12 @@ class NativeBackend:
                     "is_error": True,
                 }
 
-            if effect is PolicyEffect.require_approval:
+            if effect is PolicyEffect.require_approval and not await _consume_approval_grant(
+                db, task_id=task.id, tool=call.name
+            ):
+                # No standing approval for this action — park the task and ask the
+                # founder. (If a grant existed, it was just consumed and we fall
+                # through to execute, so an approved action isn't re-escalated.)
                 db.add(
                     DecisionRequest(
                         company_id=task.company_id,
@@ -210,9 +255,49 @@ class NativeBackend:
                     "result": {"status": "waiting_approval", "tool": call.name},
                 }
 
-            outcome = await execute_tool(
-                db, ctx, agent=agent, task=task, name=call.name, args=call.arguments
-            )
+            try:
+                outcome = await execute_tool(
+                    db, ctx, agent=agent, task=task, name=call.name, args=call.arguments
+                )
+            except BudgetExceeded as exc:
+                # The action would blow the budget. Rather than fail the task
+                # outright (the old behaviour: "error": "BudgetExceeded"), treat
+                # it like a spend the CEO can't authorise alone and escalate it to
+                # the founder. Approving raises the budget ceiling by the shortfall
+                # so the action goes through on resume.
+                await db.rollback()
+                shortfall = max(0, exc.requested_cents - exc.available_cents)
+                db.add(
+                    DecisionRequest(
+                        company_id=task.company_id,
+                        agent_id=agent.id,
+                        task_id=task.id,
+                        kind=DecisionKind.spend_approval,
+                        summary=(
+                            f"**Over budget — approval needed**\n\n"
+                            f"`{call.name}` needs **${exc.requested_cents / 100:.2f}**, "
+                            f"but only **${max(0, exc.available_cents) / 100:.2f}** is left "
+                            f"in the {exc.scope} budget.\n\n"
+                            f"Approve to add **${shortfall / 100:.2f}** of headroom and proceed."
+                        ),
+                        payload={
+                            "tool": call.name,
+                            "args": call.arguments,
+                            "requested_cents": exc.requested_cents,
+                            "available_cents": exc.available_cents,
+                            "budget_increase_cents": shortfall,
+                        },
+                        status=DecisionStatus.pending,
+                    )
+                )
+                task_row = await db.get(Task, task.id)
+                if task_row is not None:
+                    task_row.status = TaskStatus.waiting_approval
+                await db.commit()
+                return {
+                    "terminal": True,
+                    "result": {"status": "waiting_approval", "tool": call.name},
+                }
             await db.commit()
 
         if outcome.stop:
@@ -240,6 +325,9 @@ class NativeBackend:
                 return {"status": status.value}
             row.status = status
             row.output = output
+            # Terminal: drop the working-memory checkpoint so the transcript
+            # column only ever holds live tasks' turns (bounded growth).
+            row.transcript = None
             cost = await db.scalar(
                 select(func.coalesce(func.sum(SpendEntry.amount_cents), 0)).where(
                     SpendEntry.task_id == task.id

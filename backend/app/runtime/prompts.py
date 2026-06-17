@@ -8,13 +8,45 @@ ROLE_DESCRIPTIONS: dict[AgentRole, str] = {
     AgentRole.ceo: (
         "You are the CEO agent. You own strategy and decomposition. Given the mission and "
         "objectives, break work into concrete initiatives and DISPATCH them to the right "
-        "functional agents. Do not do the functional work yourself."
+        "functional agents. Do not do the functional work yourself. On a launch run you MUST "
+        "first draft a high-level plan and submit it for the founder's approval with "
+        "`submit_plan` BEFORE dispatching any work — dispatching is blocked until the founder "
+        "approves."
     ),
     AgentRole.growth: "You are the Growth agent. You own customer acquisition and demand.",
     AgentRole.research: "You are the Research agent. You own market and competitive intelligence.",
     AgentRole.product: "You are the Product agent. You own product planning and roadmap.",
     AgentRole.finance: "You are the Finance agent. You own budget monitoring and unit economics.",
     AgentRole.governance: "You are the Governance agent. You own safety, compliance, and oversight.",
+    AgentRole.auditor: (
+        "You are the Auditor (Controller) agent. You own the integrity of the company's financial "
+        "records and the audit/paper trail: every revenue and expense must be recorded, every "
+        "invoice and receipt accounted for, and the books must reconcile against the budget ledger. "
+        "Use read_financials to inspect the real numbers, record_transaction to log any "
+        "revenue/expense that is missing, and generate_invoice to issue invoices and keep "
+        "documentation accurate. Flag and escalate any discrepancy you cannot reconcile."
+    ),
+    AgentRole.data: (
+        "You are the Data agent. You own the company's data, with two responsibilities. "
+        "(1) Internal access: make sure every internal agent can reach the data it needs to do "
+        "its job. Use `list_repo_files` and `read_repo_file` to read THIS codebase so you "
+        "understand how the company's systems are actually wired before you advise on data flows. "
+        "(2) External sharing: control what data leaves the company. Outbound tools (e.g. "
+        "send_email, publish_content, schedule_social_post, run_ad_campaign, send_notification) "
+        "are how data reaches entities OUTSIDE the company — govern them with "
+        "`set_external_sharing_policy` (allow / deny / require_approval), which is enforced on "
+        "every tool call, and review the current posture with `list_data_policies`."
+    ),
+    AgentRole.platform: (
+        "You are the Platform agent. You are DORMANT by default — the CEO never dispatches you "
+        "during normal planning. You wake ONLY when another agent triggers you via `report_bug` "
+        "(something is broken) or `request_capability` (an agent lacks a tool it needs). When "
+        "you wake, read the relevant code with `list_repo_files` and `read_repo_file` to "
+        "understand exactly what is wrong or what would be required, then file a single precise "
+        "tracker issue with `open_issue` (label bugs 'bug' and feature requests 'enhancement'). "
+        "Finally report what you filed. Do not attempt the functional work yourself — your only "
+        "job is to turn an agent's report into an actionable, well-investigated issue."
+    ),
     AgentRole.custom: "You are a specialist agent.",
 }
 
@@ -32,6 +64,15 @@ Beyond `dispatch_task`, `write_memory`, `register_domain`, `request_decision`, a
 (see current real-world outcomes), `record_metric` (log a measured outcome),
 `web_search` (look something up online), and `collect_results` (gather the outputs of
 sub-tasks you delegated earlier, so you can synthesize them).
+
+If you hit a platform limitation, escalate instead of stalling: `report_bug` (something is
+broken) or `request_capability` (you lack a tool you need) hands the problem to the Platform
+agent to investigate and file a tracker issue, and returns immediately so you can carry on.
+
+Before a large external spend, call `request_budget` with the amount and reason: if it
+fits the remaining budget the CEO clears it automatically; if it would go over budget it
+is escalated to the founder to authorise the extra funds. The CEO uses `submit_plan` to
+get the founder's approval on the overall plan before any work is dispatched.
 
 What the company already knows (recall from memory — build on it, don't repeat it):
 {memory}
@@ -61,13 +102,152 @@ PLAN_TO_ORG_SYSTEM = """You are an org designer for an AI-native company. Given 
 monthly budget (in USD cents), design the agent fleet. Respond ONLY with minified JSON:
 {
   "agents": [
-    {"role": "ceo|growth|research|product|finance|governance",
+    {"role": "ceo|growth|research|product|finance|governance|auditor|data",
      "name": "...", "responsibility": "...",
-     "autonomy_level": "suggest|approve_required|autonomous",
-     "monthly_budget_cents": 12345}
+     "autonomy_level": "suggest|approve_required|autonomous"}
   ],
   "edges": [{"from_role": "growth", "to_role": "ceo", "relation": "reports_to"}],
   "monthly_cost_estimate_cents": 50000
 }
-Always include exactly one `ceo` and one `governance` agent. Allocate per-agent budgets that sum
-to at most the provided monthly budget. Functional agents report_to the ceo."""
+Always include exactly one `ceo`, one `governance`, one `auditor`, and one `data` agent (the
+auditor keeps the financial records audited and the invoice/receipt paper trail accurate; the data
+agent ensures internal agents can reach the data they need and controls what data is shared
+outside the company). A `platform` agent is also always included automatically (it stays dormant
+until another agent reports a bug or requests a new capability, then files a tracker issue), so
+you do NOT need to add one. Do NOT set per-agent
+budgets — the platform splits the monthly budget across the fleet. Functional agents report_to the
+ceo."""
+
+
+# JSON schemas matching the two prompts above. Providers use these to *force*
+# structured JSON output (Anthropic via a pinned tool, OpenAI via JSON mode), so
+# generation no longer depends on the model hand-writing valid JSON. Kept
+# permissive (no ``additionalProperties``/``required`` strictness) — downstream
+# parsing already tolerates missing keys via ``.get()`` defaults.
+MISSION_TO_PLAN_SCHEMA: dict = {
+    "type": "object",
+    "properties": {
+        "summary": {"type": "string"},
+        "business_model_assumptions": {
+            "type": "object",
+            "properties": {
+                "how_it_makes_money": {"type": "string"},
+                "key_risks": {"type": "array", "items": {"type": "string"}},
+            },
+        },
+        "target_market": {
+            "type": "object",
+            "properties": {
+                "segment": {"type": "string"},
+                "why": {"type": "string"},
+            },
+        },
+        "objectives": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "title": {"type": "string"},
+                    "rationale": {"type": "string"},
+                    "priority": {"type": "integer"},
+                    "key_results": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "metric": {"type": "string"},
+                                "target_value": {"type": "number"},
+                                "unit": {"type": "string"},
+                            },
+                        },
+                    },
+                },
+            },
+        },
+    },
+}
+
+PLAN_TO_ORG_SCHEMA: dict = {
+    "type": "object",
+    "properties": {
+        "agents": {
+            "type": "array",
+            "minItems": 2,
+            "items": {
+                "type": "object",
+                "properties": {
+                    "role": {"type": "string"},
+                    "name": {"type": "string"},
+                    "responsibility": {"type": "string"},
+                    "autonomy_level": {"type": "string"},
+                    "monthly_budget_cents": {"type": "integer"},
+                },
+                "required": ["role", "name"],
+            },
+        },
+        "edges": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "from_role": {"type": "string"},
+                    "to_role": {"type": "string"},
+                    "relation": {"type": "string"},
+                },
+            },
+        },
+        "monthly_cost_estimate_cents": {"type": "integer"},
+    },
+    # Force the model to actually populate the fleet — an empty/missing agents
+    # list is the difference between a working org and a blank one.
+    "required": ["agents"],
+}
+
+
+# ── Conversational onboarding refinement ──────────────────────────────────────
+# During onboarding (before launch) the founder can chat to tweak the generated
+# objectives and agent fleet. The model returns a structured patch that code
+# applies — never free-form mutations.
+REFINE_SYSTEM = """You help a founder refine their not-yet-launched AI company during onboarding.
+You are given the current plan (objectives, agent fleet, and monthly budget) and the founder's
+instruction. Apply the instruction and respond ONLY with minified JSON:
+{
+  "reply": "a short, friendly one-or-two-sentence summary of exactly what you changed",
+  "company_name": "optional: a new one-line company summary if the instruction changes it",
+  "monthly_budget_cents": 50000,
+  "objectives": [
+    {"title": "...", "rationale": "...", "priority": 1,
+     "key_results": [{"metric": "...", "target_value": 1000, "unit": "USD"}]}
+  ],
+  "agents": [
+    {"role": "ceo|growth|research|product|finance|governance|auditor|data", "name": "...",
+     "responsibility": "...", "autonomy_level": "suggest|approve_required|autonomous"}
+  ],
+  "remove_roles": ["finance"]
+}
+Rules:
+- Always include "reply".
+- Include "monthly_budget_cents" ONLY if the instruction changes the company's total monthly
+  budget (in USD cents). Do NOT set per-agent budgets — the platform splits the total across the
+  fleet automatically.
+- Include "objectives" ONLY if the instruction changes objectives or key results; if so return
+  the COMPLETE new list (3-5 objectives), not a diff.
+- Include "agents" ONLY to add or modify agents (each matched to an existing agent by its role).
+  Keep exactly one ceo; never remove the ceo.
+- Include "remove_roles" ONLY to remove agents, listing their roles.
+- If the instruction is just a question or cannot be applied, return only "reply" and omit the
+  other keys.
+- Keep everything consistent with the founder's mission and budget."""
+
+REFINE_SCHEMA: dict = {
+    "type": "object",
+    "properties": {
+        "reply": {"type": "string"},
+        "company_name": {"type": "string"},
+        "monthly_budget_cents": {"type": "integer"},
+        "objectives": MISSION_TO_PLAN_SCHEMA["properties"]["objectives"],
+        "agents": PLAN_TO_ORG_SCHEMA["properties"]["agents"],
+        "remove_roles": {"type": "array", "items": {"type": "string"}},
+    },
+    "required": ["reply"],
+}

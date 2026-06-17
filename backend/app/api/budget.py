@@ -7,7 +7,7 @@ from sqlalchemy import select
 
 from app.deps import CompanyDep, DbDep
 from app.models import RunwaySnapshot
-from app.schemas import BudgetOut, BudgetPatchRequest, BudgetView
+from app.schemas import AgentSpendOut, BudgetOut, BudgetPatchRequest, BudgetView
 from app.services import budget as budget_svc
 from app.services import runway as runway_svc
 
@@ -24,6 +24,12 @@ async def get_budget(company: CompanyDep, db: DbDep):
         by_category=await budget_svc.spend_by_category(db, company.id),
         by_agent=await budget_svc.spend_by_agent(db, company.id),
     )
+
+
+@router.get("/budget/by-agent", response_model=list[AgentSpendOut])
+async def budget_by_agent(company: CompanyDep, db: DbDep):
+    """Per-agent spend with expandable ledger detail."""
+    return await budget_svc.spend_detail_by_agent(db, company.id)
 
 
 @router.patch("/budget", response_model=BudgetOut)

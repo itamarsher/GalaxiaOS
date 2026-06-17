@@ -7,24 +7,58 @@ import uuid
 from fastapi import APIRouter, HTTPException, status
 from sqlalchemy import select
 
-from app.deps import CompanyDep, DbDep
-from app.models import Agent, AgentEdge, MemoryEntry, Task
-from app.models.enums import AgentStatus, TaskStatus
+from app.deps import CompanyDep, CurrentUser, DbDep
+from app.models import Agent, AgentEdge, Company, DecisionRequest, Membership, MemoryEntry, Task
+from app.models.enums import AgentStatus, DecisionStatus, TaskStatus
+from app.runtime.transcript import transcript_lines
 from app.schemas import (
     AgentEdgeOut,
     AgentOut,
     CompanyOut,
+    DecisionOut,
     MemoryOut,
     OrgChartOut,
+    TaskDetailOut,
     TaskOut,
+    TaskTranscriptOut,
 )
 
 router = APIRouter(prefix="/companies/{company_id}", tags=["companies"])
+
+# A second router (no company_id prefix) for account-level listing: a user can
+# own/run multiple businesses, so they need to enumerate them.
+mine_router = APIRouter(tags=["companies"])
+
+
+@mine_router.get("/companies", response_model=list[CompanyOut])
+async def list_my_companies(db: DbDep, user: CurrentUser):
+    """Every company the current user is a member of, newest first."""
+    rows = await db.scalars(
+        select(Company)
+        .join(Membership, Membership.company_id == Company.id)
+        .where(Membership.user_id == user.id)
+        .order_by(Company.created_at.desc())
+    )
+    return list(rows)
 
 
 @router.get("", response_model=CompanyOut)
 async def get_company(company: CompanyDep):
     return company
+
+
+@router.delete("", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_company(company: CompanyDep, db: DbDep):
+    """Permanently delete a company and everything under it.
+
+    This is the founder's hard stop: removing the company row cascades (via the
+    ``company_id`` ON DELETE CASCADE on every tenant table) to its agents, runs,
+    tasks, budget, governance, memory and digests, so no further scheduled or
+    in-flight work can run for it.
+    """
+    await db.delete(company)
+    await db.commit()
+    return None
 
 
 @router.get("/org", response_model=OrgChartOut)
@@ -58,6 +92,64 @@ async def list_tasks(company: CompanyDep, db: DbDep, status: TaskStatus | None =
     if status is not None:
         stmt = stmt.where(Task.status == status)
     return (await db.scalars(stmt.limit(200))).all()
+
+
+@router.get("/tasks/{task_id}", response_model=TaskDetailOut)
+async def get_task(company: CompanyDep, task_id: uuid.UUID, db: DbDep):
+    """A single task with its executing agent and any dispatched sub-tasks."""
+    task = await db.scalar(
+        select(Task).where(Task.company_id == company.id, Task.id == task_id)
+    )
+    if task is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Task not found")
+    agent = await db.get(Agent, task.agent_id)
+    children = (
+        await db.scalars(
+            select(Task)
+            .where(Task.parent_task_id == task.id)
+            .order_by(Task.created_at.asc())
+        )
+    ).all()
+    detail = TaskDetailOut.model_validate(task)
+    detail.agent_name = agent.name if agent else None
+    detail.agent_role = agent.role.value if agent else None
+    detail.children = [TaskOut.model_validate(c) for c in children]
+    # Surface the pending decision (if any) so the UI can show the task is
+    # blocked on the founder and offer approve/reject inline.
+    pending = await db.scalar(
+        select(DecisionRequest)
+        .where(
+            DecisionRequest.task_id == task.id,
+            DecisionRequest.status == DecisionStatus.pending,
+        )
+        .order_by(DecisionRequest.created_at.desc())
+    )
+    if pending is not None:
+        decision_out = DecisionOut.model_validate(pending)
+        decision_out.agent_name = agent.name if agent else None
+        detail.pending_decision = decision_out
+    return detail
+
+
+@router.get("/tasks/{task_id}/transcript", response_model=TaskTranscriptOut)
+async def get_task_transcript(company: CompanyDep, task_id: uuid.UUID, db: DbDep):
+    """Live tail of a running task's working memory — the last 50 rendered lines.
+
+    The transcript is the agent's in-flight conversation, checkpointed each step
+    and cleared when the task finishes (see :mod:`app.runtime.backends.native`).
+    So this streams the agent's progress while it works and returns an empty list
+    once the task is done — the result then lives on the task detail itself.
+    """
+    task = await db.scalar(
+        select(Task).where(Task.company_id == company.id, Task.id == task_id)
+    )
+    if task is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Task not found")
+    return TaskTranscriptOut(
+        task_id=task.id,
+        status=task.status.value,
+        lines=transcript_lines(task.transcript, limit=50),
+    )
 
 
 @router.get("/memory", response_model=list[MemoryOut])

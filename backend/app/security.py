@@ -5,20 +5,33 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime, timedelta
 
+import bcrypt
 from jose import JWTError, jwt
-from passlib.context import CryptContext
 
 from app.config import settings
 
-_pwd = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+def _password_bytes(password: str) -> bytes:
+    """Encode a password for bcrypt, truncated to bcrypt's 72-byte limit.
+
+    bcrypt only considers the first 72 bytes and (since bcrypt 5.0) raises on
+    longer inputs, so we truncate explicitly. This matches passlib's historical
+    silent truncation, keeping previously stored hashes verifiable.
+    """
+    return password.encode("utf-8")[:72]
 
 
 def hash_password(password: str) -> str:
-    return _pwd.hash(password)
+    return bcrypt.hashpw(_password_bytes(password), bcrypt.gensalt()).decode("utf-8")
 
 
 def verify_password(password: str, hashed: str) -> bool:
-    return _pwd.verify(password, hashed)
+    try:
+        return bcrypt.checkpw(_password_bytes(password), hashed.encode("utf-8"))
+    except ValueError:
+        # Malformed/unsupported stored hash — treat as a failed verification
+        # rather than a 500.
+        return False
 
 
 def create_access_token(user_id: uuid.UUID) -> str:

@@ -25,6 +25,9 @@ class AgentRole(str, enum.Enum):
     product = "product"
     finance = "finance"
     governance = "governance"
+    auditor = "auditor"
+    data = "data"
+    platform = "platform"
     custom = "custom"
 
 
@@ -126,6 +129,7 @@ class DecisionKind(str, enum.Enum):
     spend_approval = "spend_approval"
     risky_action = "risky_action"
     strategy = "strategy"
+    plan_approval = "plan_approval"
 
 
 class DecisionStatus(str, enum.Enum):

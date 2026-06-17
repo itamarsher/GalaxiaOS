@@ -60,7 +60,12 @@ export default function GovernancePage() {
           <tbody>
             {(reputation.data ?? []).map((r) => (
               <tr key={r.agent_id}>
-                <td className="muted" style={{ fontSize: 12 }}>{r.agent_id.slice(0, 8)}</td>
+                <td>
+                  <div>{r.agent_name ?? "Unknown agent"}</div>
+                  <div className="muted" style={{ fontSize: 11 }}>
+                    {r.agent_role ? `${r.agent_role} · ` : ""}{r.agent_id.slice(0, 8)}
+                  </div>
+                </td>
                 <td>{(r.trust * 100).toFixed(0)}%</td>
                 <td>{(r.accuracy * 100).toFixed(0)}%</td>
                 <td>{(r.roi * 100).toFixed(0)}%</td>
