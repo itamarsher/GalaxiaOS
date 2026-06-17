@@ -21,7 +21,7 @@ from app.schemas import (
     DecisionResolveRequest,
 )
 from app.services import budget as budget_svc
-from app.services import copilot
+from app.services import copilot, memory
 
 # Listing is company-scoped; resolve actions are by decision id (re-checked against membership).
 router = APIRouter(tags=["decisions"])
@@ -211,6 +211,38 @@ async def _apply_note(db, decision: DecisionRequest, note: str | None) -> None:
     )
 
 
+def _render_discussion(thread) -> str:
+    """Render a stored chat thread as ``Founder:`` / ``Agent:`` lines."""
+    lines = []
+    for turn in thread or []:
+        if not isinstance(turn, dict):
+            continue
+        text = (turn.get("text") or "").strip()
+        if text:
+            lines.append(f"{'Founder' if turn.get('who') == 'you' else 'Agent'}: {text}")
+    return "\n".join(lines)
+
+
+async def _apply_discussion(db, decision: DecisionRequest, *, resolution: str) -> None:
+    """Surface the *entire* founder↔agent discussion to the agent on resume.
+
+    Beyond the one-line guidance note, the whole back-and-forth from the Discuss
+    panel is written to company memory (embedded, so it's recalled like other
+    learnings), prefixed with how the founder ultimately resolved the decision —
+    so the re-running agent acts with the full conversation in context.
+    """
+    rendered = _render_discussion(decision.chat)
+    if not rendered:
+        return
+    await memory.write(
+        db,
+        company_id=decision.company_id,
+        type=MemoryType.decision,
+        title=f"Founder discussion ({resolution}) on: {decision.summary[:80]}",
+        content=f"The founder {resolution} this decision after discussing it:\n{rendered}",
+    )
+
+
 @router.post("/decisions/{decision_id}/approve", response_model=DecisionOut)
 async def approve(
     decision_id: uuid.UUID,
@@ -223,6 +255,7 @@ async def approve(
     decision.resolved_by_user_id = user.id
     decision.resolved_at = datetime.now(UTC)
     await _apply_note(db, decision, body.note if body else None)
+    await _apply_discussion(db, decision, resolution="approved")
 
     # Over-budget approvals carry the shortfall: authorising the spend lifts the
     # budget ceiling by that amount so the action goes through on resume. (The
@@ -262,6 +295,7 @@ async def reject(
     decision.resolved_by_user_id = user.id
     decision.resolved_at = datetime.now(UTC)
     await _apply_note(db, decision, body.note if body else None)
+    await _apply_discussion(db, decision, resolution="rejected")
     if decision.task_id:
         task = await db.get(Task, decision.task_id)
         if task is not None and task.status in (

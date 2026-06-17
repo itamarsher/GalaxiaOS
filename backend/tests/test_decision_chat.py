@@ -12,9 +12,11 @@ from __future__ import annotations
 import uuid
 from types import SimpleNamespace
 
-from app.api.decisions import _load_thread
+from app.api.decisions import _apply_discussion, _load_thread, _render_discussion
+from app.models.enums import MemoryType
 from app.providers.base import LLMResponse
 from app.services import copilot
+from app.services import memory as memory_service
 
 
 def _stub_llm(monkeypatch) -> dict:
@@ -114,3 +116,53 @@ def test_load_thread_parses_persisted_turns() -> None:
 def test_load_thread_empty() -> None:
     assert _load_thread(SimpleNamespace(chat=None)) == []
     assert _load_thread(SimpleNamespace(chat=[])) == []
+
+
+def test_render_discussion_formats_turns() -> None:
+    thread = [
+        {"who": "you", "text": "why this domain?"},
+        {"who": "agent", "text": "it fits the brand"},
+        {"who": "you", "text": "   "},  # blank turns are skipped
+    ]
+    assert _render_discussion(thread) == "Founder: why this domain?\nAgent: it fits the brand"
+
+
+def test_render_discussion_empty() -> None:
+    assert _render_discussion(None) == ""
+    assert _render_discussion([]) == ""
+
+
+async def test_apply_discussion_writes_full_thread(monkeypatch) -> None:
+    captured: dict = {}
+
+    async def fake_write(db, **kwargs):
+        captured.update(kwargs)
+
+    monkeypatch.setattr(memory_service, "write", fake_write)
+    decision = SimpleNamespace(
+        chat=[{"who": "you", "text": "why?"}, {"who": "agent", "text": "because"}],
+        company_id=uuid.uuid4(),
+        summary="Buy domain",
+    )
+
+    await _apply_discussion(object(), decision, resolution="approved")
+
+    assert captured["type"] is MemoryType.decision
+    assert "approved" in captured["content"]
+    assert "Founder: why?" in captured["content"]
+    assert "Agent: because" in captured["content"]
+
+
+async def test_apply_discussion_noop_when_no_thread(monkeypatch) -> None:
+    called = False
+
+    async def fake_write(db, **kwargs):
+        nonlocal called
+        called = True
+
+    monkeypatch.setattr(memory_service, "write", fake_write)
+    decision = SimpleNamespace(chat=None, company_id=uuid.uuid4(), summary="x")
+
+    await _apply_discussion(object(), decision, resolution="rejected")
+
+    assert called is False
