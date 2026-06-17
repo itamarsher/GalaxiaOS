@@ -130,6 +130,8 @@ class DecisionKind(str, enum.Enum):
     risky_action = "risky_action"
     strategy = "strategy"
     plan_approval = "plan_approval"
+    hire_approval = "hire_approval"
+    user_action = "user_action"
 
 
 class DecisionStatus(str, enum.Enum):

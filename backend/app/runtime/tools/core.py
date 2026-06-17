@@ -158,6 +158,34 @@ SPECS: list[ToolSpec] = [
         },
     ),
     ToolSpec(
+        name="request_user_action",
+        description=(
+            "Ask the founder to perform a real-world action you cannot do through any "
+            "tool — something only a human can carry out (e.g. make a phone call, sign "
+            "up for an account, inspect something offline, confirm an external result) — "
+            "and report back. This pauses your task until they respond; their reported "
+            "results come back to you so you can continue with them. Use this instead of "
+            "guessing an outcome or giving up when the only path forward needs a person."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "description": (
+                        "The concrete action you need the founder to perform, written so "
+                        "they know exactly what to do and what result to report back."
+                    ),
+                },
+                "reason": {
+                    "type": "string",
+                    "description": "Why you need this action and how the result unblocks your task.",
+                },
+            },
+            "required": ["action"],
+        },
+    ),
+    ToolSpec(
         name="report_result",
         description="Finish this task and report the outcome.",
         input_schema={
@@ -583,6 +611,46 @@ async def _request_decision(db, ctx, *, agent: Agent, task: Task, args: dict) ->
     return ToolOutcome(observation="escalated to founder", park=True)
 
 
+async def _request_user_action(db, ctx, *, agent: Agent, task: Task, args: dict) -> ToolOutcome:
+    action = str(args.get("action") or "").strip()
+    if not action:
+        return ToolOutcome(
+            observation="Describe the action you need the founder to perform.", is_error=True
+        )
+    reason = str(args.get("reason") or "").strip()
+    summary = (
+        "**Action requested**\n\n"
+        f"The {agent.role.value} agent needs you to do something it can't do itself:\n\n"
+        f"{action}"
+    )
+    if reason:
+        summary += f"\n\n_Why:_ {reason}"
+    summary += (
+        "\n\nDo this, then approve with the **results in your note** so the agent can "
+        "continue with them (reject if it shouldn't be done)."
+    )
+    db.add(
+        DecisionRequest(
+            company_id=task.company_id,
+            agent_id=agent.id,
+            task_id=task.id,
+            kind=DecisionKind.user_action,
+            summary=summary,
+            payload={"tool": "request_user_action", "action": action, "reason": reason},
+            status=DecisionStatus.pending,
+        )
+    )
+    row = await db.get(Task, task.id)
+    if row is not None:
+        row.status = TaskStatus.waiting_approval
+    task.status = TaskStatus.waiting_approval  # keep the in-memory copy consistent
+    await db.flush()
+    return ToolOutcome(
+        observation="asked the founder to perform the action; waiting for their report",
+        park=True,
+    )
+
+
 async def _report_result(db, ctx, *, agent: Agent, task: Task, args: dict) -> ToolOutcome:
     return ToolOutcome(observation="reported", stop=True)
 
@@ -595,6 +663,7 @@ HANDLERS = {
     "register_domain": _register_domain,
     "send_email": _send_email,
     "request_decision": _request_decision,
+    "request_user_action": _request_user_action,
     "report_result": _report_result,
     "read_metrics": _read_metrics,
     "record_metric": _record_metric,

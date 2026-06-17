@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from sqlalchemy import select
 
+from app.config import settings
 from app.models import Agent, Budget
 from app.models.enums import AgentRole
 from app.services import onboarding
@@ -68,7 +69,11 @@ async def test_reallocate_agent_budgets(session_factory, company_with_budget):
         by_role = {a.role: a.monthly_budget_cents for a in agents}
         assert len(agents) == 4
         assert all(c is not None for c in by_role.values())
-        assert sum(by_role.values()) == 10_000  # the whole budget is distributed
+        # Start lean: only the non-reserved share is split across the fleet; the
+        # rest stays as the CEO's unallocated pool.
+        allocatable = int(10_000 * (1.0 - settings.launch_budget_reserve_fraction))
+        assert allocatable < 10_000  # a reserve is kept back, not fully allocated
+        assert sum(by_role.values()) == allocatable
         # Weighted: growth (3) > finance (1.5) > ceo ~= governance (both 1;
         # may differ by a single leftover cent from largest-remainder rounding).
         assert by_role[AgentRole.growth] > by_role[AgentRole.finance]

@@ -128,6 +128,12 @@ class Settings(BaseSettings):
     business_cycle_interval_seconds: int = 120  # delay between auto-continued cycles
     business_cycle_min_budget_cents: int = 50  # pause auto-continuation below this
 
+    # Start lean: at launch the platform allocates only part of the monthly budget
+    # across the starting fleet and leaves the rest as an unallocated pool the CEO
+    # can deploy later (with the founder's approval) by hiring agents. Keeps the
+    # team from committing the entire budget up front.
+    launch_budget_reserve_fraction: float = 0.7
+
     # Restart safety: the durable business state lives in Postgres, but the work
     # queue is arq-on-Redis and ephemeral on this deployment. On worker startup,
     # rebuild the Redis queue from the DB (requeue orphaned/queued tasks and

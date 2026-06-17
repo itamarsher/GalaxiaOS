@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
-from app.models import Agent, AgentRun, Task
+from app.models import Agent, AgentRun, DecisionRequest, Task
 from app.models.enums import (
     AgentRole,
     AgentSource,
     AgentStatus,
+    DecisionKind,
+    DecisionStatus,
     RunStatus,
     RunTrigger,
     TaskStatus,
@@ -61,6 +63,34 @@ def test_reallocate_hint_mentions_levers():
 
 
 # ── DB-backed integration tests ──────────────────────────────────────────────
+async def _grant_hire(db, task):
+    """Seed an approved hire decision so the next ``hire_agent`` call proceeds.
+
+    Hiring now requires the founder's sign-off; an approved decision acts as a
+    one-shot grant (see ``consume_approval_grant``), mirroring how the app
+    re-queues the task after the founder approves.
+    """
+    db.add(
+        DecisionRequest(
+            company_id=task.company_id,
+            task_id=task.id,
+            kind=DecisionKind.hire_approval,
+            summary="grant",
+            payload={"tool": "hire_agent"},
+            status=DecisionStatus.approved,
+        )
+    )
+    await db.flush()
+
+
+async def _hire(db, ceo, task, **args):
+    """Hire with founder approval already granted (the common case in tests)."""
+    await _grant_hire(db, task)
+    return await execute_tool(
+        db, object(), agent=ceo, task=task, name="hire_agent", args=args
+    )
+
+
 async def _ceo_and_task(session_factory, company_id):
     """Persist a CEO agent + a running root task, returning fresh instances."""
     async with session_factory() as db:
@@ -92,10 +122,7 @@ async def test_hire_agent_allocates_from_pool(session_factory, company_with_budg
     ceo, task = await _ceo_and_task(session_factory, company_id)
 
     async with session_factory() as db:
-        out = await execute_tool(
-            db, object(), agent=ceo, task=task, name="hire_agent",
-            args={"role": "growth", "name": "Ada", "monthly_budget_cents": 4000},
-        )
+        out = await _hire(db, ceo, task, role="growth", name="Ada", monthly_budget_cents=4000)
         await db.commit()
     assert not out.is_error
     assert "Hired Ada" in out.observation
@@ -112,6 +139,36 @@ async def test_hire_agent_allocates_from_pool(session_factory, company_with_budg
 
 
 @requires_db
+async def test_hire_agent_requests_founder_approval(session_factory, company_with_budget):
+    """Without a standing approval, hiring parks the task and asks the founder."""
+    company_id = company_with_budget
+    ceo, task = await _ceo_and_task(session_factory, company_id)
+
+    async with session_factory() as db:
+        out = await execute_tool(
+            db, object(), agent=ceo, task=task, name="hire_agent",
+            args={"role": "growth", "name": "Ada", "monthly_budget_cents": 4000},
+        )
+        await db.commit()
+    assert not out.is_error
+    assert out.park is True
+    assert "approval" in out.observation.lower()
+
+    async with session_factory() as db:
+        # No agent was created yet — only a pending hire decision exists.
+        assert await db.scalar(select_agent_by_name(db, company_id, "Ada")) is None
+        from sqlalchemy import select
+
+        decision = await db.scalar(
+            select(DecisionRequest).where(DecisionRequest.task_id == task.id)
+        )
+        assert decision is not None
+        assert decision.kind is DecisionKind.hire_approval
+        assert decision.status is DecisionStatus.pending
+        assert (decision.payload or {}).get("tool") == "hire_agent"
+
+
+@requires_db
 async def test_hire_over_pool_is_refused_with_reallocation_prompt(
     session_factory, company_with_budget
 ):
@@ -119,9 +176,8 @@ async def test_hire_over_pool_is_refused_with_reallocation_prompt(
     ceo, task = await _ceo_and_task(session_factory, company_id)
 
     async with session_factory() as db:
-        out = await execute_tool(
-            db, object(), agent=ceo, task=task, name="hire_agent",
-            args={"role": "research", "name": "Too Big", "monthly_budget_cents": 20000},
+        out = await _hire(
+            db, ceo, task, role="research", name="Too Big", monthly_budget_cents=20000
         )
     assert out.is_error
     # The CEO is prompted to reallocate or pause, not just told "no".
@@ -138,10 +194,7 @@ async def test_pause_returns_unspent_budget_then_resume_reclaims(
     # Hire two agents that together earmark the whole pool.
     async with session_factory() as db:
         for name, cents in (("Ada", 6000), ("Bo", 4000)):
-            await execute_tool(
-                db, object(), agent=ceo, task=task, name="hire_agent",
-                args={"role": "growth", "name": name, "monthly_budget_cents": cents},
-            )
+            await _hire(db, ceo, task, role="growth", name=name, monthly_budget_cents=cents)
         await db.commit()
         overview = await budget_svc.allocation_overview(db, company_id)
         assert overview["pool_cents"] == 0  # fully allocated
@@ -175,10 +228,7 @@ async def test_resume_refused_when_pool_cannot_cover(session_factory, company_wi
     ceo, task = await _ceo_and_task(session_factory, company_id)
 
     async with session_factory() as db:
-        await execute_tool(
-            db, object(), agent=ceo, task=task, name="hire_agent",
-            args={"role": "growth", "name": "Ada", "monthly_budget_cents": 4000},
-        )
+        await _hire(db, ceo, task, role="growth", name="Ada", monthly_budget_cents=4000)
         await db.commit()
 
     # Pause Ada (pool -> 10000), then hire someone that consumes the whole pool.
@@ -186,10 +236,7 @@ async def test_resume_refused_when_pool_cannot_cover(session_factory, company_wi
         await execute_tool(
             db, object(), agent=ceo, task=task, name="pause_agent", args={"name": "Ada"},
         )
-        await execute_tool(
-            db, object(), agent=ceo, task=task, name="hire_agent",
-            args={"role": "research", "name": "Cy", "monthly_budget_cents": 10000},
-        )
+        await _hire(db, ceo, task, role="research", name="Cy", monthly_budget_cents=10000)
         await db.commit()
 
     # Now resuming Ada can't re-claim its $40 — pool is empty.
@@ -207,10 +254,7 @@ async def test_set_agent_budget_reallocates(session_factory, company_with_budget
     ceo, task = await _ceo_and_task(session_factory, company_id)
 
     async with session_factory() as db:
-        await execute_tool(
-            db, object(), agent=ceo, task=task, name="hire_agent",
-            args={"role": "growth", "name": "Ada", "monthly_budget_cents": 8000},
-        )
+        await _hire(db, ceo, task, role="growth", name="Ada", monthly_budget_cents=8000)
         await db.commit()
 
     # Lower Ada's cap, freeing budget back to the pool.

@@ -11,11 +11,19 @@ ROLE_DESCRIPTIONS: dict[AgentRole, str] = {
         "functional agents. Do not do the functional work yourself. On a launch run you MUST "
         "first draft a high-level plan and submit it for the founder's approval with "
         "`submit_plan` BEFORE dispatching any work — dispatching is blocked until the founder "
-        "approves. You also shape your own team within the budget: `list_team` shows the roster "
-        "and the unallocated budget pool; `hire_agent` adds capacity by allocating an agent a "
-        "monthly budget from that pool; `pause_agent` parks an agent and returns its unspent "
-        "budget to the pool (resume with `resume_agent`); and `set_agent_budget` reallocates an "
-        "agent's cap. When the pool is empty, reallocate existing budget or pause an agent "
+        "approves. "
+        "Run LEAN: start with the smallest team that can make progress and keep most of the "
+        "budget in reserve — do NOT allocate the whole pool up front. Get further by reusing "
+        "and reallocating the agents you already have before growing headcount. "
+        "Manage the team you have with `list_team` (the roster and the unallocated budget "
+        "pool), `pause_agent` (park an agent and return its unspent budget to the pool; resume "
+        "with `resume_agent`), and `set_agent_budget` (reallocate an agent's cap). "
+        "Hiring is different: only add new agents when the existing team is genuinely the "
+        "bottleneck, and `hire_agent` does NOT hire on its own — it REQUESTS the founder's "
+        "permission and pauses until they approve, so they can weigh in on whether and how to "
+        "grow the team. Propose a hire with a clear role, a modest budget drawn from the pool "
+        "(not the whole reserve), and the gap it fills; wait for approval before counting on "
+        "the new agent. When the pool is empty, reallocate existing budget or pause an agent "
         "instead of stalling."
     ),
     AgentRole.growth: "You are the Growth agent. You own customer acquisition and demand.",
@@ -70,9 +78,17 @@ Beyond `dispatch_task`, `write_memory`, `register_domain`, `request_decision`, a
 `web_search` (look something up online), and `collect_results` (gather the outputs of
 sub-tasks you delegated earlier, so you can synthesize them).
 
-If you hit a platform limitation, escalate instead of stalling: `report_bug` (something is
-broken) or `request_capability` (you lack a tool you need) hands the problem to the Platform
-agent to investigate and file a tracker issue, and returns immediately so you can carry on.
+You are actively encouraged to improve the platform — treat this as part of your job, not a
+distraction from it. Whenever something is clearly broken, file it with `report_bug`; whenever
+you lack a tool you need, ask for it with `request_capability`. Don't quietly work around a gap
+or give up on a task: report the bug or request the feature. Either one hands the problem to the
+Platform agent to investigate and file a tracker issue, and returns immediately so you can carry
+on with your task.
+
+When you need a real-world action that no tool can perform — something only a human can do
+(make a phone call, sign up for an account, inspect something offline, confirm an external
+result) — use `request_user_action` to ask the founder to do it and report back. This pauses
+your task until they respond; their report comes back to you so you can continue with the result.
 
 Before a large external spend, call `request_budget` with the amount and reason: if it
 fits the remaining budget the CEO clears it automatically; if it would go over budget it
@@ -119,9 +135,10 @@ auditor keeps the financial records audited and the invoice/receipt paper trail 
 agent ensures internal agents can reach the data they need and controls what data is shared
 outside the company). A `platform` agent is also always included automatically (it stays dormant
 until another agent reports a bug or requests a new capability, then files a tracker issue), so
-you do NOT need to add one. Do NOT set per-agent
-budgets — the platform splits the monthly budget across the fleet. Functional agents report_to the
-ceo."""
+you do NOT need to add one. Keep the starting fleet LEAN — only the roles needed to make early
+progress; the CEO can request the founder's approval to hire more later. Do NOT set per-agent
+budgets — the platform splits the monthly budget across the fleet, holding part back as an
+unallocated reserve the CEO can deploy when hiring. Functional agents report_to the ceo."""
 
 
 # JSON schemas matching the two prompts above. Providers use these to *force*
