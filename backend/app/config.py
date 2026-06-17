@@ -117,6 +117,12 @@ class Settings(BaseSettings):
     business_cycle_interval_seconds: int = 120  # delay between auto-continued cycles
     business_cycle_min_budget_cents: int = 50  # pause auto-continuation below this
 
+    # Restart safety: the durable business state lives in Postgres, but the work
+    # queue is arq-on-Redis and ephemeral on this deployment. On worker startup,
+    # rebuild the Redis queue from the DB (requeue orphaned/queued tasks and
+    # re-arm idle companies). Disable to skip recovery on boot.
+    recover_on_startup: bool = True
+
     # Web search seam (agents' window on the world); "simulated" is offline.
     web_search_provider: str = "simulated"  # simulated | tavily
     web_search_max_results: int = 5
