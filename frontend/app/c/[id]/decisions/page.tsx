@@ -1,12 +1,10 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
-import { api, decisionKindLabel, type Decision } from "@/lib/api";
+import { api, decisionKindLabel, type ChatTurn, type Decision } from "@/lib/api";
 import { usePoll } from "@/lib/useApi";
 import { Markdown } from "@/lib/markdown";
-
-interface ChatTurn { who: "you" | "agent"; text: string }
 
 export default function DecisionsPage() {
   const { id } = useParams<{ id: string }>();
@@ -44,18 +42,26 @@ function DecisionCard({ decision: d, onResolved }: { decision: Decision; onResol
     }
   };
 
+  // The thread is persisted server-side; load it when the chat is opened so it
+  // survives reloads and is shared across devices.
+  useEffect(() => {
+    if (!showChat) return;
+    let active = true;
+    api.decisionChatThread(d.id)
+      .then((res) => { if (active) setChat(res.thread); })
+      .catch(() => { /* keep whatever is on screen */ });
+    return () => { active = false; };
+  }, [showChat, d.id]);
+
   const send = async () => {
     const q = input.trim();
     if (!q || thinking) return;
     setInput("");
-    // `chat` here is the prior thread (the state update below is async), so it's
-    // exactly the history to send — the new question `q` is passed separately.
-    const priorThread = chat;
-    setChat((c) => [...c, { who: "you", text: q }]);
+    setChat((c) => [...c, { who: "you", text: q }]); // optimistic
     setThinking(true);
     try {
-      const res = await api.decisionChat(d.id, q, priorThread);
-      setChat((c) => [...c, { who: "agent", text: res.answer }]);
+      const res = await api.decisionChat(d.id, q);
+      setChat(res.thread); // server is the source of truth
     } catch (e) {
       setChat((c) => [...c, { who: "agent", text: String(e instanceof Error ? e.message : e) }]);
     } finally {

@@ -12,7 +12,14 @@ from app.deps import CompanyDep, CurrentUser, DbDep
 from app.models import Agent, DecisionRequest, MemoryEntry, Objective, Task
 from app.models.enums import DecisionStatus, MemoryType, TaskStatus
 from app.runtime.queue import enqueue_task
-from app.schemas import DecisionChatRequest, DecisionOut, DecisionResolveRequest
+from app.schemas import (
+    DecisionChatRequest,
+    DecisionChatResult,
+    DecisionChatThread,
+    DecisionChatTurn,
+    DecisionOut,
+    DecisionResolveRequest,
+)
 from app.services import budget as budget_svc
 from app.services import copilot
 
@@ -128,21 +135,43 @@ async def list_decisions(company: CompanyDep, db: DbDep, only_pending: bool = Tr
     return await _to_out(db, list((await db.scalars(stmt.limit(200))).all()))
 
 
-@router.post("/decisions/{decision_id}/chat")
+@router.get("/decisions/{decision_id}/chat", response_model=DecisionChatThread)
+async def chat_thread(decision_id: uuid.UUID, db: DbDep, user: CurrentUser):
+    """The persisted discussion thread for a decision (for loading on open/reload)."""
+    decision = await _load_decision(db, user, decision_id)
+    return DecisionChatThread(thread=_load_thread(decision))
+
+
+@router.post("/decisions/{decision_id}/chat", response_model=DecisionChatResult)
 async def chat(
     decision_id: uuid.UUID, body: DecisionChatRequest, db: DbDep, user: CurrentUser
 ):
-    """Discuss a decision with the agent that raised it."""
+    """Discuss a decision with the agent that raised it.
+
+    The thread is persisted on the decision, so the agent answers with the full
+    prior conversation in context and the founder keeps it across reloads.
+    """
     decision = await _load_decision(db, user, decision_id)
+    thread = _load_thread(decision)
     answer = await copilot.discuss_decision(
         db,
         company_id=decision.company_id,
         decision=decision,
         message=body.message,
-        history=body.history,
+        history=thread,
     )
+    # Append this exchange and persist. Reassign (don't mutate in place) so
+    # SQLAlchemy flags the JSONB column as dirty.
+    updated = [*thread, DecisionChatTurn(who="you", text=body.message),
+               DecisionChatTurn(who="agent", text=answer)]
+    decision.chat = [t.model_dump() for t in updated]
     await db.commit()
-    return {"answer": answer}
+    return DecisionChatResult(answer=answer, thread=updated)
+
+
+def _load_thread(decision: DecisionRequest) -> list[DecisionChatTurn]:
+    """Parse the persisted ``chat`` column into validated turns (oldest first)."""
+    return [DecisionChatTurn(**t) for t in (decision.chat or []) if isinstance(t, dict)]
 
 
 async def _load_decision(db, user, decision_id: uuid.UUID) -> DecisionRequest:

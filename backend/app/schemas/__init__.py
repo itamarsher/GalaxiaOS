@@ -261,7 +261,7 @@ class DecisionOut(ORMModel):
 
 
 class DecisionChatTurn(BaseModel):
-    """One prior turn of a founder↔agent decision discussion."""
+    """One turn of a founder↔agent decision discussion."""
 
     who: str  # "you" (founder) | "agent"
     text: str
@@ -269,9 +269,18 @@ class DecisionChatTurn(BaseModel):
 
 class DecisionChatRequest(BaseModel):
     message: str = Field(min_length=1)
-    # Prior turns of this discussion, oldest first, so the agent answers with the
-    # conversation in context. The just-sent ``message`` is NOT included here.
-    history: list[DecisionChatTurn] = Field(default_factory=list)
+
+
+class DecisionChatThread(BaseModel):
+    """The persisted discussion thread for a decision, oldest turn first."""
+
+    thread: list[DecisionChatTurn] = Field(default_factory=list)
+
+
+class DecisionChatResult(DecisionChatThread):
+    """A chat reply plus the full updated thread (the server is the source of truth)."""
+
+    answer: str
 
 
 class DecisionResolveRequest(BaseModel):

@@ -12,6 +12,7 @@ from __future__ import annotations
 import uuid
 from types import SimpleNamespace
 
+from app.api.decisions import _load_thread
 from app.providers.base import LLMResponse
 from app.services import copilot
 
@@ -103,3 +104,13 @@ async def test_discuss_decision_caps_history(monkeypatch) -> None:
     assert len(replayed) == copilot._DECISION_CHAT_HISTORY_LIMIT
     # Oldest turns are dropped; the most recent are kept.
     assert replayed[-1].content == "q39"
+
+
+def test_load_thread_parses_persisted_turns() -> None:
+    decision = SimpleNamespace(chat=[{"who": "you", "text": "hi"}, {"who": "agent", "text": "hey"}])
+    assert [(t.who, t.text) for t in _load_thread(decision)] == [("you", "hi"), ("agent", "hey")]
+
+
+def test_load_thread_empty() -> None:
+    assert _load_thread(SimpleNamespace(chat=None)) == []
+    assert _load_thread(SimpleNamespace(chat=[])) == []
