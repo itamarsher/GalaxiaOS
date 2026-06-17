@@ -34,8 +34,11 @@ function DecisionCard({ decision: d, onResolved }: { decision: Decision; onResol
   const act = async (approve: boolean) => {
     setBusy(true);
     try {
-      if (approve) await api.approveDecision(d.id, note || undefined);
-      else await api.rejectDecision(d.id, note || undefined);
+      // When discussing, the conversation IS the guidance — the standalone note
+      // field is hidden and deliberately not sent with the verdict.
+      const guidance = showChat ? undefined : note || undefined;
+      if (approve) await api.approveDecision(d.id, guidance);
+      else await api.rejectDecision(d.id, guidance);
       onResolved();
     } finally {
       setBusy(false);
@@ -110,17 +113,27 @@ function DecisionCard({ decision: d, onResolved }: { decision: Decision; onResol
       <label style={{ marginTop: 0 }}>Details</label>
       <Markdown>{d.summary}</Markdown>
 
-      <label>Guidance for the agent (optional — applied whether you approve or reject)</label>
-      <textarea
-        value={note}
-        onChange={(e) => setNote(e.target.value)}
-        placeholder="e.g. Go ahead, but cap the spend at $20 and use the .io domain."
-        style={{ minHeight: 60 }}
-      />
+      {/* The standalone guidance note is for a quick approve/reject. Once the
+          founder opens the discussion, the chat replaces it as the guidance. */}
+      {!showChat && (
+        <>
+          <label>Guidance for the agent (optional — applied whether you approve or reject)</label>
+          <textarea
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+            placeholder="e.g. Go ahead, but cap the spend at $20 and use the .io domain."
+            style={{ minHeight: 60 }}
+          />
+        </>
+      )}
 
       <div className="btnrow">
-        <button disabled={busy} onClick={() => act(true)}>Approve</button>
-        <button className="ghost" disabled={busy} onClick={() => act(false)}>Reject</button>
+        {!showChat && (
+          <>
+            <button disabled={busy} onClick={() => act(true)}>Approve</button>
+            <button className="ghost" disabled={busy} onClick={() => act(false)}>Reject</button>
+          </>
+        )}
         <button className="ghost" onClick={() => setShowChat((s) => !s)}>
           {showChat ? "Hide chat" : "💬 Discuss"}
         </button>
@@ -147,6 +160,13 @@ function DecisionCard({ decision: d, onResolved }: { decision: Decision; onResol
               disabled={thinking}
             />
             <button onClick={send} disabled={thinking || !input.trim()}>Send</button>
+          </div>
+
+          {/* Verdict lives below the discussion: the whole conversation is the
+              guidance the agent acts on. */}
+          <div className="btnrow" style={{ marginTop: 12 }}>
+            <button disabled={busy} onClick={() => act(true)}>Approve</button>
+            <button className="ghost" disabled={busy} onClick={() => act(false)}>Reject</button>
           </div>
         </div>
       )}
