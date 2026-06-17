@@ -237,5 +237,6 @@ async def reject(
         ):
             task.status = TaskStatus.failed
             task.output = {"rejected": True}
+            task.transcript = None  # terminal: drop the working-memory checkpoint
     await db.commit()
     return (await _to_out(db, [decision]))[0]

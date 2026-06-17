@@ -32,6 +32,7 @@ from app.runtime.context import RuntimeContext
 from app.runtime.prompts import AGENT_LOOP_SYSTEM, ROLE_DESCRIPTIONS
 from app.runtime.tools import TOOL_SPECS, execute_tool
 from app.runtime.tools.base import consume_approval_grant as _consume_approval_grant
+from app.runtime.transcript import dump_messages, load_messages
 from app.services import apikeys, memory, metrics, reputation
 from app.services import governance as gov
 from app.services.budget import BudgetExceeded
@@ -125,7 +126,7 @@ class NativeBackend:
             memory=memory_summary,
             metrics=metrics_summary,
         )
-        messages: list[Message] = [Message(role="user", content=f"Begin: {task.goal}")]
+        messages = self._resume_or_seed(task)
         model = _model_for(agent, provider, trust)
 
         for _ in range(settings.max_steps_per_task):
@@ -172,7 +173,44 @@ class NativeBackend:
             # User turn: one tool_result per executed tool, matched by id.
             messages.append(Message(role="user", content=list(results)))
 
+            # Checkpoint working memory at the step boundary: the conversation is
+            # now a complete, valid resume point (every tool_use has its
+            # tool_result), so a restart can pick the task back up here.
+            await self._save_transcript(ctx, task, messages)
+
         return await self._finish(ctx, task, TaskStatus.done, {"summary": "step cap reached"})
+
+    def _resume_or_seed(self, task: Task) -> list[Message]:
+        """Resume the loop from a persisted checkpoint, else seed a fresh start.
+
+        A task orphaned by a restart is reset to ``queued`` and re-dispatched by
+        :mod:`app.jobs.recovery`; if it had checkpointed its conversation we
+        replay those turns so it continues where it left off instead of redoing
+        work already paid for.
+        """
+        if settings.persist_task_transcript and task.transcript:
+            resumed = load_messages(task.transcript)
+            if resumed:
+                return resumed
+        return [Message(role="user", content=f"Begin: {task.goal}")]
+
+    async def _save_transcript(
+        self, ctx: RuntimeContext, task: Task, messages: list[Message]
+    ) -> None:
+        """Checkpoint the loop's working memory so a restart can resume it.
+
+        Best-effort and called only at step boundaries, so the persisted
+        conversation is always a valid resume point — never a half-applied step
+        with a dangling ``tool_use``.
+        """
+        if not settings.persist_task_transcript:
+            return
+        async with ctx.session_factory() as db:
+            await set_tenant(db, task.company_id)
+            row = await db.get(Task, task.id)
+            if row is not None:
+                row.transcript = dump_messages(messages)
+                await db.commit()
 
     async def _handle_call(self, ctx: RuntimeContext, agent: Agent, task: Task, call) -> dict:
         async with ctx.session_factory() as db:
@@ -287,6 +325,9 @@ class NativeBackend:
                 return {"status": status.value}
             row.status = status
             row.output = output
+            # Terminal: drop the working-memory checkpoint so the transcript
+            # column only ever holds live tasks' turns (bounded growth).
+            row.transcript = None
             cost = await db.scalar(
                 select(func.coalesce(func.sum(SpendEntry.amount_cents), 0)).where(
                     SpendEntry.task_id == task.id

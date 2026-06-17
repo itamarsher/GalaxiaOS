@@ -158,6 +158,7 @@ async def run_task(ctx: RuntimeContext, task_id: uuid.UUID) -> dict:
             if row is not None and row.status is TaskStatus.running:
                 row.status = TaskStatus.failed
                 row.output = {"error": f"{type(exc).__name__}: {exc}"[:1000]}
+                row.transcript = None  # terminal: drop the working-memory checkpoint
                 await db.commit()
         raise
 

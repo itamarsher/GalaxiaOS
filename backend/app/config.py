@@ -81,6 +81,10 @@ class Settings(BaseSettings):
     max_tasks_per_agent_window: int = 30
     max_loop_signature_repeats: int = 3
     max_steps_per_task: int = 12
+    # Checkpoint a task's in-flight conversation to ``Task.transcript`` after each
+    # step so it resumes after a restart. The checkpoint is cleared when the task
+    # finishes, so the table holds only live tasks' working memory.
+    persist_task_transcript: bool = True
 
     # Model defaults per role tier (overridable per-agent via Agent.model_pref)
     model_cheap: str = Field(default="claude-haiku-4-5")
