@@ -18,6 +18,8 @@ export default function Overview() {
   const budget = usePoll(() => api.budget(id), 5000, [id]);
   const decisions = usePoll(() => api.decisions(id, true), 5000, [id]);
   const digest = usePoll(() => api.digestLatest(id), 0, [id]);
+  // TEMP dev tools — remove before launch.
+  const dev = usePoll(() => api.devStatus(), 0, [id]);
 
   // Live task stream (SSE) so the founder sees work happening, auto-updating
   // without a refresh. Falls back to polling the task list so the Overview always
@@ -65,6 +67,17 @@ export default function Overview() {
     } catch (e) {
       alert(String(e instanceof Error ? e.message : e));
       setDeleting(false);
+    }
+  };
+
+  // TEMP dev tool — remove before launch. Wipes every account except the default.
+  const deleteOtherAccounts = async () => {
+    if (!window.confirm("DELETE ALL OTHER ACCOUNTS (everyone except the default dev account) and all their data? This cannot be undone.")) return;
+    try {
+      const res = await api.deleteOtherAccounts();
+      alert(`Deleted ${res.deleted_accounts} account(s). The default account is preserved.`);
+    } catch (e) {
+      alert(String(e instanceof Error ? e.message : e));
     }
   };
 
@@ -158,6 +171,18 @@ export default function Overview() {
         <button className="ghost danger" disabled={deleting} onClick={deleteCompany}>
           {deleting ? "Deleting…" : "Delete company"}
         </button>
+
+        {/* TEMP DEV TOOL — remove before launch (backend app/api/dev.py + ABOS_DEV_TOOLS_ENABLED). */}
+        {dev.data?.enabled && (
+          <div style={{ marginTop: 16, paddingTop: 14, borderTop: "1px dashed var(--border)" }}>
+            <p className="muted" style={{ fontSize: 12, margin: "0 0 8px" }}>
+              ⚠️ Dev only — deletes every account except the default one. Remove before going live.
+            </p>
+            <button className="ghost danger" onClick={deleteOtherAccounts}>
+              Delete all other accounts
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );

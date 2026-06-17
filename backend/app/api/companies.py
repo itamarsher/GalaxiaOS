@@ -7,8 +7,8 @@ import uuid
 from fastapi import APIRouter, HTTPException, status
 from sqlalchemy import select
 
-from app.deps import CompanyDep, DbDep
-from app.models import Agent, AgentEdge, DecisionRequest, MemoryEntry, Task
+from app.deps import CompanyDep, CurrentUser, DbDep
+from app.models import Agent, AgentEdge, Company, DecisionRequest, Membership, MemoryEntry, Task
 from app.models.enums import AgentStatus, DecisionStatus, TaskStatus
 from app.schemas import (
     AgentEdgeOut,
@@ -22,6 +22,22 @@ from app.schemas import (
 )
 
 router = APIRouter(prefix="/companies/{company_id}", tags=["companies"])
+
+# A second router (no company_id prefix) for account-level listing: a user can
+# own/run multiple businesses, so they need to enumerate them.
+mine_router = APIRouter(tags=["companies"])
+
+
+@mine_router.get("/companies", response_model=list[CompanyOut])
+async def list_my_companies(db: DbDep, user: CurrentUser):
+    """Every company the current user is a member of, newest first."""
+    rows = await db.scalars(
+        select(Company)
+        .join(Membership, Membership.company_id == Company.id)
+        .where(Membership.user_id == user.id)
+        .order_by(Company.created_at.desc())
+    )
+    return list(rows)
 
 
 @router.get("", response_model=CompanyOut)

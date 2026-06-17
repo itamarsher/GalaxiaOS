@@ -99,6 +99,7 @@ def create_app() -> FastAPI:
     app.include_router(onboarding.router)
     app.include_router(apikeys.router)
     app.include_router(companies.router)
+    app.include_router(companies.mine_router)
     app.include_router(budget.router)
     app.include_router(governance.router)
     app.include_router(metrics.router)
