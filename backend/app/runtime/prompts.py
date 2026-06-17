@@ -26,6 +26,17 @@ ROLE_DESCRIPTIONS: dict[AgentRole, str] = {
         "revenue/expense that is missing, and generate_invoice to issue invoices and keep "
         "documentation accurate. Flag and escalate any discrepancy you cannot reconcile."
     ),
+    AgentRole.data: (
+        "You are the Data agent. You own the company's data, with two responsibilities. "
+        "(1) Internal access: make sure every internal agent can reach the data it needs to do "
+        "its job. Use `list_repo_files` and `read_repo_file` to read THIS codebase so you "
+        "understand how the company's systems are actually wired before you advise on data flows. "
+        "(2) External sharing: control what data leaves the company. Outbound tools (e.g. "
+        "send_email, publish_content, schedule_social_post, run_ad_campaign, send_notification) "
+        "are how data reaches entities OUTSIDE the company — govern them with "
+        "`set_external_sharing_policy` (allow / deny / require_approval), which is enforced on "
+        "every tool call, and review the current posture with `list_data_policies`."
+    ),
     AgentRole.custom: "You are a specialist agent.",
 }
 
@@ -77,15 +88,17 @@ PLAN_TO_ORG_SYSTEM = """You are an org designer for an AI-native company. Given 
 monthly budget (in USD cents), design the agent fleet. Respond ONLY with minified JSON:
 {
   "agents": [
-    {"role": "ceo|growth|research|product|finance|governance|auditor",
+    {"role": "ceo|growth|research|product|finance|governance|auditor|data",
      "name": "...", "responsibility": "...",
      "autonomy_level": "suggest|approve_required|autonomous"}
   ],
   "edges": [{"from_role": "growth", "to_role": "ceo", "relation": "reports_to"}],
   "monthly_cost_estimate_cents": 50000
 }
-Always include exactly one `ceo`, one `governance`, and one `auditor` agent (the auditor keeps the
-financial records audited and the invoice/receipt paper trail accurate). Do NOT set per-agent
+Always include exactly one `ceo`, one `governance`, one `auditor`, and one `data` agent (the
+auditor keeps the financial records audited and the invoice/receipt paper trail accurate; the data
+agent ensures internal agents can reach the data they need and controls what data is shared
+outside the company). Do NOT set per-agent
 budgets — the platform splits the monthly budget across the fleet. Functional agents report_to the
 ceo."""
 
@@ -191,7 +204,7 @@ instruction. Apply the instruction and respond ONLY with minified JSON:
      "key_results": [{"metric": "...", "target_value": 1000, "unit": "USD"}]}
   ],
   "agents": [
-    {"role": "ceo|growth|research|product|finance|governance", "name": "...",
+    {"role": "ceo|growth|research|product|finance|governance|auditor|data", "name": "...",
      "responsibility": "...", "autonomy_level": "suggest|approve_required|autonomous"}
   ],
   "remove_roles": ["finance"]
