@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import urllib.parse as _url
 from functools import lru_cache
+from typing import Annotated
 
 from pydantic import Field, field_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
 def normalize_db_url(url: str) -> str:
@@ -67,12 +68,23 @@ class Settings(BaseSettings):
     # leave false in production, where API and worker scale independently.
     run_worker_in_process: bool = False
 
+    # TEMP (dev only): enables the dev toolkit (auto-login default account +
+    # "delete all other accounts") used during active development. MUST be set to
+    # false (or this whole feature removed) before going live. Kill-switch:
+    # set ABOS_DEV_TOOLS_ENABLED=false.
+    dev_tools_enabled: bool = True
+    dev_default_email: str = "dev@abos.local"  # TEMP: the auto-login default account
+
     # Runtime safety caps (circuit breakers)
     max_task_depth: int = 4
     max_tasks_per_run: int = 200
     max_tasks_per_agent_window: int = 30
     max_loop_signature_repeats: int = 3
     max_steps_per_task: int = 12
+    # Checkpoint a task's in-flight conversation to ``Task.transcript`` after each
+    # step so it resumes after a restart. The checkpoint is cleared when the task
+    # finishes, so the table holds only live tasks' working memory.
+    persist_task_transcript: bool = True
 
     # Model defaults per role tier (overridable per-agent via Agent.model_pref)
     model_cheap: str = Field(default="claude-haiku-4-5")
@@ -108,11 +120,31 @@ class Settings(BaseSettings):
     # Continuous operation: a recurring "business cycle" re-wakes the org.
     business_cycle_enabled: bool = True
     business_cycle_hour_utc: int = 12
+    # Keep the org working without waiting for the daily cron: when a run finishes
+    # (every task terminal, nothing awaiting the founder), automatically start the
+    # next cycle after a short delay — as long as the company is active and has
+    # budget headroom left. This is what makes the agents loop continuously.
+    business_cycle_continuous: bool = True
+    business_cycle_interval_seconds: int = 120  # delay between auto-continued cycles
+    business_cycle_min_budget_cents: int = 50  # pause auto-continuation below this
+
+    # Restart safety: the durable business state lives in Postgres, but the work
+    # queue is arq-on-Redis and ephemeral on this deployment. On worker startup,
+    # rebuild the Redis queue from the DB (requeue orphaned/queued tasks and
+    # re-arm idle companies). Disable to skip recovery on boot.
+    recover_on_startup: bool = True
 
     # Web search seam (agents' window on the world); "simulated" is offline.
     web_search_provider: str = "simulated"  # simulated | tavily
     web_search_max_results: int = 5
     web_search_timeout_seconds: float = 10.0
+    # Cost (cents) per Tavily *API credit*, metered through the CostMeter like any
+    # other paid action. Tavily bills in credits (basic=1, advanced=2) and reports
+    # the credits each call consumed, but never a dollar figure — so this is the
+    # local credit→cents conversion. The meter reserves the estimated credits up
+    # front and commits ``reported_credits × web_search_cost_cents`` as the actual
+    # spend. The simulated provider is free (never charged).
+    web_search_cost_cents: int = 2
     # Tavily (only used when web_search_provider == "tavily")
     tavily_api_key: str = ""
     tavily_search_depth: str = "basic"  # basic | advanced
@@ -126,9 +158,36 @@ class Settings(BaseSettings):
     smtp_password: str = ""
     smtp_use_tls: bool = True
 
+    # Issue-tracker seam (the Platform agent files bug/feature issues here);
+    # "simulated" is offline and deterministic.
+    issue_tracker: str = "simulated"  # simulated | github
+    github_token: str = ""
+    github_repo: str = "itamarsher/just-launch-it"
+
     # Investor review (onboarding): three agentic investors critique the venture.
     investor_review_enabled: bool = True
     investor_model: str = ""  # empty -> provider's planner-tier default
+
+    # CORS: browser origins allowed to call the API. Comma-separated in the
+    # environment, e.g.
+    #   ABOS_CORS_ALLOW_ORIGINS=https://abos-web.onrender.com,http://localhost:3000
+    # The default "*" allows any origin. Per the CORS spec a wildcard origin
+    # cannot be combined with credentials, so credentials are only enabled when
+    # an explicit allowlist is configured (the frontend authenticates with a
+    # bearer token, not cookies, so this costs nothing).
+    # NoDecode keeps pydantic-settings from JSON-decoding the env value, so the
+    # validator below can accept a plain comma-separated string.
+    cors_allow_origins: Annotated[list[str], NoDecode] = Field(
+        default_factory=lambda: ["*"]
+    )
+
+    @field_validator("cors_allow_origins", mode="before")
+    @classmethod
+    def _split_cors_origins(cls, v):
+        # Accept a comma-separated string from the environment.
+        if isinstance(v, str):
+            return [o.strip() for o in v.split(",") if o.strip()]
+        return v
 
     # Observability / rate limiting (productionization)
     log_level: str = "INFO"

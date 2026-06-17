@@ -12,6 +12,20 @@ from dataclasses import dataclass, field
 from typing import Any, Protocol, Union, runtime_checkable
 
 
+class ProviderError(Exception):
+    """A provider call failed (bad API key, rate limit, upstream/network error).
+
+    Wraps the vendor SDK's exception so callers outside ``app/providers/`` can
+    handle provider failures without importing a vendor SDK (see the
+    provider-boundary guard). ``kind`` is a coarse, vendor-neutral category
+    (``auth`` | ``rate_limit`` | ``connection`` | ``bad_request`` | ``error``).
+    """
+
+    def __init__(self, message: str, *, kind: str = "error") -> None:
+        super().__init__(message)
+        self.kind = kind
+
+
 @dataclass
 class TextBlock:
     """A plain-text content block within a structured message turn."""
@@ -113,6 +127,10 @@ class LLMProvider(Protocol):
 
     def price(self, model: str) -> Price: ...
 
+    def max_output_tokens(self, model: str) -> int:
+        """Largest ``max_tokens`` value this model accepts for one response."""
+        ...
+
     def estimate_input_tokens(
         self, *, api_key: str, model: str, system: str, messages: list[Message]
     ) -> int: ...
@@ -126,4 +144,12 @@ class LLMProvider(Protocol):
         messages: list[Message],
         tools: list[ToolSpec] | None = None,
         max_tokens: int = 4096,
-    ) -> LLMResponse: ...
+        json_schema: dict | None = None,
+    ) -> LLMResponse:
+        """Run one completion.
+
+        When ``json_schema`` is provided, the provider forces structured JSON
+        output (Anthropic via a pinned tool, OpenAI via JSON mode) and the
+        returned :attr:`LLMResponse.text` is guaranteed-valid JSON.
+        """
+        ...

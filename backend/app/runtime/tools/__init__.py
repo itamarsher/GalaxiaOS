@@ -47,7 +47,21 @@ async def execute_tool(db, ctx, *, agent, task, name: str, args: dict) -> ToolOu
     handler = _HANDLERS.get(name)
     if handler is None:
         return ToolOutcome(observation=f"unknown tool {name}")
-    return await handler(db, ctx, agent=agent, task=task, args=args)
+    if not isinstance(args, dict):
+        args = {}
+    try:
+        return await handler(db, ctx, agent=agent, task=task, args=args)
+    except (KeyError, ValueError, TypeError) as exc:
+        # The model can emit a tool call with a missing or malformed argument
+        # (e.g. dispatch_task without a "goal"). That must NOT crash the whole
+        # task — roll back any partial writes and hand the model a recoverable
+        # error it can correct on the next step.
+        await db.rollback()
+        detail = f"missing argument {exc.args[0]!r}" if isinstance(exc, KeyError) and exc.args else str(exc)
+        return ToolOutcome(
+            observation=f"tool {name} failed: invalid arguments ({detail}).",
+            is_error=True,
+        )
 
 
 __all__ = ["TOOL_SPECS", "execute_tool", "ToolOutcome"]

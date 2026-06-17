@@ -101,6 +101,30 @@ class PreviewOut(BaseModel):
     investment_reviews: list[InvestmentReviewOut] = Field(default_factory=list)
 
 
+class GenerationEvent(BaseModel):
+    ts: float
+    label: str
+    pct: int
+
+
+class GenerationProgressOut(BaseModel):
+    phase: str
+    pct: int
+    message: str
+    status: str  # "idle" | "running" | "done" | "error"
+    error: str | None = None
+    events: list[GenerationEvent] = Field(default_factory=list)
+
+
+class RefineRequest(BaseModel):
+    message: str = Field(min_length=1)
+
+
+class RefineResponse(BaseModel):
+    reply: str
+    preview: PreviewOut
+
+
 # ── API keys ─────────────────────────────────────────────────────────────────
 class ApiKeyCreateRequest(BaseModel):
     provider: str = "anthropic"
@@ -146,6 +170,42 @@ class TaskOut(ORMModel):
     created_at: datetime
 
 
+class TaskDetailOut(TaskOut):
+    agent_name: str | None = None
+    agent_role: str | None = None
+    input: dict | None = None
+    children: list[TaskOut] = Field(default_factory=list)
+    pending_decision: "DecisionOut | None" = None
+
+
+class TaskTranscriptOut(BaseModel):
+    """A live tail of a running task's working memory (last N rendered lines)."""
+
+    task_id: uuid.UUID
+    status: str
+    lines: list[str] = Field(default_factory=list)
+
+
+# ── Budget detail ────────────────────────────────────────────────────────────
+class SpendEntryOut(ORMModel):
+    id: uuid.UUID
+    category: str
+    amount_cents: int
+    vendor: str | None = None
+    sku: str | None = None
+    description: str | None = None
+    task_id: uuid.UUID | None = None
+    created_at: datetime
+
+
+class AgentSpendOut(BaseModel):
+    agent_id: uuid.UUID | None
+    agent_name: str | None = None
+    agent_role: str | None = None
+    total_cents: int
+    entries: list[SpendEntryOut] = Field(default_factory=list)
+
+
 # ── Governance ───────────────────────────────────────────────────────────────
 class PolicyOut(ORMModel):
     id: uuid.UUID
@@ -175,6 +235,8 @@ class BreakerOut(ORMModel):
 
 class ReputationOut(ORMModel):
     agent_id: uuid.UUID
+    agent_name: str | None = None
+    agent_role: str | None = None
     trust: float
     accuracy: float
     roi: float
@@ -185,11 +247,44 @@ class ReputationOut(ORMModel):
 class DecisionOut(ORMModel):
     id: uuid.UUID
     agent_id: uuid.UUID | None
+    agent_name: str | None = None
+    agent_role: str | None = None
     task_id: uuid.UUID | None
     kind: str
     summary: str
     status: str
     created_at: datetime
+    # Bigger-picture context, attached at read time (see decisions API _to_out).
+    task_goal: str | None = None  # the ask that triggered this decision
+    initiative: str | None = None  # the higher-level initiative it belongs to
+    objective_title: str | None = None  # best-effort related objective
+
+
+class DecisionChatTurn(BaseModel):
+    """One turn of a founder↔agent decision discussion."""
+
+    who: str  # "you" (founder) | "agent"
+    text: str
+
+
+class DecisionChatRequest(BaseModel):
+    message: str = Field(min_length=1)
+
+
+class DecisionChatThread(BaseModel):
+    """The persisted discussion thread for a decision, oldest turn first."""
+
+    thread: list[DecisionChatTurn] = Field(default_factory=list)
+
+
+class DecisionChatResult(DecisionChatThread):
+    """A chat reply plus the full updated thread (the server is the source of truth)."""
+
+    answer: str
+
+
+class DecisionResolveRequest(BaseModel):
+    note: str | None = None
 
 
 # ── Memory / Copilot ─────────────────────────────────────────────────────────
@@ -226,3 +321,7 @@ class AgentListingOut(ORMModel):
 
 class HireAgentRequest(BaseModel):
     listing_id: uuid.UUID
+
+
+# Resolve the forward reference from TaskDetailOut -> DecisionOut.
+TaskDetailOut.model_rebuild()

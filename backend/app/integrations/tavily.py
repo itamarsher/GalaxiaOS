@@ -31,6 +31,14 @@ class TavilyWebSearch:
         self._api_key = api_key if api_key is not None else settings.tavily_api_key
         self._search_depth = search_depth or settings.tavily_search_depth
         self._timeout = timeout if timeout is not None else settings.web_search_timeout_seconds
+        # Per-call billing telemetry from the most recent :meth:`search`. Tavily
+        # reports consumption in *API credits* (basic=1, advanced=2), not dollars,
+        # so the CostMeter reconciles the actual charge as
+        # ``credits × web_search_cost_cents``. ``None`` until a real search runs
+        # (or if the provider omits the ``usage`` block). A fresh adapter is built
+        # per call (see ``_resolve_web_search``), so this is not shared state.
+        self.last_usage_credits: int | None = None
+        self.last_request_id: str | None = None
 
     def _require_key(self) -> str:
         if not self._api_key:
@@ -46,6 +54,9 @@ class TavilyWebSearch:
             "query": query,
             "max_results": max(1, max_results),
             "search_depth": self._search_depth,
+            # Ask Tavily to report the credits this exact request consumed so the
+            # meter charges measured usage rather than a depth-based assumption.
+            "include_usage": True,
         }
         try:
             async with httpx.AsyncClient(timeout=self._timeout) as client:
@@ -56,6 +67,8 @@ class TavilyWebSearch:
             raise WebSearchError(f"Tavily request failed: {exc}") from exc
         except ValueError as exc:  # non-JSON body
             raise WebSearchError(f"Tavily returned non-JSON: {exc}") from exc
+        self.last_usage_credits = self._usage_credits(body)
+        self.last_request_id = body.get("request_id")
         return self._parse(body)
 
     @staticmethod
@@ -72,3 +85,17 @@ class TavilyWebSearch:
                 )
             )
         return results
+
+    @staticmethod
+    def _usage_credits(body: dict) -> int | None:
+        """Extract ``usage.credits`` (API credits consumed) from a Tavily body.
+
+        Present only when the request set ``include_usage``; returns ``None`` if
+        the block is absent or malformed so callers can fall back to the
+        depth-based estimate rather than mis-charging.
+        """
+        usage = body.get("usage")
+        if not isinstance(usage, dict):
+            return None
+        credits = usage.get("credits")
+        return credits if isinstance(credits, int) else None

@@ -15,4 +15,4 @@ class RuntimeContext:
     session_factory: async_sessionmaker[AsyncSession]
     cost_meter: CostMeter
     provider: LLMProvider
-    enqueue_task: callable  # async (task_id) -> None  (arq enqueue)
+    enqueue_task: callable  # async (task_id, *, delay_seconds=0) -> None  (arq enqueue)

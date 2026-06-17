@@ -55,6 +55,12 @@ async def run_business_cycle(ctx: dict) -> dict:
     for company_id in await _active_company_ids():
         async with SessionLocal() as db:
             await set_tenant(db, company_id)
+            # Skip companies that are already busy — continuous mode keeps a run
+            # going, so the daily cron is only a fallback for idle orgs and must
+            # not stack a second, parallel run on top of a live one.
+            if await orchestrator.has_active_tasks(db, company_id):
+                count += 1
+                continue
             task_id = await orchestrator.create_scheduled_run(db, company_id)
             await db.commit()
         count += 1

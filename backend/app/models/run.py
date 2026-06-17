@@ -50,6 +50,12 @@ class Task(Base, PKMixin, TenantMixin, TimestampMixin):
     goal: Mapped[str] = mapped_column(Text, nullable=False)
     input: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     output: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    # Ephemeral working memory: the agent loop's in-flight conversation,
+    # checkpointed after every step so a task resumes where it left off after a
+    # restart instead of re-running from scratch. Cleared to NULL when the task
+    # reaches a terminal state, so this column only ever holds live tasks' turns
+    # and does not accumulate a permanent message log.
+    transcript: Mapped[list | None] = mapped_column(JSONB, nullable=True)
     status: Mapped[TaskStatus] = mapped_column(
         Enum(TaskStatus, native_enum=False, length=20), default=TaskStatus.queued, nullable=False
     )

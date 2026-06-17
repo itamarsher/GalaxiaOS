@@ -7,8 +7,9 @@ import contextlib
 import logging
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from sqlalchemy import text
 
 from app.api import (
@@ -18,6 +19,7 @@ from app.api import (
     companies,
     copilot,
     decisions,
+    dev,  # TEMP dev-only endpoints — remove before launch
     events,
     governance,
     marketplace,
@@ -27,7 +29,9 @@ from app.api import (
 from app.config import settings
 from app.db import SessionLocal
 from app.observability import RequestContextMiddleware, configure_logging
+from app.providers.base import ProviderError
 from app.ratelimit import RateLimitMiddleware, build_limiter
+from app.services.budget import BudgetExceeded
 
 
 @asynccontextmanager
@@ -66,18 +70,36 @@ def create_app() -> FastAPI:
         lifespan=_lifespan,
     )
 
-    # Middleware added later is outermost: request-context wraps everything (so
-    # rate-limit rejections and CORS are logged with a request id).
-    app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True,
-                       allow_methods=["*"], allow_headers=["*"])
+    # Middleware added later is outermost. Order (inner → outer):
+    # rate-limit → request-context → CORS. CORS is outermost so that *every*
+    # response carries the Access-Control-* headers — including the rate
+    # limiter's 429 rejections and error responses. If CORS sat inside the
+    # rate limiter, a rejected request would come back with no CORS header and
+    # the browser would mask the real status with an opaque
+    # "No 'Access-Control-Allow-Origin' header is present" error. Request
+    # context still wraps the rate limiter, so rejections are logged with a
+    # request id.
     if settings.rate_limit_enabled:
         app.add_middleware(RateLimitMiddleware, limiter=build_limiter())
     app.add_middleware(RequestContextMiddleware)
+    cors_origins = settings.cors_allow_origins
+    allow_all_origins = "*" in cors_origins
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=cors_origins,
+        # A wildcard origin can't be combined with credentials per the CORS
+        # spec, and the frontend authenticates with a bearer token rather than
+        # cookies — so only enable credentials for an explicit allowlist.
+        allow_credentials=not allow_all_origins,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
     app.include_router(auth.router)
     app.include_router(onboarding.router)
     app.include_router(apikeys.router)
     app.include_router(companies.router)
+    app.include_router(companies.mine_router)
     app.include_router(budget.router)
     app.include_router(governance.router)
     app.include_router(metrics.router)
@@ -86,6 +108,32 @@ def create_app() -> FastAPI:
     app.include_router(events.router)
     app.include_router(marketplace.catalog_router)
     app.include_router(marketplace.company_router)
+    app.include_router(dev.router)  # TEMP dev-only endpoints — remove before launch
+
+    @app.exception_handler(ProviderError)
+    async def _provider_error(request: Request, exc: ProviderError) -> JSONResponse:
+        """Surface upstream LLM-provider failures as a clear 502 instead of a
+        bare 500. Registered handlers run inside the CORS layer, so the response
+        carries the Access-Control-* headers."""
+        return JSONResponse(
+            {"detail": str(exc), "kind": exc.kind},
+            status_code=status.HTTP_502_BAD_GATEWAY,
+        )
+
+    @app.exception_handler(BudgetExceeded)
+    async def _budget_exceeded(request: Request, exc: BudgetExceeded) -> JSONResponse:
+        """A reservation over the company/agent budget is an expected business
+        condition (e.g. generating an org with too small a budget), not a server
+        fault — return 402 with the shortfall instead of a 500."""
+        return JSONResponse(
+            {
+                "detail": str(exc),
+                "scope": exc.scope,
+                "requested_cents": exc.requested_cents,
+                "available_cents": exc.available_cents,
+            },
+            status_code=status.HTTP_402_PAYMENT_REQUIRED,
+        )
 
     @app.get("/health", tags=["meta"])
     async def health() -> dict:

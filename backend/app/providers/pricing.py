@@ -34,3 +34,28 @@ def price_for(provider: str, model: str) -> Price:
     if provider == "openai":
         return OPENAI_PRICES.get(model, OPENAI_DEFAULT_PRICE)
     return DEFAULT_PRICE
+
+
+# Maximum output tokens (per response) each model supports. Used to size
+# generous ``max_tokens`` ceilings without exceeding what the model accepts.
+ANTHROPIC_MAX_OUTPUT_TOKENS: dict[str, int] = {
+    "claude-haiku-4-5": 64_000,
+    "claude-sonnet-4-6": 64_000,
+    "claude-opus-4-8": 128_000,
+}
+
+OPENAI_MAX_OUTPUT_TOKENS: dict[str, int] = {
+    "gpt-4o": 16_384,
+    "gpt-4o-mini": 16_384,
+}
+
+# Conservative fallback for an unknown model id.
+DEFAULT_MAX_OUTPUT_TOKENS = 16_384
+
+
+def max_output_tokens(provider: str, model: str) -> int:
+    if provider == "anthropic":
+        return ANTHROPIC_MAX_OUTPUT_TOKENS.get(model, DEFAULT_MAX_OUTPUT_TOKENS)
+    if provider == "openai":
+        return OPENAI_MAX_OUTPUT_TOKENS.get(model, DEFAULT_MAX_OUTPUT_TOKENS)
+    return DEFAULT_MAX_OUTPUT_TOKENS
