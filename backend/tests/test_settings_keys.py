@@ -1,0 +1,84 @@
+"""Per-company GitHub token + key management (Settings / onboarding optional key).
+
+The GitHub token is stored like any BYOK key (provider="github", envelope
+encrypted). When present, the platform agent files real GitHub issues; otherwise
+it falls back to the configured default tracker. Founders can also revoke keys.
+"""
+
+from __future__ import annotations
+
+import base64
+import os
+
+from app.integrations.issues import GitHubIssueTracker, SimulatedIssueTracker
+from app.runtime.tools.platform import GITHUB_PROVIDER, _resolve_issue_tracker
+from app.services import apikeys
+from tests.conftest import requires_db
+
+
+def _set_master_key() -> None:
+    from app.config import settings as app_settings
+
+    app_settings.master_key = base64.urlsafe_b64encode(os.urandom(32)).decode()
+
+
+@requires_db
+async def test_issue_tracker_defaults_to_simulated_without_github_key(
+    session_factory, company_with_budget
+):
+    _set_master_key()
+    async with session_factory() as db:
+        tracker = await _resolve_issue_tracker(db, company_with_budget)
+    # No github key stored -> the configured default (offline simulated).
+    assert isinstance(tracker, SimulatedIssueTracker)
+
+
+@requires_db
+async def test_issue_tracker_uses_github_when_company_key_set(
+    session_factory, company_with_budget
+):
+    _set_master_key()
+    async with session_factory() as db:
+        await apikeys.store_key(
+            db, company_id=company_with_budget, provider=GITHUB_PROVIDER, plaintext="ghp_testtoken"
+        )
+        await db.commit()
+    async with session_factory() as db:
+        tracker = await _resolve_issue_tracker(db, company_with_budget)
+    assert isinstance(tracker, GitHubIssueTracker)
+
+
+@requires_db
+async def test_github_key_does_not_disturb_llm_provider_resolution(
+    session_factory, company_with_budget
+):
+    """A github key must not be picked as the LLM provider key."""
+    _set_master_key()
+    async with session_factory() as db:
+        await apikeys.store_key(
+            db, company_id=company_with_budget, provider=GITHUB_PROVIDER, plaintext="ghp_testtoken"
+        )
+        await db.commit()
+        # Only a github key exists -> no usable LLM provider.
+        assert await apikeys.resolve_provider(db, company_id=company_with_budget) is None
+
+
+@requires_db
+async def test_revoke_key_removes_it_from_active_list(session_factory, company_with_budget):
+    _set_master_key()
+    async with session_factory() as db:
+        key = await apikeys.store_key(
+            db, company_id=company_with_budget, provider="anthropic", plaintext="sk-ant-xxxx"
+        )
+        await db.commit()
+        key_id = key.id
+
+    async with session_factory() as db:
+        assert await apikeys.revoke_key(db, company_id=company_with_budget, key_id=key_id) is True
+        await db.commit()
+
+    async with session_factory() as db:
+        active = await apikeys.list_keys(db, company_id=company_with_budget)
+        assert all(k.id != key_id for k in active)
+        # Revoking something that isn't there is a no-op (False), not an error.
+        assert await apikeys.revoke_key(db, company_id=company_with_budget, key_id=key_id) is False

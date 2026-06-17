@@ -26,6 +26,7 @@ async function req<T>(path: string, init: RequestInit = {}): Promise<T> {
 // ── Types ────────────────────────────────────────────────────────────────────
 export interface TokenResponse { access_token: string; token_type: string }
 export interface Company { id: string; name: string; status: string; mission_id: string | null }
+export interface ApiKey { id: string; provider: string; key_fingerprint: string; status: string }
 export interface Agent {
   id: string; role: string; name: string; autonomy_level: string;
   status: string; monthly_budget_cents: number | null; reports_to_agent_id: string | null;
@@ -110,10 +111,13 @@ export const api = {
     }),
 
   addApiKey: (companyId: string, apiKey: string, provider = "anthropic") =>
-    req<unknown>(`/companies/${companyId}/api-keys`, {
+    req<ApiKey>(`/companies/${companyId}/api-keys`, {
       method: "POST",
       body: JSON.stringify({ provider, api_key: apiKey }),
     }),
+  apiKeys: (companyId: string) => req<ApiKey[]>(`/companies/${companyId}/api-keys`),
+  deleteApiKey: (companyId: string, keyId: string) =>
+    req<void>(`/companies/${companyId}/api-keys/${keyId}`, { method: "DELETE" }),
 
   generate: (companyId: string) => req<Preview>(`/onboarding/${companyId}/generate`, { method: "POST" }),
   generateStatus: (companyId: string) =>

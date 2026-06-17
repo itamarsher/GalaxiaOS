@@ -19,6 +19,7 @@ export default function Home() {
   const [budget, setBudget] = useState("500");
   const [companyId, setCompanyId] = useState<string | null>(null);
   const [apiKey, setApiKey] = useState("");
+  const [githubKey, setGithubKey] = useState("");
   const [preview, setPreview] = useState<Preview | null>(null);
 
   // Generation telemetry (task 1).
@@ -56,6 +57,8 @@ export default function Home() {
     guard(async () => {
       if (!companyId) return;
       await api.addApiKey(companyId, apiKey);
+      // Optional: a GitHub token lets the platform agent file real issues.
+      if (githubKey.trim()) await api.addApiKey(companyId, githubKey.trim(), "github");
       setProgress({ phase: "queued", pct: 0, message: "Starting…", status: "running", error: null, events: [] });
       setStep("generating");
       const poll = setInterval(async () => {
@@ -141,6 +144,12 @@ export default function Home() {
           <p className="muted">Your Claude API key is encrypted at rest. Only a fingerprint is ever shown.</p>
           <label>Anthropic API key</label>
           <input type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)} placeholder="sk-ant-..." />
+          <label>GitHub token <span className="muted">(optional)</span></label>
+          <input type="password" value={githubKey} onChange={(e) => setGithubKey(e.target.value)} placeholder="ghp_… — lets the platform agent file real issues" />
+          <p className="muted" style={{ fontSize: 12, marginTop: 4 }}>
+            Optional. Without it, bug/capability requests are filed to an offline tracker.
+            You can add or change this later in Settings.
+          </p>
           <button disabled={busy || !apiKey} onClick={submitKeyAndGenerate}>
             Generate organization
           </button>

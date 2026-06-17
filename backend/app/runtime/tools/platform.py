@@ -19,12 +19,37 @@ from __future__ import annotations
 
 from sqlalchemy import select
 
-from app.integrations.issues import IssueTrackerError, get_issue_tracker
+from app.config import settings
+from app.integrations.issues import (
+    GitHubIssueTracker,
+    IssueTrackerError,
+    get_issue_tracker,
+)
 from app.models import Agent, Task
 from app.models.enums import AgentRole, MemoryType
 from app.providers.base import ToolSpec
 from app.runtime.tools.base import ToolOutcome
 from app.runtime.tools.core import _spawn_child
+from app.services import apikeys
+
+#: Provider name under which a company's GitHub token is stored (BYOK).
+GITHUB_PROVIDER = "github"
+
+
+async def _resolve_issue_tracker(db, company_id):
+    """Use the company's own GitHub token if it set one, else the global default.
+
+    A founder can attach a GitHub token per company (in onboarding or Settings);
+    when present we file real issues against ``settings.github_repo``. Without one
+    we fall back to the configured default tracker (offline simulated unless the
+    deployment set a global GitHub token).
+    """
+    token = await apikeys.get_plaintext_key(
+        db, company_id=company_id, provider=GITHUB_PROVIDER
+    )
+    if token:
+        return GitHubIssueTracker(token, repo=settings.github_repo)
+    return get_issue_tracker()
 
 SPECS: list[ToolSpec] = [
     ToolSpec(
@@ -182,7 +207,8 @@ async def _open_issue(db, ctx, *, agent: Agent, task: Task, args: dict) -> ToolO
     body = str(args["body"]).strip()
     labels = [str(x) for x in (args.get("labels") or []) if str(x).strip()]
     try:
-        result = await get_issue_tracker().open_issue(title=title, body=body, labels=labels)
+        tracker = await _resolve_issue_tracker(db, task.company_id)
+        result = await tracker.open_issue(title=title, body=body, labels=labels)
     except IssueTrackerError as exc:
         return ToolOutcome(observation=f"could not open issue: {exc}", is_error=True)
 
