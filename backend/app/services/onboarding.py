@@ -439,7 +439,7 @@ async def generate(db: AsyncSession, *, company: Company) -> dict:
     budget = await db.scalar(select(Budget).where(Budget.company_id == company.id))
     meter = CostMeter(SessionLocal)
     set_progress(
-        company.id, phase="planning", pct=10, message="Reading your mission and budget"
+        company.id, phase="planning", pct=10, message="Processing…"
     )
 
     # ── LLM #1: mission → plan ────────────────────────────────────────────────
