@@ -2,14 +2,14 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { api, fmtUsd, type GenerationProgress, type Preview } from "@/lib/api";
+import { api, fmtUsd, type Company, type GenerationProgress, type Preview } from "@/lib/api";
 
-type Step = "auth" | "mission" | "key" | "generating" | "review";
+type Step = "loading" | "auth" | "businesses" | "mission" | "key" | "generating" | "review";
 interface ChatTurn { who: "user" | "bot"; text: string }
 
 export default function Home() {
   const router = useRouter();
-  const [step, setStep] = useState<Step>("auth");
+  const [step, setStep] = useState<Step>("loading");
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -22,10 +22,13 @@ export default function Home() {
   const [githubKey, setGithubKey] = useState("");
   const [preview, setPreview] = useState<Preview | null>(null);
 
-  // Generation telemetry (task 1).
+  // Multi-business: a user can run several companies, listed after auth.
+  const [businesses, setBusinesses] = useState<Company[]>([]);
+
+  // Generation telemetry.
   const [progress, setProgress] = useState<GenerationProgress | null>(null);
 
-  // Refinement chat (task 2).
+  // Refinement chat.
   const [chat, setChat] = useState<ChatTurn[]>([]);
   const [chatInput, setChatInput] = useState("");
   const [refining, setRefining] = useState(false);
@@ -36,21 +39,54 @@ export default function Home() {
     finally { setBusy(false); }
   }
 
+  // After authentication, route to the right place: a fresh account starts
+  // onboarding; an account with businesses lands on its list. When we got here
+  // via the dev auto-login and a business already exists, jump straight to its
+  // dashboard (fast iteration — no clicks).
+  async function afterAuth(autoLoggedIn: boolean) {
+    const list = await api.myCompanies();
+    setBusinesses(list);
+    if (autoLoggedIn && list.length > 0) {
+      router.push(`/c/${list[0].id}`);
+      return;
+    }
+    setStep(list.length > 0 ? "businesses" : "mission");
+  }
+
+  // Bootstrap: use an existing session; else try the dev default account
+  // (auto-login); else fall back to the normal auth screen.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        if (api.hasToken()) { await afterAuth(false); return; }
+        const status = await api.devStatus().catch(() => ({ enabled: false }));
+        if (!cancelled && status.enabled) {
+          const res = await api.defaultLogin();
+          api.setToken(res.access_token);
+          await afterAuth(true);
+          return;
+        }
+      } catch { /* fall through to auth */ }
+      if (!cancelled) setStep("auth");
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const doAuth = (signup: boolean) =>
     guard(async () => {
       const res = signup ? await api.signup(email, password) : await api.login(email, password);
       api.setToken(res.access_token);
-      setStep("mission");
+      await afterAuth(false);
     });
 
-  // TEMP dev tool — remove before launch. Wipes every account and all its data.
-  const wipeAllAccounts = () =>
-    guard(async () => {
-      if (!window.confirm("DELETE ALL ACCOUNTS and every company/agent/task they own? This cannot be undone.")) return;
-      const res = await api.deleteAllAccounts();
-      api.logout();
-      alert(`Deleted ${res.deleted_accounts} account(s). The database is now empty.`);
-    });
+  const newBusiness = () => {
+    // Reset the onboarding wizard so creating an Nth business starts clean.
+    setCompanyId(null); setApiKey(""); setGithubKey(""); setPreview(null);
+    setChat([]); setProgress(null); setMission(""); setBudget("500"); setErr(null);
+    setStep("mission");
+  };
 
   const startOnboarding = () =>
     guard(async () => {
@@ -59,9 +95,7 @@ export default function Home() {
       setStep("key");
     });
 
-  // Kick off generation and poll for progress telemetry in parallel. The POST is
-  // a single long request; while it runs we poll the status endpoint so the
-  // founder sees a live spinner with real phases instead of a frozen button.
+  // Kick off generation and poll for progress telemetry in parallel.
   const submitKeyAndGenerate = () =>
     guard(async () => {
       if (!companyId) return;
@@ -93,7 +127,6 @@ export default function Home() {
     setRefining(true);
     try {
       const res = await api.refineOnboarding(companyId, q);
-      // Refinement doesn't recompute the cost estimate, so keep the prior one.
       setPreview((prev) => ({
         ...res.preview,
         cost_estimate_cents: res.preview.cost_estimate_cents ?? prev?.cost_estimate_cents ?? null,
@@ -118,6 +151,14 @@ export default function Home() {
       <h1>ABOS</h1>
       <p className="sub">What&apos;s your mission? What&apos;s your budget? Launch.</p>
 
+      {step === "loading" && (
+        <div className="card">
+          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+            <span className="spinner" /> <span className="muted">Loading…</span>
+          </div>
+        </div>
+      )}
+
       {step === "auth" && (
         <div className="card">
           <div className="step">Step 0 · Account</div>
@@ -129,22 +170,39 @@ export default function Home() {
             <button disabled={busy} onClick={() => doAuth(true)}>Sign up</button>
             <button className="ghost" disabled={busy} onClick={() => doAuth(false)}>Log in</button>
           </div>
+        </div>
+      )}
 
-          {/* TEMP DEV TOOL — remove before launch (also: backend app/api/dev.py + ABOS_DEV_TOOLS_ENABLED). */}
-          <div style={{ marginTop: 20, paddingTop: 14, borderTop: "1px dashed var(--border)" }}>
-            <p className="muted" style={{ fontSize: 12, margin: "0 0 8px" }}>
-              ⚠️ Dev only — wipes the entire database. Remove before going live.
-            </p>
-            <button className="ghost danger" disabled={busy} onClick={wipeAllAccounts}>
-              Delete ALL accounts
-            </button>
+      {step === "businesses" && (
+        <div className="card">
+          <div className="step" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <span>Your businesses</span>
+            <button style={{ marginTop: 0, padding: "6px 12px", fontSize: 13 }} onClick={newBusiness}>+ New business</button>
           </div>
+          <p className="muted" style={{ fontSize: 13 }}>Run as many companies as you like from one account.</p>
+          {businesses.map((b) => (
+            <button
+              key={b.id}
+              className="ghost"
+              style={{ display: "flex", justifyContent: "space-between", width: "100%", marginTop: 8 }}
+              onClick={() => router.push(`/c/${b.id}`)}
+            >
+              <span>{b.name}</span>
+              <span className={`status ${b.status}`}>{b.status}</span>
+            </button>
+          ))}
         </div>
       )}
 
       {step === "mission" && (
         <div className="card">
-          <div className="step">Step 1 · Mission &amp; Budget</div>
+          <div className="step" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <span>Step 1 · Mission &amp; Budget</span>
+            {businesses.length > 0 && (
+              <button className="ghost" style={{ marginTop: 0, padding: "6px 12px", fontSize: 12 }}
+                onClick={() => setStep("businesses")}>← Your businesses</button>
+            )}
+          </div>
           <label>Mission</label>
           <textarea
             value={mission}

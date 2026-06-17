@@ -93,8 +93,12 @@ export const api = {
   signup: (email: string, password: string) =>
     req<TokenResponse>("/auth/signup", { method: "POST", body: JSON.stringify({ email, password }) }),
 
-  // TEMP dev tool — remove before launch (see backend app/api/dev.py).
-  deleteAllAccounts: () =>
+  myCompanies: () => req<Company[]>("/companies"),
+
+  // TEMP dev tools — remove before launch (see backend app/api/dev.py).
+  devStatus: () => req<{ enabled: boolean; default_email: string | null }>("/dev/status"),
+  defaultLogin: () => req<TokenResponse>("/dev/default-login", { method: "POST" }),
+  deleteOtherAccounts: () =>
     req<{ deleted_accounts: number }>("/dev/delete-all-accounts", { method: "POST" }),
 
   login: async (email: string, password: string) => {
