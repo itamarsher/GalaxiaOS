@@ -55,6 +55,7 @@ export interface TaskDetail extends Task {
   input: Record<string, unknown> | null; children: Task[];
   pending_decision: Decision | null;
 }
+export interface TaskTranscript { task_id: string; status: string; lines: string[] }
 export interface SpendEntry {
   id: string; category: string; amount_cents: number;
   vendor: string | null; sku: string | null; description: string | null;
@@ -157,6 +158,8 @@ export const api = {
   tasks: (companyId: string) => req<Task[]>(`/companies/${companyId}/tasks`),
   task: (companyId: string, taskId: string) =>
     req<TaskDetail>(`/companies/${companyId}/tasks/${taskId}`),
+  taskTranscript: (companyId: string, taskId: string) =>
+    req<TaskTranscript>(`/companies/${companyId}/tasks/${taskId}/transcript`),
 
   policies: (companyId: string) => req<Policy[]>(`/companies/${companyId}/policies`),
   breakers: (companyId: string) => req<Breaker[]>(`/companies/${companyId}/circuit-breakers`),

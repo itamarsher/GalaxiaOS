@@ -178,6 +178,14 @@ class TaskDetailOut(TaskOut):
     pending_decision: "DecisionOut | None" = None
 
 
+class TaskTranscriptOut(BaseModel):
+    """A live tail of a running task's working memory (last N rendered lines)."""
+
+    task_id: uuid.UUID
+    status: str
+    lines: list[str] = Field(default_factory=list)
+
+
 # ── Budget detail ────────────────────────────────────────────────────────────
 class SpendEntryOut(ORMModel):
     id: uuid.UUID

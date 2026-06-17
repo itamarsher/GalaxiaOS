@@ -12,7 +12,7 @@ from types import SimpleNamespace
 from app.config import settings
 from app.providers.base import Message, TextBlock, ToolResultBlock, ToolUseBlock
 from app.runtime.backends.native import NativeBackend
-from app.runtime.transcript import dump_messages, load_messages
+from app.runtime.transcript import dump_messages, load_messages, transcript_lines
 
 
 def _sample_messages() -> list[Message]:
@@ -95,3 +95,38 @@ def test_resume_disabled_seeds_fresh(monkeypatch) -> None:
 
     assert len(messages) == 1
     assert messages[0].content == "Begin: launch"
+
+
+def test_transcript_lines_renders_chat_log() -> None:
+    lines = transcript_lines(dump_messages(_sample_messages()))
+
+    assert lines == [
+        "you: Begin: launch the company",
+        "agent: Planning the launch.",
+        'agent → record_metric({"name": "signups", "value": 3})',
+        "tool ← ok",
+    ]
+
+
+def test_transcript_lines_marks_errors() -> None:
+    messages = [
+        Message(
+            role="user",
+            content=[ToolResultBlock(tool_use_id="x", content="boom", is_error=True)],
+        )
+    ]
+    assert transcript_lines(dump_messages(messages)) == ["tool ✗ boom"]
+
+
+def test_transcript_lines_keeps_only_the_last_n() -> None:
+    messages = [Message(role="assistant", content=[TextBlock(text=f"step {i}")]) for i in range(80)]
+    lines = transcript_lines(dump_messages(messages), limit=50)
+
+    assert len(lines) == 50
+    assert lines[0] == "agent: step 30"
+    assert lines[-1] == "agent: step 79"
+
+
+def test_transcript_lines_empty_when_no_transcript() -> None:
+    assert transcript_lines(None) == []
+    assert transcript_lines([]) == []

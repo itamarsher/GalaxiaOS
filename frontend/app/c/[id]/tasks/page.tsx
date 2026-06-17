@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useParams } from "next/navigation";
 import { api, fmtUsd, statusLabel, type Task, type TaskDetail } from "@/lib/api";
 import { usePoll } from "@/lib/useApi";
@@ -150,6 +150,8 @@ function TaskDrawer({ companyId, taskId, onClose }: { companyId: string; taskId:
             <div className="kv"><span>Cost</span><span>{fmtUsd(task.cost_cents)}</span></div>
             <div className="kv"><span>Started</span><span>{new Date(task.created_at).toLocaleString()}</span></div>
 
+            <LiveActivity companyId={companyId} taskId={taskId} initialStatus={task.status} />
+
             <h4>Execution summary</h4>
             {summary ? <p style={{ margin: 0 }}>{summary}</p>
               : <p className="muted" style={{ margin: 0 }}>No summary yet — this task is still in progress.</p>}
@@ -173,5 +175,48 @@ function TaskDrawer({ companyId, taskId, onClose }: { companyId: string; taskId:
         )}
       </div>
     </div>
+  );
+}
+
+const TERMINAL = ["done", "failed", "blocked"];
+
+/** Live tail of the agent's working memory: polls the transcript every few
+ *  seconds while the task is in flight, renders the last 50 chat lines, and
+ *  auto-scrolls to the newest. Polling stops once the task reaches a terminal
+ *  state (whose transcript the backend clears). */
+function LiveActivity({ companyId, taskId, initialStatus }: { companyId: string; taskId: string; initialStatus: string }) {
+  const [status, setStatus] = useState(initialStatus);
+  const live = !TERMINAL.includes(status);
+  const poll = usePoll(() => api.taskTranscript(companyId, taskId), live ? 2500 : 0, [companyId, taskId, live]);
+
+  useEffect(() => {
+    if (poll.data?.status) setStatus(poll.data.status);
+  }, [poll.data?.status]);
+
+  const lines = poll.data?.lines ?? [];
+  const logRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    const el = logRef.current;
+    if (el) el.scrollTop = el.scrollHeight; // keep the latest line in view
+  }, [lines.length]);
+
+  return (
+    <>
+      <h4 style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        Live activity
+        {live && <span className="live-dot">● live</span>}
+      </h4>
+      {lines.length > 0 ? (
+        <div className="tasklog" ref={logRef}>
+          {lines.map((ln, i) => (
+            <div key={i} className={ln.startsWith("tool ✗") ? "toolerr" : undefined}>{ln}</div>
+          ))}
+        </div>
+      ) : live ? (
+        <p className="muted" style={{ margin: 0 }}>Waiting for the agent’s first step…</p>
+      ) : (
+        <p className="muted" style={{ margin: 0 }}>The live working log is cleared once a task finishes — see the result below.</p>
+      )}
+    </>
   );
 }

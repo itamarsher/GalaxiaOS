@@ -10,6 +10,7 @@ from sqlalchemy import select
 from app.deps import CompanyDep, CurrentUser, DbDep
 from app.models import Agent, AgentEdge, Company, DecisionRequest, Membership, MemoryEntry, Task
 from app.models.enums import AgentStatus, DecisionStatus, TaskStatus
+from app.runtime.transcript import transcript_lines
 from app.schemas import (
     AgentEdgeOut,
     AgentOut,
@@ -19,6 +20,7 @@ from app.schemas import (
     OrgChartOut,
     TaskDetailOut,
     TaskOut,
+    TaskTranscriptOut,
 )
 
 router = APIRouter(prefix="/companies/{company_id}", tags=["companies"])
@@ -127,6 +129,27 @@ async def get_task(company: CompanyDep, task_id: uuid.UUID, db: DbDep):
         decision_out.agent_name = agent.name if agent else None
         detail.pending_decision = decision_out
     return detail
+
+
+@router.get("/tasks/{task_id}/transcript", response_model=TaskTranscriptOut)
+async def get_task_transcript(company: CompanyDep, task_id: uuid.UUID, db: DbDep):
+    """Live tail of a running task's working memory — the last 50 rendered lines.
+
+    The transcript is the agent's in-flight conversation, checkpointed each step
+    and cleared when the task finishes (see :mod:`app.runtime.backends.native`).
+    So this streams the agent's progress while it works and returns an empty list
+    once the task is done — the result then lives on the task detail itself.
+    """
+    task = await db.scalar(
+        select(Task).where(Task.company_id == company.id, Task.id == task_id)
+    )
+    if task is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Task not found")
+    return TaskTranscriptOut(
+        task_id=task.id,
+        status=task.status.value,
+        lines=transcript_lines(task.transcript, limit=50),
+    )
 
 
 @router.get("/memory", response_model=list[MemoryOut])

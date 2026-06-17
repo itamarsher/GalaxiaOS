@@ -268,6 +268,16 @@ tr.clickable:hover td { background: var(--panel-2); }
   font-size: 12px; background: #0c111c; border: 1px solid var(--border);
   border-radius: var(--radius-sm); padding: 12px; margin: 6px 0 0; line-height: 1.5;
 }
+/* Live working-memory tail in the task drawer: a scrolling chat log. */
+.tasklog {
+  max-height: 220px; overflow-y: auto; margin: 6px 0 0;
+  background: #0c111c; border: 1px solid var(--border); border-radius: var(--radius-sm);
+  padding: 10px 12px; font-family: ui-monospace, monospace; font-size: 12px; line-height: 1.6;
+}
+.tasklog > div { white-space: pre-wrap; word-break: break-word; }
+.tasklog > div.toolerr { color: var(--danger); }
+.live-dot { color: var(--good); font-size: 11px; font-weight: 600; }
+
 .danger { border-color: var(--danger); color: var(--danger); }
 .danger:hover { background: rgba(248, 113, 113, 0.1); filter: none; }
 .card.danger-zone { border-color: color-mix(in srgb, var(--danger) 40%, var(--border)); }
