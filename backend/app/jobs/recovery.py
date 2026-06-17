@@ -15,9 +15,10 @@ empty, and any task left mid-flight is orphaned:
 :func:`recover_pending_work` runs on worker startup. For each active company it
 resets orphaned ``running`` tasks back to ``queued``, re-enqueues all queued
 tasks (rebuilding the Redis queue), and re-arms the continuous loop for any
-healthy company that has gone fully idle. Enqueueing uses a deterministic job id
-(the task id), so re-enqueueing a task already present in Redis is deduped by arq
-and never double-runs.
+healthy company that has gone fully idle. Re-running a task that already ran once
+is expected here, so enqueueing does NOT pin a deterministic job id; double
+execution is instead prevented by ``run_task``'s status gate (it skips any task
+not in queued/waiting_approval and flips it to running before dispatch).
 """
 
 from __future__ import annotations
