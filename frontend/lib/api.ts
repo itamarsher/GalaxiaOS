@@ -34,9 +34,15 @@ export interface Agent {
 }
 export interface AgentEdge { from_agent_id: string; to_agent_id: string; relation: string }
 export interface Objective { id: string; title: string; rationale: string | null; priority: number; status: string }
+export interface InvestmentReview {
+  id: string; persona: string; stance: string; conviction: number;
+  headline: string; thesis: string;
+  strengths: string[] | null; risks: string[] | null; conditions: string[] | null;
+}
 export interface Preview {
   company: Company; objectives: Objective[];
   org: { agents: Agent[]; edges: AgentEdge[] }; cost_estimate_cents: number | null;
+  investment_reviews: InvestmentReview[];
 }
 export interface BudgetView {
   budget: { limit_cents: number; spent_cents: number; reserved_cents: number };

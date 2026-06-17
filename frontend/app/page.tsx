@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { api, fmtUsd, type Company, type GenerationProgress, type Preview } from "@/lib/api";
+import { api, fmtUsd, type Company, type GenerationProgress, type InvestmentReview, type Preview } from "@/lib/api";
 
 type Step = "loading" | "auth" | "businesses" | "mission" | "key" | "generating" | "review";
 interface ChatTurn { who: "user" | "bot"; text: string }
@@ -294,6 +294,21 @@ export default function Home() {
             </div>
           </div>
 
+          {preview.investment_reviews.length > 0 && (
+            <div className="card">
+              <div className="step">Investor review · Three takes on your venture</div>
+              <p className="muted">
+                Three agentic investors weighed your plan through different lenses. Use their
+                verdicts to refine above before you launch.
+              </p>
+              {[...preview.investment_reviews]
+                .sort((a, b) => personaOrder(a.persona) - personaOrder(b.persona))
+                .map((r) => (
+                  <InvestorReviewItem key={r.id} review={r} />
+                ))}
+            </div>
+          )}
+
           <div className="card">
             <div className="step">Step 4 · Approve launch</div>
             <p className="muted">The company will start operating autonomously under your budget and governance.</p>
@@ -303,6 +318,61 @@ export default function Home() {
       )}
 
       {err && <div className="err">{err}</div>}
+    </div>
+  );
+}
+
+// Investor review presentation. The backend persists three personas; we show
+// them in a stable order with a friendly label and a stance-coloured verdict.
+const PERSONA_META: Record<string, { label: string; order: number }> = {
+  small_business: { label: "Small-business investor", order: 0 },
+  startup: { label: "Venture (VC) investor", order: 1 },
+  devils_advocate: { label: "Devil's advocate", order: 2 },
+};
+const STANCE_LABEL: Record<string, string> = {
+  invest: "Invest",
+  conditional: "Conditional",
+  pass: "Pass",
+};
+
+function personaOrder(persona: string): number {
+  return PERSONA_META[persona]?.order ?? 99;
+}
+
+function InvestorReviewItem({ review }: { review: InvestmentReview }) {
+  const persona = PERSONA_META[review.persona]?.label ?? review.persona;
+  return (
+    <div className="review">
+      <div className="review-head">
+        <strong>{persona}</strong>
+        <span className={`stance ${review.stance}`}>
+          {STANCE_LABEL[review.stance] ?? review.stance} · {review.conviction}%
+        </span>
+      </div>
+      <div className="review-headline">{review.headline}</div>
+      {review.thesis && <p className="muted">{review.thesis}</p>}
+      {review.strengths && review.strengths.length > 0 && (
+        <ReviewList label="Strengths" items={review.strengths} />
+      )}
+      {review.risks && review.risks.length > 0 && (
+        <ReviewList label="Risks" items={review.risks} />
+      )}
+      {review.conditions && review.conditions.length > 0 && (
+        <ReviewList label="Conditions" items={review.conditions} />
+      )}
+    </div>
+  );
+}
+
+function ReviewList({ label, items }: { label: string; items: string[] }) {
+  return (
+    <div className="review-list">
+      <h4>{label}</h4>
+      <ul>
+        {items.map((item, i) => (
+          <li key={i}>{item}</li>
+        ))}
+      </ul>
     </div>
   );
 }
