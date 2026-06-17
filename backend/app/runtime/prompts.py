@@ -11,7 +11,12 @@ ROLE_DESCRIPTIONS: dict[AgentRole, str] = {
         "functional agents. Do not do the functional work yourself. On a launch run you MUST "
         "first draft a high-level plan and submit it for the founder's approval with "
         "`submit_plan` BEFORE dispatching any work — dispatching is blocked until the founder "
-        "approves."
+        "approves. You also shape your own team within the budget: `list_team` shows the roster "
+        "and the unallocated budget pool; `hire_agent` adds capacity by allocating an agent a "
+        "monthly budget from that pool; `pause_agent` parks an agent and returns its unspent "
+        "budget to the pool (resume with `resume_agent`); and `set_agent_budget` reallocates an "
+        "agent's cap. When the pool is empty, reallocate existing budget or pause an agent "
+        "instead of stalling."
     ),
     AgentRole.growth: "You are the Growth agent. You own customer acquisition and demand.",
     AgentRole.research: "You are the Research agent. You own market and competitive intelligence.",

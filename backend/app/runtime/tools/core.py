@@ -15,6 +15,7 @@ from app.integrations.websearch import WebSearchError, get_web_search
 from app.models import Agent, Budget, DecisionRequest, Task
 from app.models.enums import (
     AgentRole,
+    AgentStatus,
     BudgetPeriod,
     DecisionKind,
     DecisionStatus,
@@ -205,8 +206,18 @@ SPECS: list[ToolSpec] = [
 
 
 async def _spawn_child(db, ctx, parent: Task, agent: Agent, role: str, goal: str) -> None:
+    # Prefer an active agent of the role: paused agents are parked (their work is
+    # blocked anyway), and after the CEO hires extra capacity there may be more
+    # than one — dispatch to the earliest-created active one for determinism.
     child_agent = await db.scalar(
-        select(Agent).where(Agent.company_id == parent.company_id, Agent.role == AgentRole(role))
+        select(Agent)
+        .where(
+            Agent.company_id == parent.company_id,
+            Agent.role == AgentRole(role),
+            Agent.status == AgentStatus.active,
+        )
+        .order_by(Agent.created_at)
+        .limit(1)
     )
     if child_agent is None:
         return

@@ -13,7 +13,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Agent, Budget, SpendEntry
-from app.models.enums import SpendCategory
+from app.models.enums import AgentStatus, SpendCategory
 
 
 class BudgetExceeded(Exception):
@@ -33,13 +33,58 @@ async def get_active_budget(db: AsyncSession, company_id: uuid.UUID) -> Budget |
     return await db.scalar(select(Budget).where(Budget.company_id == company_id).limit(1))
 
 
-async def _agent_spent(db: AsyncSession, agent_id: uuid.UUID) -> int:
+async def agent_spent(db: AsyncSession, agent_id: uuid.UUID) -> int:
+    """An agent's committed + reserved spend so far (used to size its cap)."""
     total = await db.scalar(
         select(func.coalesce(func.sum(SpendEntry.amount_cents + SpendEntry.reserved_cents), 0)).where(
             SpendEntry.agent_id == agent_id
         )
     )
     return int(total or 0)
+
+
+# Backwards-compatible private alias (kept for in-module call sites).
+_agent_spent = agent_spent
+
+
+async def allocation_overview(db: AsyncSession, company_id: uuid.UUID) -> dict | None:
+    """The CEO's budget-allocation picture for org-management decisions.
+
+    The company's monthly :class:`Budget` is the hard ceiling. Each agent's
+    ``monthly_budget_cents`` is a soft cap reserving a slice of that ceiling for
+    its own spend. The *pool* is the headroom not yet earmarked by anyone —
+    what the CEO can hand to a newly hired (or resumed) agent::
+
+        pool = (limit - spent - reserved) - Σ active agents' unspent allocation
+
+    Only **active** agents earmark budget, so pausing an agent returns its
+    unspent allocation to the pool (and resuming re-claims it). Returns ``None``
+    when the company has no budget configured.
+    """
+    budget = await get_active_budget(db, company_id)
+    if budget is None:
+        return None
+    ledger_free = budget.limit_cents - budget.spent_cents - budget.reserved_cents
+    agents = (
+        await db.scalars(
+            select(Agent).where(
+                Agent.company_id == company_id, Agent.status == AgentStatus.active
+            )
+        )
+    ).all()
+    earmarked = 0
+    for agent in agents:
+        if agent.monthly_budget_cents is None:
+            continue
+        used = await _agent_spent(db, agent.id)
+        earmarked += max(0, agent.monthly_budget_cents - used)
+    return {
+        "limit_cents": int(budget.limit_cents),
+        "spent_cents": int(budget.spent_cents),
+        "reserved_cents": int(budget.reserved_cents),
+        "earmarked_cents": int(earmarked),
+        "pool_cents": int(ledger_free - earmarked),
+    }
 
 
 async def reserve(
