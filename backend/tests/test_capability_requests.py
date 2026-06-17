@@ -35,6 +35,27 @@ async def _add_platform_agent(db, company_id):
     return agent
 
 
+async def _make_agent_task(db, company_id):
+    """Persist an agent + run + running task (so spend entries' FKs resolve)."""
+    from app.models import AgentRun
+    from app.models.enums import RunStatus, RunTrigger, TaskStatus
+
+    agent = Agent(company_id=company_id, role=AgentRole.research, name="Research")
+    db.add(agent)
+    await db.flush()
+    run = AgentRun(company_id=company_id, trigger=RunTrigger.onboarding, status=RunStatus.running)
+    db.add(run)
+    await db.flush()
+    run.root_run_id = run.id
+    task = Task(
+        company_id=company_id, run_id=run.id, root_run_id=run.id,
+        agent_id=agent.id, goal="g", status=TaskStatus.running,
+    )
+    db.add(task)
+    await db.flush()
+    return agent, task
+
+
 # ── file_request service ──────────────────────────────────────────────────────
 
 
@@ -146,15 +167,16 @@ async def test_discuss_tool_call_files_request(session_factory, company_with_bud
 
 
 @requires_db
-async def test_web_search_defaults_to_simulated_without_key(session_factory, company_with_budget):
+async def test_web_search_defaults_to_simulated_and_is_free(session_factory, company_with_budget):
     _set_master_key()
     async with session_factory() as db:
-        search = await _resolve_web_search(db, company_with_budget)
+        search, cost = await _resolve_web_search(db, company_with_budget)
     assert isinstance(search, SimulatedWebSearch)
+    assert cost == 0  # offline simulated provider is never charged
 
 
 @requires_db
-async def test_web_search_uses_tavily_when_company_key_set(session_factory, company_with_budget):
+async def test_web_search_uses_tavily_with_a_cost_when_key_set(session_factory, company_with_budget):
     _set_master_key()
     async with session_factory() as db:
         await apikeys.store_key(
@@ -162,5 +184,47 @@ async def test_web_search_uses_tavily_when_company_key_set(session_factory, comp
         )
         await db.commit()
     async with session_factory() as db:
-        search = await _resolve_web_search(db, company_with_budget)
+        search, cost = await _resolve_web_search(db, company_with_budget)
     assert isinstance(search, TavilyWebSearch)
+    assert cost > 0  # a real provider has a metered cost
+
+
+@requires_db
+async def test_real_web_search_reserves_and_charges_the_budget(
+    session_factory, company_with_budget, monkeypatch
+):
+    """A paid web search goes through the CostMeter: budget is debited the cost."""
+    from app.integrations.websearch import SearchResult
+    from app.models import Budget, SpendEntry
+    from app.runtime import tools as tools_pkg
+    from app.runtime.cost_meter import CostMeter
+
+    class _FakeSearch:
+        async def search(self, query, *, max_results=5):
+            return [SearchResult(title="t", url="https://x", snippet="s")]
+
+    # Force a real (cost-bearing) provider without touching the network.
+    async def _fake_resolve(_db, _cid):
+        return _FakeSearch(), 5
+
+    monkeypatch.setattr("app.runtime.tools.core._resolve_web_search", _fake_resolve)
+
+    async with session_factory() as db:
+        agent, task = await _make_agent_task(db, company_with_budget)
+        await db.commit()
+
+    ctx = SimpleNamespace(cost_meter=CostMeter(session_factory))
+    async with session_factory() as db:
+        outcome = await tools_pkg.execute_tool(
+            db, ctx, agent=agent, task=task, name="web_search", args={"query": "pricing"}
+        )
+    assert outcome.is_error is False
+
+    async with session_factory() as db:
+        budget = await db.scalar(select(Budget).where(Budget.company_id == company_with_budget))
+        entry = await db.scalar(
+            select(SpendEntry).where(SpendEntry.company_id == company_with_budget)
+        )
+    assert budget.spent_cents == 5  # real final cost subtracted
+    assert budget.reserved_cents == 0  # reservation released after commit
+    assert entry is not None and entry.amount_cents == 5

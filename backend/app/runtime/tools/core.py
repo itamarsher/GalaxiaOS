@@ -447,13 +447,16 @@ async def _record_metric(db, ctx, *, agent: Agent, task: Task, args: dict) -> To
 WEB_SEARCH_PROVIDER = "tavily"
 
 
-async def _resolve_web_search(db, company_id):
-    """Use the company's own Tavily key if set, else the global default provider.
+async def _resolve_web_search(db, company_id) -> tuple[object, int]:
+    """Return ``(provider, cost_cents)`` for this company's web search.
 
     A founder can attach a Tavily key per company (onboarding or Settings); with
-    one we run real web search. Without it we fall back to the configured default
-    (offline simulated unless the deployment set a global provider/key).
+    one we run real, billable web search. Without it we fall back to the
+    configured default — offline ``simulated`` (free, ``cost_cents == 0``) unless
+    the deployment set a global real provider. The cost is what gets reserved and
+    charged through the CostMeter; advanced-depth searches cost double.
     """
+    from app.integrations.websearch import SimulatedWebSearch
     from app.services import apikeys
 
     key = await apikeys.get_plaintext_key(
@@ -462,22 +465,51 @@ async def _resolve_web_search(db, company_id):
     if key:
         from app.integrations.tavily import TavilyWebSearch
 
-        return TavilyWebSearch(api_key=key)
-    return get_web_search()
+        search: object = TavilyWebSearch(api_key=key)
+    else:
+        search = get_web_search()
+
+    if isinstance(search, SimulatedWebSearch):
+        return search, 0
+    multiplier = 2 if settings.tavily_search_depth == "advanced" else 1
+    return search, settings.web_search_cost_cents * multiplier
 
 
 async def _web_search(db, ctx, *, agent: Agent, task: Task, args: dict) -> ToolOutcome:
+    query = args["query"]
+    search, cost_cents = await _resolve_web_search(db, task.company_id)
     try:
-        search = await _resolve_web_search(db, task.company_id)
-        results = await search.search(
-            args["query"], max_results=settings.web_search_max_results
-        )
+        if cost_cents > 0:
+            # Real (paid) provider: reserve the estimated cost first, run the
+            # search, then commit the actual spend — same chokepoint and budget
+            # gating as LLM calls and domain purchases. An over-budget search
+            # raises BudgetExceeded, which the backend escalates to the founder.
+            captured: dict = {}
+
+            async def _do() -> tuple[int, str | None, dict | None]:
+                hits = await search.search(query, max_results=settings.web_search_max_results)
+                captured["results"] = hits
+                return cost_cents, None, {"query": query, "results": len(hits)}
+
+            await ctx.cost_meter.metered_external(
+                company_id=task.company_id,
+                agent_id=agent.id,
+                task_id=task.id,
+                estimated_cents=cost_cents,
+                vendor=f"web_search({settings.web_search_provider})",
+                sku=query[:120],
+                action=_do,
+                description=f"web search: {query[:80]}",
+            )
+            results = captured.get("results", [])
+        else:
+            results = await search.search(query, max_results=settings.web_search_max_results)
     except WebSearchError as exc:
         return ToolOutcome(observation=f"web search failed: {exc}", is_error=True)
     if not results:
-        return ToolOutcome(observation=f"no web results for {args['query']!r}")
+        return ToolOutcome(observation=f"no web results for {query!r}")
     lines = [f"- {r.title} ({r.url})\n  {r.snippet[:200]}" for r in results]
-    observation = f"Web results for {args['query']!r}:\n" + "\n".join(lines)
+    observation = f"Web results for {query!r}:\n" + "\n".join(lines)
     return ToolOutcome(observation=observation[:2000])
 
 
