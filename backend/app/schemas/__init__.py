@@ -260,8 +260,18 @@ class DecisionOut(ORMModel):
     objective_title: str | None = None  # best-effort related objective
 
 
+class DecisionChatTurn(BaseModel):
+    """One prior turn of a founder↔agent decision discussion."""
+
+    who: str  # "you" (founder) | "agent"
+    text: str
+
+
 class DecisionChatRequest(BaseModel):
     message: str = Field(min_length=1)
+    # Prior turns of this discussion, oldest first, so the agent answers with the
+    # conversation in context. The just-sent ``message`` is NOT included here.
+    history: list[DecisionChatTurn] = Field(default_factory=list)
 
 
 class DecisionResolveRequest(BaseModel):

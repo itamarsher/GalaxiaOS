@@ -135,7 +135,11 @@ async def chat(
     """Discuss a decision with the agent that raised it."""
     decision = await _load_decision(db, user, decision_id)
     answer = await copilot.discuss_decision(
-        db, company_id=decision.company_id, decision=decision, message=body.message
+        db,
+        company_id=decision.company_id,
+        decision=decision,
+        message=body.message,
+        history=body.history,
     )
     await db.commit()
     return {"answer": answer}

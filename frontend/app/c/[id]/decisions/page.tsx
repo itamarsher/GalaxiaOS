@@ -48,10 +48,13 @@ function DecisionCard({ decision: d, onResolved }: { decision: Decision; onResol
     const q = input.trim();
     if (!q || thinking) return;
     setInput("");
+    // `chat` here is the prior thread (the state update below is async), so it's
+    // exactly the history to send — the new question `q` is passed separately.
+    const priorThread = chat;
     setChat((c) => [...c, { who: "you", text: q }]);
     setThinking(true);
     try {
-      const res = await api.decisionChat(d.id, q);
+      const res = await api.decisionChat(d.id, q, priorThread);
       setChat((c) => [...c, { who: "agent", text: res.answer }]);
     } catch (e) {
       setChat((c) => [...c, { who: "agent", text: String(e instanceof Error ? e.message : e) }]);

@@ -222,14 +222,21 @@ async def _execute_command(db: AsyncSession, *, company_id: uuid.UUID, action: d
     return "I couldn't map that to a supported command. Try: pause/resume agents, or pause agents below an ROI threshold."
 
 
+#: Cap replayed discussion turns so a long thread can't blow the context window.
+_DECISION_CHAT_HISTORY_LIMIT = 20
+
+
 async def discuss_decision(
-    db: AsyncSession, *, company_id: uuid.UUID, decision, message: str
+    db: AsyncSession, *, company_id: uuid.UUID, decision, message: str, history=None
 ) -> str:
     """Answer a founder's question about a specific pending decision.
 
     Grounded in the decision itself (kind, summary, proposed action) plus current
     company state, so the founder can interrogate the trade-offs and reshape the
-    call before approving/rejecting it.
+    call before approving/rejecting it. ``history`` is the prior turns of this
+    discussion (oldest first); replaying them keeps the agent's answers coherent
+    across a multi-turn back-and-forth instead of treating each reply in
+    isolation.
     """
     resolved = await apikeys.resolve_provider(db, company_id=company_id)
     if resolved is None:
@@ -246,6 +253,22 @@ async def discuss_decision(
         f"Proposed action / details: {json.dumps(decision.payload or {})}"
     )
     state = await _company_state(db, company_id)
+
+    # A briefing turn (decision + live company state) anchors the thread, then the
+    # prior turns are replayed verbatim, then the founder's new message. The
+    # founder shows as the "user", the agent as the "assistant".
+    messages: list[Message] = [
+        Message(role="user", content=f"{decision_ctx}\n\nCompany state:\n{state}"),
+        Message(role="assistant", content="Understood — ask me anything about this decision."),
+    ]
+    for turn in (history or [])[-_DECISION_CHAT_HISTORY_LIMIT:]:
+        text = (turn.text or "").strip()
+        if not text:
+            continue
+        role = "user" if turn.who == "you" else "assistant"
+        messages.append(Message(role=role, content=text))
+    messages.append(Message(role="user", content=message))
+
     meter = CostMeter(SessionLocal)
     resp = await meter.run_llm(
         provider,
@@ -263,12 +286,7 @@ async def discuss_decision(
             "it by calling `request_capability` or `report_bug` — do NOT claim you'll route it to "
             "a team or person; those tools are the only real mechanism."
         ),
-        messages=[
-            Message(
-                role="user",
-                content=f"{decision_ctx}\n\nCompany state:\n{state}\n\nFounder: {message}",
-            )
-        ],
+        messages=messages,
         tools=_PLATFORM_REQUEST_TOOLS,
         max_tokens=600,
     )

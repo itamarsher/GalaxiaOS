@@ -173,8 +173,11 @@ export const api = {
     req<Decision>(`/decisions/${id}/approve`, { method: "POST", body: JSON.stringify({ note: note ?? null }) }),
   rejectDecision: (id: string, note?: string) =>
     req<Decision>(`/decisions/${id}/reject`, { method: "POST", body: JSON.stringify({ note: note ?? null }) }),
-  decisionChat: (id: string, message: string) =>
-    req<{ answer: string }>(`/decisions/${id}/chat`, { method: "POST", body: JSON.stringify({ message }) }),
+  decisionChat: (id: string, message: string, history: { who: string; text: string }[] = []) =>
+    req<{ answer: string }>(`/decisions/${id}/chat`, {
+      method: "POST",
+      body: JSON.stringify({ message, history }),
+    }),
 
   memory: (companyId: string, q?: string) =>
     req<Memory[]>(`/companies/${companyId}/memory${q ? `?q=${encodeURIComponent(q)}` : ""}`),
