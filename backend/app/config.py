@@ -134,6 +134,12 @@ class Settings(BaseSettings):
     # team from committing the entire budget up front.
     launch_budget_reserve_fraction: float = 0.7
 
+    # CEO audit loop: a delegated agent's result lands in ``auditing`` and the CEO
+    # reviews it before it counts as ``done`` — approving it (forward) or reopening
+    # it with comments (backward). This caps how many times the CEO may reopen the
+    # same task before it is auto-accepted, so an audit↔redo loop can't run forever.
+    max_audit_rounds: int = 2
+
     # Restart safety: the durable business state lives in Postgres, but the work
     # queue is arq-on-Redis and ephemeral on this deployment. On worker startup,
     # rebuild the Redis queue from the DB (requeue orphaned/queued tasks and

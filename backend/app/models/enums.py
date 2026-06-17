@@ -76,6 +76,7 @@ class TaskStatus(str, enum.Enum):
     queued = "queued"
     running = "running"
     waiting_approval = "waiting_approval"
+    auditing = "auditing"
     done = "done"
     failed = "failed"
     blocked = "blocked"

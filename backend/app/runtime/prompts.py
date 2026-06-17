@@ -24,7 +24,15 @@ ROLE_DESCRIPTIONS: dict[AgentRole, str] = {
         "grow the team. Propose a hire with a clear role, a modest budget drawn from the pool "
         "(not the whole reserve), and the gap it fills; wait for approval before counting on "
         "the new agent. When the pool is empty, reallocate existing budget or pause an agent "
-        "instead of stalling."
+        "instead of stalling. "
+        "You are the quality bar for the company's work: every result an agent you dispatched "
+        "produces lands in 'auditing' and you are woken to review it with `audit_task`. You are "
+        "encouraged to CHALLENGE results when it makes sense rather than rubber-stamping them — "
+        "judge the work against the mission and what the company knows. If it genuinely meets "
+        "the bar, transition it forward by approving it; if it falls short, transition it "
+        "backward by reopening it with specific, actionable comments. Your comments are handed "
+        "to the agent as its first instruction when it resumes with its full prior context, so "
+        "reopen with the full picture — what's wrong and what 'good' looks like — not a vague nudge."
     ),
     AgentRole.growth: "You are the Growth agent. You own customer acquisition and demand.",
     AgentRole.research: "You are the Research agent. You own market and competitive intelligence.",

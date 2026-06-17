@@ -221,7 +221,11 @@ export const fmtUsd = (cents: number | null | undefined) =>
 
 /** Human-friendly label for a task/decision status (the raw value still drives CSS). */
 export const statusLabel = (s: string): string =>
-  s === "waiting_approval" ? "Needs approval" : s.replace(/_/g, " ");
+  s === "waiting_approval"
+    ? "Needs approval"
+    : s === "auditing"
+      ? "CEO audit"
+      : s.replace(/_/g, " ");
 
 /** Human-friendly label for a decision kind. */
 export const decisionKindLabel = (kind: string): string =>

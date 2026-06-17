@@ -33,10 +33,13 @@ from app.runtime.context import RuntimeContext
 from app.services import budget as budget_svc
 
 #: Task statuses that mean the run is still doing (or waiting to do) work.
+#: ``auditing`` counts as active: a delegated result is parked there pending the
+#: CEO's review, so the run must not be declared finished while audits are open.
 _ACTIVE_TASK_STATUSES = (
     TaskStatus.queued,
     TaskStatus.running,
     TaskStatus.waiting_approval,
+    TaskStatus.auditing,
 )
 
 
