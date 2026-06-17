@@ -21,25 +21,65 @@ from app.config import settings
 from app.db import SessionLocal
 from app.models import Agent, DecisionRequest, FounderDigest, MemoryEntry, Task
 from app.models.enums import AgentRole, AgentStatus, DecisionStatus
-from app.providers.base import Message
+from app.providers.base import Message, ToolSpec
 from app.runtime.cost_meter import CostMeter
-from app.services import apikeys
+from app.runtime.queue import enqueue_task
+from app.services import apikeys, platform_requests
 from app.services import budget as budget_svc
 from app.services import memory as memory_svc
 from app.services import runway as runway_svc
 
-_COMMAND_VERBS = ("pause", "resume", "stop", "halt", "increase", "decrease", "set", "raise", "lower")
+# Tools the founder-facing chat can actually act on: filing a capability request
+# or a bug report routes to the Platform agent (it can't role-play "the product
+# team" — there is no such team; this is the real mechanism).
+_PLATFORM_REQUEST_TOOLS: list[ToolSpec] = [
+    ToolSpec(
+        name="request_capability",
+        description="File a request for a new tool/capability the agents lack (routes to the Platform agent).",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "title": {"type": "string"},
+                "details": {"type": "string", "description": "What's needed and why."},
+            },
+            "required": ["title", "details"],
+        },
+    ),
+    ToolSpec(
+        name="report_bug",
+        description="File a bug report about something broken (routes to the Platform agent).",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "title": {"type": "string"},
+                "details": {"type": "string"},
+            },
+            "required": ["title", "details"],
+        },
+    ),
+]
 
-_ALLOWED_ACTIONS = {"pause_agents", "resume_agents", "pause_low_roi_agents", "set_budget", "none"}
+_COMMAND_VERBS = (
+    "pause", "resume", "stop", "halt", "increase", "decrease", "set", "raise", "lower",
+    "request", "report", "file",
+)
+
+_ALLOWED_ACTIONS = {
+    "pause_agents", "resume_agents", "pause_low_roi_agents", "set_budget",
+    "request_capability", "report_bug", "none",
+}
 
 COMMAND_PARSE_SYSTEM = """Translate the founder's command into ONE structured action.
 Respond ONLY with minified JSON:
-{"action": "pause_agents|resume_agents|pause_low_roi_agents|set_budget|none",
+{"action": "pause_agents|resume_agents|pause_low_roi_agents|set_budget|request_capability|report_bug|none",
  "roles": ["growth","research","product","finance","governance","ceo"],
- "all": false, "roi_lt": 0.05, "value_cents": 50000}
+ "all": false, "roi_lt": 0.05, "value_cents": 50000,
+ "title": "short title", "details": "what's needed and why"}
 Rules: include only the fields relevant to the action. Use "pause_low_roi_agents" for
 commands about pausing by ROI/performance threshold (set roi_lt). Use "all": true to target
-every agent. Use "none" if the command cannot be mapped to one of these actions."""
+every agent. Use "request_capability" when the founder wants a new tool/capability the agents
+lack (e.g. real web search), and "report_bug" when they want something broken reported — fill
+title and details for both. Use "none" if the command cannot be mapped to one of these actions."""
 
 
 async def _company_state(db: AsyncSession, company_id: uuid.UUID, extra_memory=None) -> str:
@@ -157,6 +197,28 @@ async def _execute_command(db: AsyncSession, *, company_id: uuid.UUID, action: d
             "are not applied automatically — confirm via the budget control (PATCH /budget) to proceed."
         )
 
+    if kind in ("request_capability", "report_bug"):
+        req_kind = "capability" if kind == "request_capability" else "bug"
+        title = str(action.get("title") or "").strip() or (
+            "Capability request" if req_kind == "capability" else "Bug report"
+        )
+        details = str(action.get("details") or "").strip() or title
+        task_id = await platform_requests.file_request(
+            db, company_id=company_id, kind=req_kind, title=title, details=details
+        )
+        if task_id is None:
+            return (
+                "I couldn't file that — this company has no Platform agent to handle it."
+            )
+        # Commit before enqueueing so the worker can't race ahead of the write.
+        await db.commit()
+        await enqueue_task(task_id)
+        noun = "capability request" if req_kind == "capability" else "bug report"
+        return (
+            f"Filed a {noun} with the Platform agent: “{title}”. It will investigate the "
+            "codebase and open a tracker issue."
+        )
+
     return "I couldn't map that to a supported command. Try: pause/resume agents, or pause agents below an ROI threshold."
 
 
@@ -196,7 +258,10 @@ async def discuss_decision(
             "You are the agent that raised this decision. Explain your reasoning, answer the "
             "founder's questions, and help them decide whether to approve, reject, or adjust it. "
             "Be concise, concrete, and honest about trade-offs and risks. If the founder asks for "
-            "a change, describe exactly what you would do differently."
+            "a change, describe exactly what you would do differently.\n"
+            "If the founder asks you to request a new capability/tool or report a bug, actually do "
+            "it by calling `request_capability` or `report_bug` — do NOT claim you'll route it to "
+            "a team or person; those tools are the only real mechanism."
         ),
         messages=[
             Message(
@@ -204,9 +269,47 @@ async def discuss_decision(
                 content=f"{decision_ctx}\n\nCompany state:\n{state}\n\nFounder: {message}",
             )
         ],
+        tools=_PLATFORM_REQUEST_TOOLS,
         max_tokens=600,
     )
+
+    # If the agent chose to file a capability/bug request, actually file it.
+    filed = await _handle_platform_tool_calls(db, company_id=company_id, resp=resp)
+    if filed:
+        return (resp.text + "\n\n" if resp.text else "") + "\n".join(filed)
     return resp.text
+
+
+async def _handle_platform_tool_calls(db, *, company_id: uuid.UUID, resp) -> list[str]:
+    """Execute any request_capability/report_bug tool calls; return confirmations."""
+    confirmations: list[str] = []
+    enqueue_ids: list[uuid.UUID] = []
+    for call in resp.tool_calls or []:
+        if call.name not in ("request_capability", "report_bug"):
+            continue
+        req_kind = "capability" if call.name == "request_capability" else "bug"
+        args = call.arguments if isinstance(call.arguments, dict) else {}
+        title = str(args.get("title") or "").strip() or (
+            "Capability request" if req_kind == "capability" else "Bug report"
+        )
+        details = str(args.get("details") or "").strip() or title
+        task_id = await platform_requests.file_request(
+            db, company_id=company_id, kind=req_kind, title=title, details=details
+        )
+        noun = "capability request" if req_kind == "capability" else "bug report"
+        if task_id is None:
+            confirmations.append(f"(Couldn't file the {noun} — no Platform agent exists.)")
+        else:
+            enqueue_ids.append(task_id)
+            confirmations.append(
+                f"✅ Filed a {noun} with the Platform agent: “{title}”. It will investigate and "
+                "open a tracker issue."
+            )
+    if enqueue_ids:
+        await db.commit()  # commit the new task(s) before enqueueing
+        for task_id in enqueue_ids:
+            await enqueue_task(task_id)
+    return confirmations
 
 
 async def _pending_decisions(db: AsyncSession, company_id: uuid.UUID) -> int:

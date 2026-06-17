@@ -134,6 +134,11 @@ class Settings(BaseSettings):
     web_search_provider: str = "simulated"  # simulated | tavily
     web_search_max_results: int = 5
     web_search_timeout_seconds: float = 10.0
+    # Estimated cost (cents) of one real web search, metered through the CostMeter
+    # like any other paid action. The simulated provider is free (never charged);
+    # a real provider (Tavily) reserves this up front and commits it as actual
+    # spend. Advanced-depth searches cost double (they consume 2x credits).
+    web_search_cost_cents: int = 2
     # Tavily (only used when web_search_provider == "tavily")
     tavily_api_key: str = ""
     tavily_search_depth: str = "basic"  # basic | advanced
