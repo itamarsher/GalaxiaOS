@@ -22,17 +22,20 @@ from __future__ import annotations
 
 from sqlalchemy import select
 
-from app.models import Agent, AgentEdge, Task
+from app.models import Agent, AgentEdge, DecisionRequest, Task
 from app.models.enums import (
     AgentBackendType,
     AgentRole,
     AgentSource,
     AgentStatus,
     AutonomyLevel,
+    DecisionKind,
+    DecisionStatus,
     EdgeRelation,
+    TaskStatus,
 )
 from app.providers.base import ToolSpec
-from app.runtime.tools.base import ToolOutcome
+from app.runtime.tools.base import ToolOutcome, consume_approval_grant
 from app.services import budget as budget_svc
 
 # Roles the CEO may hire into (the CEO can't hire another CEO).
@@ -52,12 +55,14 @@ SPECS: list[ToolSpec] = [
     ToolSpec(
         name="hire_agent",
         description=(
-            "CEO only. Hire an additional functional agent that reports to you, "
-            "allocating it a monthly budget drawn from the unallocated pool. Use "
-            "this to add capacity when the team is the bottleneck. If the pool "
-            "can't cover the allocation you'll be told to free budget first "
-            "(lower another agent's allocation with set_agent_budget, or pause an "
-            "agent)."
+            "CEO only. Propose hiring an additional functional agent that reports to "
+            "you, allocating it a monthly budget drawn from the unallocated pool. This "
+            "REQUESTS the founder's permission and pauses until they approve — it does "
+            "not hire on its own — so they can weigh in on growing the team. Use it only "
+            "when the existing team is genuinely the bottleneck, and keep the proposed "
+            "budget modest (don't drain the reserve). If the pool can't cover the "
+            "allocation you'll be told to free budget first (lower another agent's "
+            "allocation with set_agent_budget, or pause an agent)."
         ),
         input_schema={
             "type": "object",
@@ -257,11 +262,49 @@ async def _hire_agent(db, ctx, *, agent: Agent, task: Task, args: dict) -> ToolO
             is_error=True,
         )
 
+    # Growing the team is the founder's call: rather than hire outright, ask for
+    # permission so they can weigh in on the hiring process. On resume after they
+    # approve, a one-shot grant lets the same hire go through instead of asking
+    # again forever (mirrors submit_plan / request_budget).
+    responsibility = str(args.get("responsibility") or "").strip()
+    if not await consume_approval_grant(db, task_id=task.id, tool="hire_agent"):
+        db.add(
+            DecisionRequest(
+                company_id=task.company_id,
+                agent_id=agent.id,
+                task_id=task.id,
+                kind=DecisionKind.hire_approval,
+                summary=(
+                    f"**Hire request — approval needed**\n\n"
+                    f"Proposing to hire **{name}** ({role.value}) at "
+                    f"**{_usd(allocation)}/mo**, drawn from the unallocated pool "
+                    f"({_usd(pool)} available).\n\n"
+                    f"Responsibility: {responsibility or '(none given)'}\n\n"
+                    "Approve to add them to the team (note any changes to role or budget), "
+                    "or reject to keep the current team."
+                ),
+                payload={"tool": "hire_agent", "args": args},
+                status=DecisionStatus.pending,
+            )
+        )
+        row = await db.get(Task, task.id)
+        if row is not None:
+            row.status = TaskStatus.waiting_approval
+        task.status = TaskStatus.waiting_approval  # keep the in-memory copy consistent
+        await db.flush()
+        return ToolOutcome(
+            observation=(
+                f"Requested the founder's approval to hire {name} ({role.value}) at "
+                f"{_usd(allocation)}/mo. Hiring is paused until they respond."
+            ),
+            park=True,
+        )
+
     new_agent = Agent(
         company_id=task.company_id,
         role=role,
         name=name,
-        system_prompt=str(args.get("responsibility") or ""),
+        system_prompt=responsibility,
         autonomy_level=AutonomyLevel.approve_required,
         monthly_budget_cents=allocation,
         source=AgentSource.hired,

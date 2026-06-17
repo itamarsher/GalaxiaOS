@@ -369,7 +369,13 @@ def _weighted_split(weights: list[float], total_cents: int | None) -> list[int |
 async def _reallocate_agent_budgets(
     db: AsyncSession, *, company_id: uuid.UUID, total_cents: int | None
 ) -> None:
-    """Re-split the company's monthly budget across agents, weighted by role."""
+    """Re-split the company's monthly budget across agents, weighted by role.
+
+    Start lean: only ``1 - launch_budget_reserve_fraction`` of the budget is
+    split across the fleet; the remainder stays unallocated as the CEO's pool, so
+    the team doesn't commit the whole budget up front and the CEO has reserve to
+    deploy later via approved hires.
+    """
     agents = (
         await db.scalars(
             select(Agent)
@@ -377,8 +383,12 @@ async def _reallocate_agent_budgets(
             .order_by(Agent.created_at.asc(), Agent.id.asc())
         )
     ).all()
+    allocatable = total_cents
+    if total_cents and total_cents > 0:
+        reserve = min(max(settings.launch_budget_reserve_fraction, 0.0), 1.0)
+        allocatable = int(total_cents * (1.0 - reserve))
     weights = [_ROLE_BUDGET_WEIGHTS.get(a.role, _DEFAULT_BUDGET_WEIGHT) for a in agents]
-    for agent, cents in zip(agents, _weighted_split(weights, total_cents), strict=True):
+    for agent, cents in zip(agents, _weighted_split(weights, allocatable), strict=True):
         agent.monthly_budget_cents = cents
     await db.flush()
 

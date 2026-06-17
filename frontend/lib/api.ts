@@ -230,4 +230,6 @@ export const decisionKindLabel = (kind: string): string =>
     risky_action: "Risky action",
     strategy: "Strategy",
     plan_approval: "Plan approval",
+    hire_approval: "Hire request",
+    user_action: "Action requested",
   }[kind] ?? kind.replace(/_/g, " "));
