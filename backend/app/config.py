@@ -134,6 +134,12 @@ class Settings(BaseSettings):
     smtp_password: str = ""
     smtp_use_tls: bool = True
 
+    # Issue-tracker seam (the Platform agent files bug/feature issues here);
+    # "simulated" is offline and deterministic.
+    issue_tracker: str = "simulated"  # simulated | github
+    github_token: str = ""
+    github_repo: str = "itamarsher/just-launch-it"
+
     # Investor review (onboarding): three agentic investors critique the venture.
     investor_review_enabled: bool = True
     investor_model: str = ""  # empty -> provider's planner-tier default

@@ -28,6 +28,9 @@ _EGRESS_TOOLS = (
     "schedule_social_post",
     "run_ad_campaign",
     "send_notification",
+    # open_issue sends a bug/feature report outside the company (to the tracker),
+    # so the Data agent can govern it too. It defaults to allow (no seeded deny).
+    "open_issue",
 )
 
 _EFFECTS = ("allow", "deny", "require_approval")
