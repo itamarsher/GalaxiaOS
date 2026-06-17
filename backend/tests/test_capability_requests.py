@@ -228,3 +228,60 @@ async def test_real_web_search_reserves_and_charges_the_budget(
     assert budget.spent_cents == 5  # real final cost subtracted
     assert budget.reserved_cents == 0  # reservation released after commit
     assert entry is not None and entry.amount_cents == 5
+
+
+@requires_db
+async def test_web_search_commits_measured_credits_not_the_estimate(
+    session_factory, company_with_budget, monkeypatch
+):
+    """The meter reconciles to Tavily's reported credits, not the reserved guess.
+
+    The provider reserves a basic-depth estimate (1 credit) but the call reports
+    2 credits consumed, so the committed actual is ``2 × web_search_cost_cents``.
+    """
+    from app.config import settings
+    from app.integrations.websearch import SearchResult
+    from app.models import Budget, ExternalCharge, SpendEntry
+    from app.runtime import tools as tools_pkg
+    from app.runtime.cost_meter import CostMeter
+
+    class _FakeTavily:
+        # Populated by ``search`` the way TavilyWebSearch sets it from the body.
+        last_usage_credits = 2
+        last_request_id = "req-abc123"
+
+        async def search(self, query, *, max_results=5):
+            return [SearchResult(title="t", url="https://x", snippet="s")]
+
+    # Reserve the basic-depth estimate (1 credit) even though the call bills 2.
+    async def _fake_resolve(_db, _cid):
+        return _FakeTavily(), settings.web_search_cost_cents
+
+    monkeypatch.setattr("app.runtime.tools.core._resolve_web_search", _fake_resolve)
+
+    async with session_factory() as db:
+        agent, task = await _make_agent_task(db, company_with_budget)
+        await db.commit()
+
+    ctx = SimpleNamespace(cost_meter=CostMeter(session_factory))
+    async with session_factory() as db:
+        outcome = await tools_pkg.execute_tool(
+            db, ctx, agent=agent, task=task, name="web_search", args={"query": "pricing"}
+        )
+    assert outcome.is_error is False
+
+    expected = 2 * settings.web_search_cost_cents
+    async with session_factory() as db:
+        budget = await db.scalar(select(Budget).where(Budget.company_id == company_with_budget))
+        entry = await db.scalar(
+            select(SpendEntry).where(SpendEntry.company_id == company_with_budget)
+        )
+        charge = await db.scalar(
+            select(ExternalCharge).where(ExternalCharge.company_id == company_with_budget)
+        )
+    assert budget.spent_cents == expected  # measured (2 credits), not the 1-credit estimate
+    assert budget.reserved_cents == 0
+    assert entry is not None and entry.amount_cents == expected
+    # The Tavily request id is kept for the auditable vendor trail.
+    assert charge is not None and charge.external_ref == "req-abc123"
+    assert charge.payload and charge.payload.get("credits") == 2

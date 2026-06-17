@@ -134,10 +134,12 @@ class Settings(BaseSettings):
     web_search_provider: str = "simulated"  # simulated | tavily
     web_search_max_results: int = 5
     web_search_timeout_seconds: float = 10.0
-    # Estimated cost (cents) of one real web search, metered through the CostMeter
-    # like any other paid action. The simulated provider is free (never charged);
-    # a real provider (Tavily) reserves this up front and commits it as actual
-    # spend. Advanced-depth searches cost double (they consume 2x credits).
+    # Cost (cents) per Tavily *API credit*, metered through the CostMeter like any
+    # other paid action. Tavily bills in credits (basic=1, advanced=2) and reports
+    # the credits each call consumed, but never a dollar figure — so this is the
+    # local credit→cents conversion. The meter reserves the estimated credits up
+    # front and commits ``reported_credits × web_search_cost_cents`` as the actual
+    # spend. The simulated provider is free (never charged).
     web_search_cost_cents: int = 2
     # Tavily (only used when web_search_provider == "tavily")
     tavily_api_key: str = ""

@@ -453,8 +453,11 @@ async def _resolve_web_search(db, company_id) -> tuple[object, int]:
     A founder can attach a Tavily key per company (onboarding or Settings); with
     one we run real, billable web search. Without it we fall back to the
     configured default — offline ``simulated`` (free, ``cost_cents == 0``) unless
-    the deployment set a global real provider. The cost is what gets reserved and
-    charged through the CostMeter; advanced-depth searches cost double.
+    the deployment set a global real provider. The returned ``cost_cents`` is the
+    *estimate* the CostMeter reserves up front (``web_search_cost_cents`` per
+    expected credit; advanced depth assumes two credits). The committed actual is
+    reconciled afterwards from the credits Tavily reports per call — see
+    :func:`_web_search`.
     """
     from app.integrations.websearch import SimulatedWebSearch
     from app.services import apikeys
@@ -481,15 +484,30 @@ async def _web_search(db, ctx, *, agent: Agent, task: Task, args: dict) -> ToolO
     try:
         if cost_cents > 0:
             # Real (paid) provider: reserve the estimated cost first, run the
-            # search, then commit the actual spend — same chokepoint and budget
-            # gating as LLM calls and domain purchases. An over-budget search
-            # raises BudgetExceeded, which the backend escalates to the founder.
+            # search, then commit the *measured* spend — same chokepoint and
+            # budget gating as LLM calls and domain purchases. An over-budget
+            # search raises BudgetExceeded, which the backend escalates to the
+            # founder. Tavily reports the credits each call consumed (basic=1,
+            # advanced=2) but no dollar figure, so we reconcile the actual charge
+            # as ``credits × web_search_cost_cents`` and fall back to the reserved
+            # estimate when usage telemetry is unavailable.
             captured: dict = {}
 
             async def _do() -> tuple[int, str | None, dict | None]:
                 hits = await search.search(query, max_results=settings.web_search_max_results)
                 captured["results"] = hits
-                return cost_cents, None, {"query": query, "results": len(hits)}
+                credits = getattr(search, "last_usage_credits", None)
+                actual_cents = (
+                    credits * settings.web_search_cost_cents
+                    if credits is not None
+                    else cost_cents
+                )
+                request_id = getattr(search, "last_request_id", None)
+                return (
+                    actual_cents,
+                    request_id,
+                    {"query": query, "results": len(hits), "credits": credits},
+                )
 
             await ctx.cost_meter.metered_external(
                 company_id=task.company_id,
