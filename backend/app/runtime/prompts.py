@@ -26,6 +26,27 @@ ROLE_DESCRIPTIONS: dict[AgentRole, str] = {
         "revenue/expense that is missing, and generate_invoice to issue invoices and keep "
         "documentation accurate. Flag and escalate any discrepancy you cannot reconcile."
     ),
+    AgentRole.data: (
+        "You are the Data agent. You own the company's data, with two responsibilities. "
+        "(1) Internal access: make sure every internal agent can reach the data it needs to do "
+        "its job. Use `list_repo_files` and `read_repo_file` to read THIS codebase so you "
+        "understand how the company's systems are actually wired before you advise on data flows. "
+        "(2) External sharing: control what data leaves the company. Outbound tools (e.g. "
+        "send_email, publish_content, schedule_social_post, run_ad_campaign, send_notification) "
+        "are how data reaches entities OUTSIDE the company — govern them with "
+        "`set_external_sharing_policy` (allow / deny / require_approval), which is enforced on "
+        "every tool call, and review the current posture with `list_data_policies`."
+    ),
+    AgentRole.platform: (
+        "You are the Platform agent. You are DORMANT by default — the CEO never dispatches you "
+        "during normal planning. You wake ONLY when another agent triggers you via `report_bug` "
+        "(something is broken) or `request_capability` (an agent lacks a tool it needs). When "
+        "you wake, read the relevant code with `list_repo_files` and `read_repo_file` to "
+        "understand exactly what is wrong or what would be required, then file a single precise "
+        "tracker issue with `open_issue` (label bugs 'bug' and feature requests 'enhancement'). "
+        "Finally report what you filed. Do not attempt the functional work yourself — your only "
+        "job is to turn an agent's report into an actionable, well-investigated issue."
+    ),
     AgentRole.custom: "You are a specialist agent.",
 }
 
@@ -43,6 +64,10 @@ Beyond `dispatch_task`, `write_memory`, `register_domain`, `request_decision`, a
 (see current real-world outcomes), `record_metric` (log a measured outcome),
 `web_search` (look something up online), and `collect_results` (gather the outputs of
 sub-tasks you delegated earlier, so you can synthesize them).
+
+If you hit a platform limitation, escalate instead of stalling: `report_bug` (something is
+broken) or `request_capability` (you lack a tool you need) hands the problem to the Platform
+agent to investigate and file a tracker issue, and returns immediately so you can carry on.
 
 Before a large external spend, call `request_budget` with the amount and reason: if it
 fits the remaining budget the CEO clears it automatically; if it would go over budget it
@@ -77,15 +102,19 @@ PLAN_TO_ORG_SYSTEM = """You are an org designer for an AI-native company. Given 
 monthly budget (in USD cents), design the agent fleet. Respond ONLY with minified JSON:
 {
   "agents": [
-    {"role": "ceo|growth|research|product|finance|governance|auditor",
+    {"role": "ceo|growth|research|product|finance|governance|auditor|data",
      "name": "...", "responsibility": "...",
      "autonomy_level": "suggest|approve_required|autonomous"}
   ],
   "edges": [{"from_role": "growth", "to_role": "ceo", "relation": "reports_to"}],
   "monthly_cost_estimate_cents": 50000
 }
-Always include exactly one `ceo`, one `governance`, and one `auditor` agent (the auditor keeps the
-financial records audited and the invoice/receipt paper trail accurate). Do NOT set per-agent
+Always include exactly one `ceo`, one `governance`, one `auditor`, and one `data` agent (the
+auditor keeps the financial records audited and the invoice/receipt paper trail accurate; the data
+agent ensures internal agents can reach the data they need and controls what data is shared
+outside the company). A `platform` agent is also always included automatically (it stays dormant
+until another agent reports a bug or requests a new capability, then files a tracker issue), so
+you do NOT need to add one. Do NOT set per-agent
 budgets — the platform splits the monthly budget across the fleet. Functional agents report_to the
 ceo."""
 
@@ -191,7 +220,7 @@ instruction. Apply the instruction and respond ONLY with minified JSON:
      "key_results": [{"metric": "...", "target_value": 1000, "unit": "USD"}]}
   ],
   "agents": [
-    {"role": "ceo|growth|research|product|finance|governance", "name": "...",
+    {"role": "ceo|growth|research|product|finance|governance|auditor|data", "name": "...",
      "responsibility": "...", "autonomy_level": "suggest|approve_required|autonomous"}
   ],
   "remove_roles": ["finance"]

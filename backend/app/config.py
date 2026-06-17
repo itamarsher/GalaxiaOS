@@ -117,6 +117,12 @@ class Settings(BaseSettings):
     business_cycle_interval_seconds: int = 120  # delay between auto-continued cycles
     business_cycle_min_budget_cents: int = 50  # pause auto-continuation below this
 
+    # Restart safety: the durable business state lives in Postgres, but the work
+    # queue is arq-on-Redis and ephemeral on this deployment. On worker startup,
+    # rebuild the Redis queue from the DB (requeue orphaned/queued tasks and
+    # re-arm idle companies). Disable to skip recovery on boot.
+    recover_on_startup: bool = True
+
     # Web search seam (agents' window on the world); "simulated" is offline.
     web_search_provider: str = "simulated"  # simulated | tavily
     web_search_max_results: int = 5
@@ -133,6 +139,12 @@ class Settings(BaseSettings):
     smtp_username: str = ""
     smtp_password: str = ""
     smtp_use_tls: bool = True
+
+    # Issue-tracker seam (the Platform agent files bug/feature issues here);
+    # "simulated" is offline and deterministic.
+    issue_tracker: str = "simulated"  # simulated | github
+    github_token: str = ""
+    github_repo: str = "itamarsher/just-launch-it"
 
     # Investor review (onboarding): three agentic investors critique the venture.
     investor_review_enabled: bool = True

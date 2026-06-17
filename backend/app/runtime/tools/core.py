@@ -82,7 +82,7 @@ SPECS: list[ToolSpec] = [
             "properties": {
                 "role": {
                     "type": "string",
-                    "enum": ["growth", "research", "product", "finance", "governance", "auditor"],
+                    "enum": ["growth", "research", "product", "finance", "governance", "auditor", "data"],
                 },
                 "goal": {"type": "string", "description": "What that agent should accomplish."},
             },

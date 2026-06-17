@@ -26,6 +26,8 @@ class AgentRole(str, enum.Enum):
     finance = "finance"
     governance = "governance"
     auditor = "auditor"
+    data = "data"
+    platform = "platform"
     custom = "custom"
 
 
