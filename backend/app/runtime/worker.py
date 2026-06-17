@@ -29,13 +29,15 @@ async def startup(ctx: dict) -> None:
     redis = ctx["redis"]
 
     async def enqueue_task(task_id: uuid.UUID, *, delay_seconds: float = 0) -> None:
-        # Deterministic job id (the task id) makes re-enqueueing idempotent: arq
-        # dedupes a job whose id is already queued, so startup recovery can safely
-        # re-enqueue tasks already in flight without double-running them.
+        # NB: do NOT pin a deterministic ``_job_id`` here. arq retains a finished
+        # job's result for a while and refuses to re-enqueue that id, which would
+        # silently drop legitimate RE-runs of the same task — resuming a parked
+        # task after a plan/budget approval, or recovering an orphaned task on
+        # startup. Double-execution is already prevented in ``run_task`` (it skips
+        # any task not in queued/waiting_approval and flips it to running first).
         await redis.enqueue_job(
             "run_task",
             str(task_id),
-            _job_id=str(task_id),
             _defer_by=delay_seconds if delay_seconds > 0 else None,
         )
 
