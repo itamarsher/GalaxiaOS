@@ -20,6 +20,7 @@ export default function Home() {
   const [companyId, setCompanyId] = useState<string | null>(null);
   const [apiKey, setApiKey] = useState("");
   const [githubKey, setGithubKey] = useState("");
+  const [tavilyKey, setTavilyKey] = useState("");
   const [preview, setPreview] = useState<Preview | null>(null);
 
   // Multi-business: a user can run several companies, listed after auth.
@@ -83,7 +84,7 @@ export default function Home() {
 
   const newBusiness = () => {
     // Reset the onboarding wizard so creating an Nth business starts clean.
-    setCompanyId(null); setApiKey(""); setGithubKey(""); setPreview(null);
+    setCompanyId(null); setApiKey(""); setGithubKey(""); setTavilyKey(""); setPreview(null);
     setChat([]); setProgress(null); setMission(""); setBudget("500"); setErr(null);
     setStep("mission");
   };
@@ -102,6 +103,8 @@ export default function Home() {
       await api.addApiKey(companyId, apiKey);
       // Optional: a GitHub token lets the platform agent file real issues.
       if (githubKey.trim()) await api.addApiKey(companyId, githubKey.trim(), "github");
+      // Optional: a Tavily key enables real web search (else it's simulated).
+      if (tavilyKey.trim()) await api.addApiKey(companyId, tavilyKey.trim(), "tavily");
       setProgress({ phase: "queued", pct: 0, message: "Starting…", status: "running", error: null, events: [] });
       setStep("generating");
       const poll = setInterval(async () => {
@@ -223,9 +226,11 @@ export default function Home() {
           <input type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)} placeholder="sk-ant-..." />
           <label>GitHub token <span className="muted">(optional)</span></label>
           <input type="password" value={githubKey} onChange={(e) => setGithubKey(e.target.value)} placeholder="ghp_… — lets the platform agent file real issues" />
+          <label>Tavily API key <span className="muted">(optional)</span></label>
+          <input type="password" value={tavilyKey} onChange={(e) => setTavilyKey(e.target.value)} placeholder="tvly-… — enables real web search" />
           <p className="muted" style={{ fontSize: 12, marginTop: 4 }}>
-            Optional. Without it, bug/capability requests are filed to an offline tracker.
-            You can add or change this later in Settings.
+            Optional. Without GitHub, bug/capability requests use an offline tracker; without
+            Tavily, web search returns simulated results. You can add or change these later in Settings.
           </p>
           <button disabled={busy || !apiKey} onClick={submitKeyAndGenerate}>
             Generate organization

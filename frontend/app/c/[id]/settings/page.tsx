@@ -20,6 +20,12 @@ const SLOTS: { provider: string; label: string; hint: string; placeholder: strin
     hint: "Optional. Lets the platform agent open real issues for bug reports and capability requests. Without it, issues go to an offline tracker.",
     placeholder: "ghp_…",
   },
+  {
+    provider: "tavily",
+    label: "Tavily API key",
+    hint: "Optional. Enables real web search for your agents. Without it, web search returns simulated (placeholder) results.",
+    placeholder: "tvly-…",
+  },
 ];
 
 export default function SettingsPage() {

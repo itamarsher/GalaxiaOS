@@ -443,9 +443,33 @@ async def _record_metric(db, ctx, *, agent: Agent, task: Task, args: dict) -> To
     return ToolOutcome(observation=f"recorded metric {args['name']}={float(args['value']):g}{unit}")
 
 
+#: Provider name under which a company's web-search (Tavily) key is stored (BYOK).
+WEB_SEARCH_PROVIDER = "tavily"
+
+
+async def _resolve_web_search(db, company_id):
+    """Use the company's own Tavily key if set, else the global default provider.
+
+    A founder can attach a Tavily key per company (onboarding or Settings); with
+    one we run real web search. Without it we fall back to the configured default
+    (offline simulated unless the deployment set a global provider/key).
+    """
+    from app.services import apikeys
+
+    key = await apikeys.get_plaintext_key(
+        db, company_id=company_id, provider=WEB_SEARCH_PROVIDER
+    )
+    if key:
+        from app.integrations.tavily import TavilyWebSearch
+
+        return TavilyWebSearch(api_key=key)
+    return get_web_search()
+
+
 async def _web_search(db, ctx, *, agent: Agent, task: Task, args: dict) -> ToolOutcome:
     try:
-        results = await get_web_search().search(
+        search = await _resolve_web_search(db, task.company_id)
+        results = await search.search(
             args["query"], max_results=settings.web_search_max_results
         )
     except WebSearchError as exc:
