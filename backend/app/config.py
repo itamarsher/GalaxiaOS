@@ -68,6 +68,11 @@ class Settings(BaseSettings):
     # leave false in production, where API and worker scale independently.
     run_worker_in_process: bool = False
 
+    # TEMP (dev only): enables the destructive "delete all accounts" endpoint used
+    # during active development. MUST be set to false (or this whole feature
+    # removed) before going live. Kill-switch: set ABOS_DEV_TOOLS_ENABLED=false.
+    dev_tools_enabled: bool = True
+
     # Runtime safety caps (circuit breakers)
     max_task_depth: int = 4
     max_tasks_per_run: int = 200

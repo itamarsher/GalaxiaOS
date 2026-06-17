@@ -43,6 +43,15 @@ export default function Home() {
       setStep("mission");
     });
 
+  // TEMP dev tool — remove before launch. Wipes every account and all its data.
+  const wipeAllAccounts = () =>
+    guard(async () => {
+      if (!window.confirm("DELETE ALL ACCOUNTS and every company/agent/task they own? This cannot be undone.")) return;
+      const res = await api.deleteAllAccounts();
+      api.logout();
+      alert(`Deleted ${res.deleted_accounts} account(s). The database is now empty.`);
+    });
+
   const startOnboarding = () =>
     guard(async () => {
       const c = await api.startOnboarding(mission, Math.round(parseFloat(budget) * 100), []);
@@ -119,6 +128,16 @@ export default function Home() {
           <div className="row">
             <button disabled={busy} onClick={() => doAuth(true)}>Sign up</button>
             <button className="ghost" disabled={busy} onClick={() => doAuth(false)}>Log in</button>
+          </div>
+
+          {/* TEMP DEV TOOL — remove before launch (also: backend app/api/dev.py + ABOS_DEV_TOOLS_ENABLED). */}
+          <div style={{ marginTop: 20, paddingTop: 14, borderTop: "1px dashed var(--border)" }}>
+            <p className="muted" style={{ fontSize: 12, margin: "0 0 8px" }}>
+              ⚠️ Dev only — wipes the entire database. Remove before going live.
+            </p>
+            <button className="ghost danger" disabled={busy} onClick={wipeAllAccounts}>
+              Delete ALL accounts
+            </button>
           </div>
         </div>
       )}
