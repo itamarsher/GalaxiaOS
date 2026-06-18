@@ -14,7 +14,6 @@ from types import SimpleNamespace
 from sqlalchemy import func, select
 
 from app.integrations.tavily import TavilyWebSearch
-from app.integrations.websearch import SimulatedWebSearch
 from app.models import Agent, Task
 from app.models.enums import AgentRole
 from app.runtime.tools.core import (
@@ -172,12 +171,14 @@ async def test_discuss_tool_call_files_request(session_factory, company_with_bud
 
 
 @requires_db
-async def test_web_search_defaults_to_simulated_and_is_free(session_factory, company_with_budget):
+async def test_web_search_is_unsupported_without_a_key(session_factory, company_with_budget):
     _set_master_key()
     async with session_factory() as db:
         search, cost = await _resolve_web_search(db, company_with_budget)
-    assert isinstance(search, SimulatedWebSearch)
-    assert cost == 0  # offline simulated provider is never charged
+    # No Tavily key and no global provider -> None, so web_search reports the
+    # capability is unsupported (no simulated results are fabricated).
+    assert search is None
+    assert cost == 0
 
 
 @requires_db
@@ -296,13 +297,13 @@ async def test_web_search_commits_measured_credits_not_the_estimate(
 
 
 @requires_db
-async def test_email_defaults_to_simulated_without_a_key(session_factory, company_with_budget):
-    from app.integrations.email import SimulatedEmailSender
-
+async def test_email_is_unsupported_without_a_key(session_factory, company_with_budget):
     _set_master_key()
     async with session_factory() as db:
         sender = await _resolve_email_sender(db, company_with_budget)
-    assert isinstance(sender, SimulatedEmailSender)
+    # No Resend key and no global provider -> None, so send_email reports the
+    # capability is unsupported (no mail is faked).
+    assert sender is None
 
 
 @requires_db
@@ -320,3 +321,23 @@ async def test_email_uses_resend_when_key_set(session_factory, company_with_budg
     assert isinstance(sender, ResendEmailSender)
     # The per-company key is what's used — not the (empty) global default.
     assert sender._api_key == "re_xxx"
+
+
+@requires_db
+async def test_email_uses_company_from_address_when_set(session_factory, company_with_budget):
+    from app.integrations.resend import ResendEmailSender
+    from app.models import Company
+
+    _set_master_key()
+    async with session_factory() as db:
+        await apikeys.store_key(
+            db, company_id=company_with_budget, provider=EMAIL_KEY_PROVIDER, plaintext="re_xxx"
+        )
+        company = await db.get(Company, company_with_budget)
+        company.email_from = "Acme <hello@acme.com>"
+        await db.commit()
+    async with session_factory() as db:
+        sender = await _resolve_email_sender(db, company_with_budget)
+    assert isinstance(sender, ResendEmailSender)
+    # The founder's verified "From:" overrides the global default.
+    assert sender._sender == "Acme <hello@acme.com>"

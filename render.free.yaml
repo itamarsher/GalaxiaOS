@@ -85,3 +85,6 @@ envVarGroups:
       # Single free instance → in-memory limiter (no Redis dependency for this).
       - key: ABOS_RATE_LIMIT_BACKEND
         value: memory
+      # NB: landing-page hosting + domain connection (Cloudflare Pages + DNS) are
+      # bring-your-own-key — each company sets its own Cloudflare API token + account
+      # id in Settings. There are intentionally no global Cloudflare env vars here.

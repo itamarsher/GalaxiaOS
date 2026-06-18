@@ -1,59 +1,32 @@
 """Sales tools: lead logging, deal-stage tracking, and follow-up scheduling.
 
-Area-specific tools for the sales function. Everything here is deterministic and
-simulated — leads/deals/follow-ups are persisted only as institutional memory and
-metric signals; no CRM, calendar, or network calls. Outreach email is handled by
-the core ``send_email`` tool and is intentionally not re-implemented here.
+These used to be unsupported stubs — there was no CRM behind them, so they could
+only fabricate pipeline, which poisoned the planning loop. They are now backed by
+the self-coded CRM (:mod:`app.services.crm`): a lead becomes a real
+:class:`~app.models.crm.CrmContact`, a deal update a real
+:class:`~app.models.crm.CrmDeal`, and a follow-up a real
+:class:`~app.models.crm.CrmActivity`. Nothing is invented; everything persists and
+can be read back (see the richer ``crm_*`` tools for search and pipeline views).
 """
 
 from __future__ import annotations
 
 from app.models import Agent, Task
-from app.models.enums import MemoryType, MetricSource
+from app.models.enums import CrmActivityKind, CrmDealStage, MetricSource
 from app.providers.base import ToolSpec
 from app.runtime.tools.base import ToolOutcome
-from app.services import memory as memory_svc
+from app.runtime.tools.crm import format_contact, format_deal
+from app.services import crm as crm_svc
 from app.services import metrics as metrics_svc
 
-#: Allowed deal stages, in pipeline order.
-DEAL_STAGES: tuple[str, ...] = ("new", "qualified", "proposal", "won", "lost")
-
-
-def validate_stage(stage: str) -> str:
-    """Return a normalized deal stage or raise ``ValueError`` if unknown."""
-    normalized = str(stage).strip().lower()
-    if normalized not in DEAL_STAGES:
-        raise ValueError(
-            f"invalid stage {stage!r}; expected one of {', '.join(DEAL_STAGES)}"
-        )
-    return normalized
-
-
-def format_lead_summary(args: dict) -> str:
-    """Build a human-readable, deterministic summary line for a logged lead."""
-    parts = [f"name={args['name']}"]
-    for field in ("email", "company", "source"):
-        value = args.get(field)
-        if value:
-            parts.append(f"{field}={value}")
-    note = args.get("note")
-    if note:
-        parts.append(f"note={note}")
-    return " | ".join(parts)
-
-
-def format_deal_summary(lead: str, stage: str, amount_cents: int | None) -> str:
-    """Build a deterministic summary line for a deal-stage change."""
-    line = f"lead={lead} -> stage={stage}"
-    if amount_cents is not None:
-        line += f" (${amount_cents / 100:.2f})"
-    return line
+#: Allowed deal stages, in pipeline order (the CRM enum is the source of truth).
+DEAL_STAGES: tuple[str, ...] = tuple(s.value for s in CrmDealStage)
 
 
 SPECS: list[ToolSpec] = [
     ToolSpec(
         name="log_lead",
-        description="Record a new sales lead (name, optional email/company/source/note).",
+        description="Record a new sales lead in the CRM (name, optional email/company/source/note).",
         input_schema={
             "type": "object",
             "properties": {
@@ -69,13 +42,16 @@ SPECS: list[ToolSpec] = [
     ToolSpec(
         name="update_deal",
         description=(
-            "Move a deal to a new pipeline stage "
+            "Move a deal to a new pipeline stage in the CRM "
             "(new|qualified|proposal|won|lost); records revenue when won."
         ),
         input_schema={
             "type": "object",
             "properties": {
-                "lead": {"type": "string", "description": "Lead or deal identifier."},
+                "lead": {
+                    "type": "string",
+                    "description": "Lead or deal identifier (name or title).",
+                },
                 "stage": {
                     "type": "string",
                     "enum": list(DEAL_STAGES),
@@ -91,11 +67,14 @@ SPECS: list[ToolSpec] = [
     ),
     ToolSpec(
         name="schedule_followup",
-        description="Schedule a follow-up touchpoint with a lead (deterministic; no real calendar).",
+        description="Schedule a follow-up touchpoint with a lead in the CRM.",
         input_schema={
             "type": "object",
             "properties": {
-                "lead": {"type": "string", "description": "Lead or deal identifier."},
+                "lead": {
+                    "type": "string",
+                    "description": "Lead or deal identifier (name or title).",
+                },
                 "when": {"type": "string", "description": "When to follow up (free text)."},
                 "note": {"type": "string"},
             },
@@ -106,73 +85,76 @@ SPECS: list[ToolSpec] = [
 
 
 async def _log_lead(db, ctx, *, agent: Agent, task: Task, args: dict) -> ToolOutcome:
-    name = args["name"]
-    await memory_svc.write(
-        db,
-        company_id=task.company_id,
-        type=MemoryType.result,
-        title=f"Lead: {name}",
-        content=format_lead_summary(args),
-        source_task_id=task.id,
-    )
-    await metrics_svc.record_signal(
-        db,
-        company_id=task.company_id,
-        name="leads_logged",
-        value=1,
-        source=MetricSource.agent,
-        note=f"lead: {name}",
-    )
-    return ToolOutcome(observation=f"logged lead {name}")
+    try:
+        contact, created = await crm_svc.upsert_contact(
+            db,
+            company_id=task.company_id,
+            name=args["name"],
+            email=args.get("email"),
+            company_name=args.get("company"),
+            source=args.get("source"),
+            note=args.get("note"),
+        )
+    except ValueError as exc:
+        return ToolOutcome(observation=str(exc), is_error=True)
+    verb = "logged lead" if created else "updated lead"
+    return ToolOutcome(observation=f"{verb} {contact.id}: {format_contact(contact)}")
 
 
 async def _update_deal(db, ctx, *, agent: Agent, task: Task, args: dict) -> ToolOutcome:
     lead = args["lead"]
+    stage_raw = str(args["stage"]).strip().lower()
     try:
-        stage = validate_stage(args["stage"])
-    except ValueError as exc:
-        return ToolOutcome(observation=str(exc), is_error=True)
+        stage = CrmDealStage(stage_raw)
+    except ValueError:
+        return ToolOutcome(
+            observation=f"invalid stage {args['stage']!r}; expected one of {', '.join(DEAL_STAGES)}",
+            is_error=True,
+        )
     amount_cents = args.get("amount_cents")
-    summary = format_deal_summary(lead, stage, amount_cents)
-    note = args.get("note")
-    content = f"{summary}\n{note}" if note else summary
-    await memory_svc.write(
+    amount_cents = int(amount_cents) if amount_cents is not None else None
+
+    # Link to an existing contact when the lead handle resolves to one.
+    contact = await crm_svc.resolve_contact(db, company_id=task.company_id, handle=lead)
+    deal, _created = await crm_svc.upsert_deal(
         db,
         company_id=task.company_id,
-        type=MemoryType.decision,
-        title=f"Deal: {lead} -> {stage}",
-        content=content,
-        source_task_id=task.id,
+        title=lead,
+        stage=stage,
+        amount_cents=amount_cents,
+        note=args.get("note"),
+        contact_id=contact.id if contact else None,
     )
-    if stage == "won" and amount_cents is not None:
+    if deal.stage == CrmDealStage.won and deal.amount_cents:
         await metrics_svc.record_signal(
             db,
             company_id=task.company_id,
             name="revenue",
-            value=int(amount_cents) / 100,
+            value=deal.amount_cents / 100,
             unit="USD",
             source=MetricSource.agent,
-            note=f"deal won: {lead}",
+            note=f"deal won: {deal.title}",
         )
-    return ToolOutcome(observation=f"updated deal {summary}")
+    return ToolOutcome(observation=f"updated deal {deal.id}: {format_deal(deal)}")
 
 
 async def _schedule_followup(db, ctx, *, agent: Agent, task: Task, args: dict) -> ToolOutcome:
     lead = args["lead"]
     when = args["when"]
-    note = args.get("note")
-    content = f"Follow up with {lead} at {when}."
-    if note:
-        content += f" Note: {note}"
-    await memory_svc.write(
+    contact = await crm_svc.resolve_contact(db, company_id=task.company_id, handle=lead)
+    body = f"Due: {when}"
+    if args.get("note"):
+        body += f"\n{args['note']}"
+    await crm_svc.log_activity(
         db,
         company_id=task.company_id,
-        type=MemoryType.decision,
-        title=f"Follow-up: {lead} @ {when}",
-        content=content,
-        source_task_id=task.id,
+        kind=CrmActivityKind.followup,
+        subject=f"Follow up with {lead}",
+        body=body,
+        contact_id=contact.id if contact else None,
     )
-    return ToolOutcome(observation=f"scheduled follow-up with {lead} at {when}")
+    where = f" (contact {contact.id})" if contact else ""
+    return ToolOutcome(observation=f"scheduled follow-up with {lead} at {when}{where}")
 
 
 HANDLERS = {

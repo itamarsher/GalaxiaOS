@@ -14,16 +14,17 @@ stays independent of any vendor's message shape.
 
 from __future__ import annotations
 
-from sqlalchemy import func, select
+import uuid
+
+from sqlalchemy import select
 
 from app.config import settings
 from app.db import set_tenant
-from app.models import Agent, DecisionRequest, Mission, SpendEntry, Task
+from app.models import Agent, DecisionRequest, Mission, Task
 from app.models.enums import (
     AgentRole,
     DecisionKind,
     DecisionStatus,
-    MemoryType,
     PolicyEffect,
     TaskStatus,
 )
@@ -35,6 +36,7 @@ from app.runtime.tools.base import consume_approval_grant as _consume_approval_g
 from app.runtime.transcript import dump_messages, load_messages
 from app.services import apikeys, memory, metrics, reputation
 from app.services import governance as gov
+from app.services import tasks as task_svc
 from app.services.budget import BudgetExceeded
 
 # Model tiers, cheapest -> most capable. Used for reputation-driven escalation.
@@ -127,6 +129,7 @@ class NativeBackend:
             metrics=metrics_summary,
         )
         messages = self._resume_or_seed(task)
+        await self._inject_audit_feedback(ctx, task, messages)
         model = _model_for(agent, provider, trust)
 
         for _ in range(settings.max_steps_per_task):
@@ -144,8 +147,8 @@ class NativeBackend:
             )
 
             if not resp.tool_calls:
-                return await self._finish(
-                    ctx, task, TaskStatus.done, {"summary": resp.text[:2000]}
+                return await self._finish_or_audit(
+                    ctx, agent, task, {"summary": resp.text[:2000]}
                 )
 
             results: list[ToolResultBlock] = []
@@ -178,7 +181,7 @@ class NativeBackend:
             # tool_result), so a restart can pick the task back up here.
             await self._save_transcript(ctx, task, messages)
 
-        return await self._finish(ctx, task, TaskStatus.done, {"summary": "step cap reached"})
+        return await self._finish_or_audit(ctx, agent, task, {"summary": "step cap reached"})
 
     def _resume_or_seed(self, task: Task) -> list[Message]:
         """Resume the loop from a persisted checkpoint, else seed a fresh start.
@@ -303,8 +306,8 @@ class NativeBackend:
         if outcome.stop:
             return {
                 "terminal": True,
-                "result": await self._finish(
-                    ctx, task, TaskStatus.done, {"summary": call.arguments.get("summary", "")}
+                "result": await self._finish_or_audit(
+                    ctx, agent, task, {"summary": call.arguments.get("summary", "")}
                 ),
             }
         if outcome.park:
@@ -315,6 +318,30 @@ class NativeBackend:
             "is_error": outcome.is_error,
         }
 
+    async def _finish_or_audit(
+        self, ctx: RuntimeContext, agent: Agent, task: Task, output: dict
+    ) -> dict:
+        """A successful result either lands in ``auditing`` for CEO review or, when
+        no audit applies, finishes as ``done`` straight away.
+
+        Only results the CEO delegated are audited (see ``task_svc.should_audit``);
+        everything else — the CEO's own work, sub-tasks the CEO didn't dispatch, or
+        a task that has already exhausted its reopen budget — finishes normally.
+        """
+        audit_task_id: uuid.UUID | None = None
+        async with ctx.session_factory() as db:
+            await set_tenant(db, task.company_id)
+            if await task_svc.should_audit(db, agent=agent, task=task):
+                audit_task_id = await task_svc.begin_auditing(
+                    db, child_id=task.id, output=output
+                )
+                if audit_task_id is not None:
+                    await db.commit()
+        if audit_task_id is not None:
+            await ctx.enqueue_task(audit_task_id)
+            return {"status": TaskStatus.auditing.value, "output": output}
+        return await self._finish(ctx, task, TaskStatus.done, output)
+
     async def _finish(
         self, ctx: RuntimeContext, task: Task, status: TaskStatus, output: dict
     ) -> dict:
@@ -323,41 +350,65 @@ class NativeBackend:
             row = await db.get(Task, task.id)
             if row is None:  # pragma: no cover
                 return {"status": status.value}
-            row.status = status
-            row.output = output
-            # Terminal: drop the working-memory checkpoint so the transcript
-            # column only ever holds live tasks' turns (bounded growth).
-            row.transcript = None
-            cost = await db.scalar(
-                select(func.coalesce(func.sum(SpendEntry.amount_cents), 0)).where(
-                    SpendEntry.task_id == task.id
-                )
-            )
-            row.cost_cents = int(cost or 0)
-            await reputation.record_task_outcome(
-                db,
-                company_id=task.company_id,
-                agent_id=task.agent_id,
-                success=status is TaskStatus.done,
-                blocked=status is TaskStatus.blocked,
-                cost_cents=row.cost_cents,
-            )
-
-            # Delegation result propagation: when a delegated (child) task
-            # completes, persist its outcome to memory so it resurfaces to the
-            # parent/CEO via memory recall on a later step. Best-effort.
-            if status is TaskStatus.done and row.parent_task_id is not None:
-                try:
-                    await memory.write(
-                        db,
-                        company_id=task.company_id,
-                        type=MemoryType.result,
-                        title=f"Result: {row.goal[:80]}",
-                        content=output.get("summary", "") or "(no summary)",
-                        source_task_id=task.id,
-                    )
-                except Exception:  # noqa: BLE001 — propagation must not fail finish
-                    pass
-
+            await task_svc.finalize(db, task=row, status=status, output=output)
+            # Safety net: if this is a CEO audit task finishing without the CEO
+            # having resolved its target, don't strand the target in ``auditing``
+            # — accept it so the result still propagates and the run can wind down.
+            await self._resolve_dangling_audit(db, row)
             await db.commit()
         return {"status": status.value, "output": output}
+
+    async def _resolve_dangling_audit(self, db, task: Task) -> None:
+        info = task.input or {}
+        target_id = info.get("audit_target_task_id")
+        if not target_id:
+            return
+        target = await db.get(Task, uuid.UUID(str(target_id)))
+        if target is not None and target.status is TaskStatus.auditing:
+            # A result audit settles as ``done``; a failure review the CEO never
+            # resolved settles as ``failed`` (don't silently auto-retry it).
+            outcome = (
+                TaskStatus.failed
+                if info.get("audit_target_outcome") == "failed"
+                else TaskStatus.done
+            )
+            await task_svc.finalize(
+                db, task=target, status=outcome, output=target.output or {"summary": ""}
+            )
+
+    async def _inject_audit_feedback(
+        self, ctx: RuntimeContext, task: Task, messages: list[Message]
+    ) -> None:
+        """When the CEO reopened this task, surface its comments as the agent's
+        first instruction after its prior chat history, then consume them so the
+        feedback is injected only once."""
+        feedback = (task.input or {}).get("audit_feedback")
+        if not feedback:
+            return
+        note = TextBlock(
+            text=(
+                "The CEO audited your previous result and REOPENED this task. "
+                "Address this feedback before reporting again:\n" + str(feedback)
+            )
+        )
+        # Keep user/assistant turns alternating: merge into a trailing user turn
+        # rather than appending a second consecutive user message.
+        if messages and messages[-1].role == "user":
+            content = messages[-1].content
+            if isinstance(content, list):
+                content.append(note)
+            else:
+                messages[-1] = Message(
+                    role="user", content=[TextBlock(text=str(content)), note]
+                )
+        else:
+            messages.append(Message(role="user", content=[note]))
+
+        async with ctx.session_factory() as db:
+            await set_tenant(db, task.company_id)
+            row = await db.get(Task, task.id)
+            if row is not None and row.input and "audit_feedback" in row.input:
+                row.input = {k: v for k, v in row.input.items() if k != "audit_feedback"}
+                await db.commit()
+        if task.input:
+            task.input = {k: v for k, v in task.input.items() if k != "audit_feedback"}

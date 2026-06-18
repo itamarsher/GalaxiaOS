@@ -48,3 +48,13 @@ class DomainRegistrar(Protocol):
         """Register ``domain`` with the vendor. Raises :class:`RegistrarError`
         on failure. Must NOT touch the budget — the caller meters the charge."""
         ...
+
+    async def set_nameservers(self, domain: str, nameservers: list[str]) -> None:
+        """Delegate ``domain`` to ``nameservers`` (custom NS) at the registrar.
+
+        Used to point a bought domain at a DNS provider (e.g. Cloudflare). Raises
+        :class:`RegistrarError` if the registrar can't do this via API; callers then
+        fall back to asking the founder to set the nameservers manually. Optional:
+        registrars without API DNS control may raise ``RegistrarError``.
+        """
+        ...

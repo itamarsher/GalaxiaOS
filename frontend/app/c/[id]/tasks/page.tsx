@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useParams } from "next/navigation";
-import { api, fmtUsd, statusLabel, type Task, type TaskDetail } from "@/lib/api";
+import { api, fmtUsd, sortTasksForView, statusLabel, type Task, type TaskDetail } from "@/lib/api";
 import { usePoll } from "@/lib/useApi";
 import { Markdown } from "@/lib/markdown";
 
@@ -50,7 +50,7 @@ export default function TasksPage() {
     return () => es.close();
   }, [id]);
 
-  const tasks: Task[] = streamed ?? polled.data ?? [];
+  const tasks: Task[] = sortTasksForView(streamed ?? polled.data ?? []);
 
   return (
     <div>
@@ -153,7 +153,7 @@ function TaskDrawer({ companyId, taskId, onClose }: { companyId: string; taskId:
             <LiveActivity companyId={companyId} taskId={taskId} initialStatus={task.status} />
 
             <h4>Execution summary</h4>
-            {summary ? <p style={{ margin: 0 }}>{summary}</p>
+            {summary ? <Markdown>{summary}</Markdown>
               : <p className="muted" style={{ margin: 0 }}>No summary yet — this task is still in progress.</p>}
 
             <h4>Result</h4>

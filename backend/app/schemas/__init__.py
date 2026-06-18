@@ -40,6 +40,17 @@ class CompanyOut(ORMModel):
     name: str
     status: str
     mission_id: uuid.UUID | None = None
+    email_from: str | None = None
+
+
+class CompanyUpdateRequest(BaseModel):
+    """Founder-editable company settings. Fields left unset are not changed."""
+
+    # Sender ("From:") address agents send mail as, e.g. ``Acme <hello@acme.com>``
+    # or ``hello@acme.com``. Empty string clears it (falls back to the global
+    # default). Validated loosely — it must contain an ``@`` — so display names
+    # and angle-bracket forms are accepted.
+    email_from: str | None = Field(default=None, max_length=320)
 
 
 class KeyResultOut(ORMModel):
@@ -97,6 +108,23 @@ class PreviewOut(BaseModel):
     company: CompanyOut
     objectives: list[ObjectiveOut]
     org: OrgChartOut
+
+
+# ── Sites & connected domains ────────────────────────────────────────────────
+class SiteDomainOut(ORMModel):
+    id: uuid.UUID
+    domain: str
+    status: str
+
+
+class SiteOut(ORMModel):
+    id: uuid.UUID
+    slug: str
+    title: str
+    status: str
+    deployment_url: str | None = None
+    created_at: datetime
+    domains: list[SiteDomainOut] = []
     cost_estimate_cents: int | None = None
     investment_reviews: list[InvestmentReviewOut] = Field(default_factory=list)
 
@@ -136,6 +164,17 @@ class ApiKeyOut(ORMModel):
     provider: str
     key_fingerprint: str
     status: str
+
+
+# ── Integrations (Cloudflare site host + DNS) ────────────────────────────────
+class CloudflareCredsRequest(BaseModel):
+    api_token: str = Field(min_length=8)
+    account_id: str = Field(min_length=8)
+
+
+class CloudflareStatusOut(BaseModel):
+    configured: bool
+    account_id: str | None = None
 
 
 # ── Budget ───────────────────────────────────────────────────────────────────

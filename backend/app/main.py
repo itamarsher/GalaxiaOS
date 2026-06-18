@@ -22,6 +22,7 @@ from app.api import (
     dev,  # TEMP dev-only endpoints — remove before launch
     events,
     governance,
+    integrations,
     marketplace,
     metrics,
     onboarding,
@@ -98,6 +99,7 @@ def create_app() -> FastAPI:
     app.include_router(auth.router)
     app.include_router(onboarding.router)
     app.include_router(apikeys.router)
+    app.include_router(integrations.router)
     app.include_router(companies.router)
     app.include_router(companies.mine_router)
     app.include_router(budget.router)

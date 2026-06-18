@@ -1,8 +1,14 @@
-"""Tests for the marketing tools module (DB-free / network-free)."""
+"""Tests for the marketing tools module (DB-free / network-free).
+
+The marketing tools have no CMS/social/ad provider behind them, so they report the
+capability is unsupported instead of fabricating a published URL / scheduled post /
+launched campaign — and ``run_ad_campaign`` does NOT charge the budget.
+"""
 
 from __future__ import annotations
 
-from app.integrations.marketing import published_url, slugify
+import pytest
+
 from app.runtime.tools import TOOL_SPECS
 from app.runtime.tools import marketing as marketing_mod
 
@@ -32,15 +38,37 @@ def test_handlers_match_specs():
     assert set(marketing_mod.HANDLERS.keys()) == spec_names
 
 
-def test_slug_and_url_are_deterministic():
-    title = "My First Launch Post!"
-    assert slugify(title) == slugify(title)
-    assert published_url("blog", title) == published_url("blog", title)
-    assert slugify(title) == "my-first-launch-post"
-    assert published_url("blog", title).endswith("/blog/my-first-launch-post")
+# NB: publish_content / connect_domain are now real capabilities (gated on a
+# configured Cloudflare host + per-company credentials), so their "unsupported when
+# unconfigured" path is covered in test_sites.py where the resolver is mocked. The
+# tools below have no provider at all and are unconditionally unsupported.
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "name,args",
+    [
+        ("schedule_social_post", {"platform": "x", "content": "hi"}),
+        ("run_ad_campaign", {"platform": "x", "objective": "signups", "amount_cents": 5000}),
+    ],
+)
+async def test_handlers_report_unsupported(name, args):
+    # ctx is unused — in particular run_ad_campaign must NOT reach a cost meter.
+    outcome = await marketing_mod.HANDLERS[name](None, None, agent=None, task=None, args=args)
+    assert outcome.is_error is True
+    assert "not supported" in outcome.observation
+    assert "request_capability" in outcome.observation
 
 
-def test_slug_handles_empty_title():
-    # Symbol-only / empty titles still produce a stable, non-empty slug.
-    assert slugify("!!!") == slugify("!!!")
-    assert slugify("!!!")
+@pytest.mark.asyncio
+async def test_run_ad_campaign_does_not_charge_budget():
+    class _ExplodingMeter:
+        async def charge_external(self, *a, **k):  # pragma: no cover - must not run
+            raise AssertionError("run_ad_campaign must not charge when unsupported")
+
+    class _Ctx:
+        cost_meter = _ExplodingMeter()
+
+    outcome = await marketing_mod.HANDLERS["run_ad_campaign"](
+        None, _Ctx(), agent=None, task=None,
+        args={"platform": "x", "objective": "signups", "amount_cents": 5000},
+    )
+    assert outcome.is_error is True

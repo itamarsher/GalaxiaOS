@@ -17,7 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.db import SessionLocal
-from app.models import Budget, Company, InvestmentReview, KeyResult, Mission, Objective
+from app.models import Company, InvestmentReview, KeyResult, Mission, Objective
 from app.models.enums import InvestmentStance
 from app.observability import get_logger
 from app.providers.base import Message
@@ -70,9 +70,13 @@ def _as_list(value: object) -> list | None:
 
 
 async def _build_deal_memo(db: AsyncSession, *, company: Company) -> str:
-    """Assemble the compact JSON "deal memo" the investors review."""
+    """Assemble the compact JSON "deal memo" the investors review.
+
+    The budget is deliberately left out: the founder can add more later, so the
+    investors should weigh the venture on its merits rather than a fixed spend
+    level (the personas are instructed not to treat budget as a constraint).
+    """
     mission = await db.scalar(select(Mission).where(Mission.company_id == company.id))
-    budget = await db.scalar(select(Budget).where(Budget.company_id == company.id))
 
     objectives = (
         await db.scalars(
@@ -110,7 +114,6 @@ async def _build_deal_memo(db: AsyncSession, *, company: Company) -> str:
             mission.business_model_assumptions if mission else None
         ),
         "objectives": objective_memos,
-        "monthly_budget_cents": budget.limit_cents if budget else None,
     }
     return json.dumps(memo)
 

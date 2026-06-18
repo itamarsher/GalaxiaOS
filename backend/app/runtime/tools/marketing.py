@@ -1,24 +1,32 @@
-"""Marketing area tools: publish content, schedule social posts, run ad campaigns.
+"""Marketing area tools: publish content, connect a domain, schedule posts, ads.
 
-These are the marketing-specific tools an agent uses to grow the business. They
-are SIMULATED and deterministic by default — ``publish_content`` and
-``schedule_social_post`` perform no network I/O, while ``run_ad_campaign`` is the
-only one that spends real budget and therefore routes its charge through
-``ctx.cost_meter`` (the same chokepoint as LLM calls), keeping ``amount_cents``
-as a top-level arg so governance and the spend breaker can gate it up front.
+``publish_content`` (landing pages / blog) and ``connect_domain`` are REAL when the
+company has saved Cloudflare credentials in Settings (bring-your-own-key): they host
+a generated page and point a bought domain at it. The remaining channels
+(social/email) and ``schedule_social_post`` / ``run_ad_campaign`` reach providers
+that aren't wired, so they stay unsupported — each reports the capability is
+unavailable and points the agent at ``request_capability`` rather than fabricating a
+success that pollutes memory, metrics, and plans.
 """
 
 from __future__ import annotations
 
-import hashlib
-
-from app.integrations.marketing import get_publisher, published_url
+from app.integrations.dns import DnsError
+from app.integrations.sitehost import SiteHostError
 from app.models import Agent, Task
-from app.models.enums import MemoryType, MetricSource
+from app.models.enums import DecisionKind, DecisionStatus, SiteConnectStatus
+from app.models.governance import DecisionRequest
 from app.providers.base import ToolSpec
-from app.runtime.tools.base import ToolOutcome
-from app.services import memory as memory_svc
-from app.services import metrics as metrics_svc
+from app.runtime.tools.base import (
+    ToolOutcome,
+    consume_approval_grant,
+    unsupported_capability,
+)
+from app.services import sites as sites_svc
+from app.services.integrations import resolve_dns_provider, resolve_site_host
+
+# Channels that publish to a real static host via the site-host seam.
+_SITE_CHANNELS = {"landing_page", "blog"}
 
 SPECS: list[ToolSpec] = [
     ToolSpec(
@@ -38,6 +46,26 @@ SPECS: list[ToolSpec] = [
                 "body": {"type": "string"},
             },
             "required": ["channel", "title", "body"],
+        },
+    ),
+    ToolSpec(
+        name="connect_domain",
+        description=(
+            "Connect a domain you own to a published landing page: create its DNS "
+            "zone, point the domain at the host, and provision HTTPS. If the domain's "
+            "nameservers can't be delegated automatically, the founder is asked to "
+            "set them. Defaults to the most recently published site."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "domain": {"type": "string"},
+                "site_slug": {
+                    "type": "string",
+                    "description": "Optional slug of the site to connect; defaults to the latest.",
+                },
+            },
+            "required": ["domain"],
         },
     ),
     ToolSpec(
@@ -79,103 +107,130 @@ SPECS: list[ToolSpec] = [
 
 
 async def _publish_content(db, ctx, *, agent: Agent, task: Task, args: dict) -> ToolOutcome:
-    channel = args["channel"]
-    title = args["title"]
-    body = args["body"]
+    channel = str(args.get("channel") or "").strip()
+    if channel not in _SITE_CHANNELS:
+        # social / email reach providers that aren't wired.
+        return unsupported_capability(
+            f"Publishing to the {channel or 'unknown'} channel",
+            hint="Only landing_page and blog channels have a connected host.",
+        )
 
-    result = await get_publisher().publish(channel=channel, title=title, body=body)
+    host = await resolve_site_host(db, company_id=task.company_id)
+    if host is None:
+        return unsupported_capability(
+            "Publishing marketing content",
+            hint="No website host is connected — add Cloudflare credentials in Settings.",
+        )
 
-    await memory_svc.write(
-        db,
-        company_id=task.company_id,
-        type=MemoryType.result,
-        title=f"Published: {title}",
-        content=f"{channel} -> {result.url}\n\n{body[:2000]}",
-        source_task_id=task.id,
+    title = str(args["title"]).strip()
+    body = str(args["body"])
+    try:
+        site = await sites_svc.publish_site(
+            db, host, company_id=task.company_id, title=title, body=body
+        )
+    except SiteHostError as exc:
+        return ToolOutcome(observation=f"publish failed: {exc}", is_error=True)
+    return ToolOutcome(
+        observation=(
+            f"published '{title}' at {site.deployment_url} (slug {site.slug}). "
+            "Use connect_domain to point a bought domain at it."
+        )
     )
-    await metrics_svc.record_signal(
-        db,
-        company_id=task.company_id,
-        name="content_published",
-        value=1,
-        source=MetricSource.agent,
-        note=f"{channel}: {title[:80]}",
+
+
+async def _connect_domain(db, ctx, *, agent: Agent, task: Task, args: dict) -> ToolOutcome:
+    domain = str(args["domain"]).strip().lower().lstrip("@").rstrip(".")
+    if not domain or "." not in domain:
+        return ToolOutcome(observation=f"'{domain}' is not a valid domain", is_error=True)
+
+    host = await resolve_site_host(db, company_id=task.company_id)
+    dns = await resolve_dns_provider(db, company_id=task.company_id)
+    if host is None or dns is None:
+        return unsupported_capability(
+            "Connecting a domain to a site",
+            hint="No website host is connected — add Cloudflare credentials in Settings.",
+        )
+
+    site = await sites_svc.resolve_site(
+        db, company_id=task.company_id, slug=args.get("site_slug")
     )
-    return ToolOutcome(observation=f"published {channel} content {title[:60]!r} at {result.url}")
+    if site is None or not site.project_name:
+        return ToolOutcome(
+            observation="no published site to connect — call publish_content first",
+            is_error=True,
+        )
+
+    sd = await sites_svc.get_or_create_domain(
+        db, company_id=task.company_id, domain=domain, site=site
+    )
+    # On resume after the founder approved the "set your nameservers" decision,
+    # consume the grant so we trust the delegation instead of re-parking.
+    delegated = await consume_approval_grant(db, task_id=task.id, tool="connect_domain")
+    try:
+        sd = await sites_svc.begin_connection(db, sd=sd, founder_delegated=delegated)
+    except (DnsError, SiteHostError) as exc:
+        return ToolOutcome(observation=f"connecting {domain} failed: {exc}", is_error=True)
+
+    if sd.status == SiteConnectStatus.live:
+        return ToolOutcome(observation=f"{domain} is live and serving {site.title} over HTTPS")
+
+    # Nameservers couldn't be delegated automatically — ask the founder to point
+    # the domain at Cloudflare. Park the task until they confirm (the connection
+    # reconciler then finishes attaching + provisioning HTTPS).
+    if sd.status == SiteConnectStatus.pending_ns and sd.nameservers:
+        ns = "\n".join(f"- `{n}`" for n in sd.nameservers)
+        db.add(
+            DecisionRequest(
+                company_id=task.company_id,
+                agent_id=agent.id,
+                task_id=task.id,
+                kind=DecisionKind.user_action,
+                summary=(
+                    f"**Point `{domain}` at our DNS to go live**\n\n"
+                    f"At your domain registrar, set the nameservers for `{domain}` to:\n\n"
+                    f"{ns}\n\n"
+                    "Approve once you've updated them — the site finishes connecting "
+                    "automatically (this can take a little while to propagate)."
+                ),
+                payload={"tool": "connect_domain", "args": args},
+                status=DecisionStatus.pending,
+            )
+        )
+        await db.flush()
+        return ToolOutcome(
+            observation=(
+                f"created DNS zone for {domain}; asked the founder to delegate "
+                "nameservers. Connection resumes once they confirm."
+            ),
+            park=True,
+        )
+
+    return ToolOutcome(
+        observation=(
+            f"{domain} connection in progress (status: {sd.status.value}); HTTPS "
+            "provisioning completes shortly."
+        )
+    )
 
 
 async def _schedule_social_post(db, ctx, *, agent: Agent, task: Task, args: dict) -> ToolOutcome:
-    platform = args["platform"]
-    content = args["content"]
-    when = args.get("when")
-
-    digest = hashlib.sha256(f"{platform}|{content}|{when or ''}".encode()).hexdigest()[:12]
-    post_id = f"sched:{platform}:{digest}"
-    when_label = when or "next available slot"
-
-    await memory_svc.write(
-        db,
-        company_id=task.company_id,
-        type=MemoryType.decision,
-        title=f"Scheduled social post on {platform}",
-        content=f"id={post_id} when={when_label}\n\n{content[:2000]}",
-        source_task_id=task.id,
-    )
-    return ToolOutcome(
-        observation=f"scheduled post {post_id} on {platform} for {when_label}"
+    return unsupported_capability(
+        "Scheduling a social post",
+        hint="No social-media provider is connected.",
     )
 
 
 async def _run_ad_campaign(db, ctx, *, agent: Agent, task: Task, args: dict) -> ToolOutcome:
-    platform = args["platform"]
-    objective = args["objective"]
-    amount_cents = int(args["amount_cents"])
-
-    try:
-        await ctx.cost_meter.charge_external(
-            company_id=task.company_id,
-            agent_id=agent.id,
-            task_id=task.id,
-            amount_cents=amount_cents,
-            vendor=f"ads:{platform}",
-            sku=objective,
-            description=f"ad campaign on {platform} ({objective})",
-        )
-    except Exception as exc:  # refused / over-budget must never crash the loop
-        return ToolOutcome(observation=f"ad campaign not funded: {exc}", is_error=True)
-
-    note = f"{platform} campaign, objective={objective}"
-    await metrics_svc.record_signal(
-        db,
-        company_id=task.company_id,
-        name="ad_spend",
-        value=amount_cents / 100,
-        unit="USD",
-        source=MetricSource.agent,
-        note=note,
+    # Note: no budget is charged — the campaign would not actually run.
+    return unsupported_capability(
+        "Running an ad campaign",
+        hint="No ad network is connected, so the budget was NOT charged.",
     )
-    await memory_svc.write(
-        db,
-        company_id=task.company_id,
-        type=MemoryType.decision,
-        title=f"Ran ad campaign on {platform}",
-        content=f"objective={objective} budget=${amount_cents / 100:.2f}",
-        source_task_id=task.id,
-    )
-    return ToolOutcome(
-        observation=(
-            f"launched {platform} ad campaign (objective {objective!r}, "
-            f"spend ${amount_cents / 100:.2f})"
-        )
-    )
-
-
-# Re-export so callers/tests can reach the deterministic URL helper from here too.
-__all__ = ["SPECS", "HANDLERS", "published_url"]
 
 
 HANDLERS = {
     "publish_content": _publish_content,
+    "connect_domain": _connect_domain,
     "schedule_social_post": _schedule_social_post,
     "run_ad_campaign": _run_ad_campaign,
 }

@@ -1,15 +1,15 @@
 """Web search seam — the agents' window onto the outside world.
 
-Mirrors the domain-registrar seam (:mod:`app.integrations.base`): a Protocol
-plus a ``simulated`` default that is deterministic and network-free, so the
-agent loop and tests never touch the network. Swap in a real provider behind
-the same interface via ``ABOS_WEB_SEARCH_PROVIDER`` (real adapters are
-credential-gated, like the namecheap registrar).
+A small Protocol plus the real, credential-gated adapters that satisfy it. There is
+deliberately NO simulated/offline provider: faking search results would feed agents
+fabricated "facts" they then plan around. When no real provider is configured,
+:func:`get_web_search` returns ``None`` and the ``web_search`` tool reports the
+capability is unsupported (and the agent can request it). Swap in a real provider
+via ``ABOS_WEB_SEARCH_PROVIDER`` (e.g. ``tavily``).
 """
 
 from __future__ import annotations
 
-import hashlib
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
@@ -32,34 +32,18 @@ class WebSearch(Protocol):
         ...
 
 
-class SimulatedWebSearch:
-    """Deterministic, offline web search. Same query -> same results."""
+def get_web_search(name: str | None = None) -> WebSearch | None:
+    """Return the configured web-search provider, or ``None`` if none is wired.
 
-    async def search(self, query: str, *, max_results: int = 5) -> list[SearchResult]:
-        seed = hashlib.sha256(query.encode()).hexdigest()
-        results: list[SearchResult] = []
-        for i in range(max(0, max_results)):
-            tag = seed[i * 4 : i * 4 + 4] or "0000"
-            results.append(
-                SearchResult(
-                    title=f"[simulated] {query} — result {i + 1}",
-                    url=f"https://example.com/{tag}",
-                    snippet=(
-                        f"Simulated search result {i + 1} for {query!r}. "
-                        "Set ABOS_WEB_SEARCH_PROVIDER to a live adapter for real results."
-                    ),
-                )
-            )
-        return results
-
-
-def get_web_search(name: str | None = None) -> WebSearch:
-    """Return the configured web-search provider (defaults to simulated)."""
+    There is no simulated fallback: an unconfigured environment returns ``None`` so
+    the ``web_search`` tool reports the capability is unsupported instead of
+    fabricating results.
+    """
     from app.config import settings
 
     key = (name or settings.web_search_provider).strip().lower()
     if key in ("", "none", "simulated"):
-        return SimulatedWebSearch()
+        return None
     if key == "tavily":
         from app.integrations.tavily import TavilyWebSearch
 

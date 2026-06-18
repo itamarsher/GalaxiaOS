@@ -16,6 +16,7 @@ from app.services.investors import (
     _parse_json,
     _to_stance,
 )
+from tests.conftest import requires_db
 
 
 # ── _parse_json ──────────────────────────────────────────────────────────────
@@ -56,6 +57,16 @@ def test_each_prompt_mentions_json_and_contract():
         # The minified JSON contract keys must be present in every prompt.
         for key in ("stance", "conviction", "headline", "thesis", "strengths", "risks", "conditions"):
             assert key in prompt, (persona, key)
+
+
+def test_each_prompt_sets_ai_native_operating_context():
+    """Every persona must judge an agent-run, minimal-human venture and ignore budget."""
+    for persona, prompt in INVESTOR_PERSONAS.items():
+        lower = prompt.lower()
+        assert "autonomous ai agents" in lower, persona
+        assert "minimal human involvement" in lower, persona
+        # The budget is withheld and must not be treated as a constraint.
+        assert "budget" in lower and "not fixed" in lower, persona
 
 
 # ── stance mapping ───────────────────────────────────────────────────────────
@@ -99,3 +110,35 @@ def test_as_list_passthrough_and_none():
 
 def test_investor_error_is_exception():
     assert issubclass(investors.InvestorError, Exception)
+
+
+# ── deal memo (DB-backed) ────────────────────────────────────────────────────
+@requires_db
+async def test_deal_memo_omits_budget(session_factory, company_with_budget):
+    """The memo must withhold the budget even when the company has one set."""
+    from sqlalchemy import select
+
+    from app.models import Company, KeyResult, Mission, Objective
+
+    company_id = company_with_budget  # the fixture configures a Budget
+    async with session_factory() as db:
+        mission = Mission(
+            company_id=company_id, raw_text="build it", generated_summary="a summary"
+        )
+        db.add(mission)
+        await db.flush()
+        obj = Objective(
+            company_id=company_id, mission_id=mission.id, title="Acquire users", priority=1
+        )
+        db.add(obj)
+        await db.flush()
+        db.add(KeyResult(company_id=company_id, objective_id=obj.id, metric="signups"))
+        await db.commit()
+
+    async with session_factory() as db:
+        company = await db.scalar(select(Company).where(Company.id == company_id))
+        memo = json.loads(await investors._build_deal_memo(db, company=company))
+
+    assert "monthly_budget_cents" not in memo  # budget is deliberately withheld
+    assert memo["summary"] == "a summary"
+    assert memo["objectives"] and memo["objectives"][0]["title"] == "Acquire users"

@@ -11,6 +11,7 @@ from app.models.enums import CompanyStatus
 from app.runtime import orchestrator
 from app.services import copilot
 from app.services import runway as runway_svc
+from app.services import sites as sites_svc
 
 
 async def _active_company_ids() -> list:
@@ -41,6 +42,25 @@ async def generate_digests(ctx: dict) -> dict:
             await db.commit()
             count += 1
     return {"companies": count}
+
+
+async def reconcile_site_domains(ctx: dict) -> dict:
+    """Advance in-flight domain connections toward ``live``.
+
+    DNS zone activation and TLS issuance take minutes (and happen out-of-band after
+    a founder delegates nameservers), so a connection can't finish inside the agent
+    task that started it. This periodically pushes each non-terminal ``SiteDomain``
+    one step further (zone active -> attach domain -> HTTPS live).
+    """
+    advanced = 0
+    for company_id in await _active_company_ids():
+        async with SessionLocal() as db:
+            await set_tenant(db, company_id)
+            for sd in await sites_svc.pending_connections(db, company_id=company_id):
+                await sites_svc.advance_connection(db, sd=sd)
+                advanced += 1
+            await db.commit()
+    return {"advanced": advanced}
 
 
 async def run_business_cycle(ctx: dict) -> dict:

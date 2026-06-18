@@ -9,7 +9,12 @@ from arq import cron
 from app.config import settings
 from app.db import SessionLocal
 from app.jobs.recovery import recover_pending_work
-from app.jobs.scheduled import generate_digests, recompute_runway, run_business_cycle
+from app.jobs.scheduled import (
+    generate_digests,
+    recompute_runway,
+    reconcile_site_domains,
+    run_business_cycle,
+)
 from app.observability import get_logger
 from app.providers.registry import get_provider
 from app.runtime import orchestrator
@@ -64,6 +69,9 @@ class WorkerSettings:
         cron(recompute_runway, minute=settings.runway_recompute_minute),
         cron(generate_digests, hour=settings.digest_hour_utc, minute=0),
         cron(run_business_cycle, hour=settings.business_cycle_hour_utc, minute=0),
+        # Push in-flight domain connections forward (zone activation + HTTPS take
+        # minutes and happen out-of-band); every 5 minutes is plenty.
+        cron(reconcile_site_domains, minute=set(range(0, 60, 5))),
     ]
     on_startup = startup
     redis_settings = redis_settings()

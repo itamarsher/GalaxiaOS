@@ -25,8 +25,9 @@ async function req<T>(path: string, init: RequestInit = {}): Promise<T> {
 
 // ── Types ────────────────────────────────────────────────────────────────────
 export interface TokenResponse { access_token: string; token_type: string }
-export interface Company { id: string; name: string; status: string; mission_id: string | null }
+export interface Company { id: string; name: string; status: string; mission_id: string | null; email_from: string | null }
 export interface ApiKey { id: string; provider: string; key_fingerprint: string; status: string }
+export interface CloudflareStatus { configured: boolean; account_id: string | null }
 export interface Agent {
   id: string; role: string; name: string; autonomy_level: string;
   status: string; monthly_budget_cents: number | null; reports_to_agent_id: string | null;
@@ -87,6 +88,11 @@ export interface RefineResponse { reply: string; preview: Preview }
 export interface Memory { id: string; type: string; title: string; content: string; created_at: string }
 export interface Runway { projected_days_remaining: number | null; burn_rate_cents_per_day: number; balance_cents: number | null }
 export interface Digest { summary_md: string | null; open_decisions: number; period_date: string | null }
+export interface SiteDomain { id: string; domain: string; status: string }
+export interface Site {
+  id: string; slug: string; title: string; status: string;
+  deployment_url: string | null; created_at: string; domains: SiteDomain[];
+}
 export interface AgentListing {
   id: string; name: string; role: string; description: string; provider: string; price_cents: number;
   trust: number | null; accuracy: number | null; roi: number | null; reliability: number | null;
@@ -135,6 +141,16 @@ export const api = {
   deleteApiKey: (companyId: string, keyId: string) =>
     req<void>(`/companies/${companyId}/api-keys/${keyId}`, { method: "DELETE" }),
 
+  cloudflareStatus: (companyId: string) =>
+    req<CloudflareStatus>(`/companies/${companyId}/integrations/cloudflare`),
+  setCloudflare: (companyId: string, apiToken: string, accountId: string) =>
+    req<CloudflareStatus>(`/companies/${companyId}/integrations/cloudflare`, {
+      method: "PUT",
+      body: JSON.stringify({ api_token: apiToken, account_id: accountId }),
+    }),
+  clearCloudflare: (companyId: string) =>
+    req<void>(`/companies/${companyId}/integrations/cloudflare`, { method: "DELETE" }),
+
   generate: (companyId: string) => req<Preview>(`/onboarding/${companyId}/generate`, { method: "POST" }),
   generateStatus: (companyId: string) =>
     req<GenerationProgress>(`/onboarding/${companyId}/generate/status`),
@@ -147,6 +163,8 @@ export const api = {
   launch: (companyId: string) => req<Company>(`/onboarding/${companyId}/launch`, { method: "POST" }),
 
   company: (companyId: string) => req<Company>(`/companies/${companyId}`),
+  updateCompany: (companyId: string, patch: { email_from?: string }) =>
+    req<Company>(`/companies/${companyId}`, { method: "PATCH", body: JSON.stringify(patch) }),
   deleteCompany: (companyId: string) =>
     req<void>(`/companies/${companyId}`, { method: "DELETE" }),
   org: (companyId: string) => req<{ agents: Agent[]; edges: AgentEdge[] }>(`/companies/${companyId}/org`),
@@ -161,6 +179,8 @@ export const api = {
   runway: (companyId: string) => req<Runway>(`/companies/${companyId}/runway`),
   recomputeRunway: (companyId: string) =>
     req<Runway>(`/companies/${companyId}/runway/recompute`, { method: "POST" }),
+
+  sites: (companyId: string) => req<Site[]>(`/companies/${companyId}/sites`),
 
   tasks: (companyId: string) => req<Task[]>(`/companies/${companyId}/tasks`),
   task: (companyId: string, taskId: string) =>
@@ -219,9 +239,21 @@ export const api = {
 export const fmtUsd = (cents: number | null | undefined) =>
   cents == null ? "—" : `$${(cents / 100).toFixed(2)}`;
 
+/** Order tasks for the list views: tasks awaiting a founder decision first,
+ *  completed (done) tasks last, everything else in between. Stable, so the
+ *  backend's ordering is preserved within each group. */
+export const sortTasksForView = <T extends { status: string }>(tasks: T[]): T[] => {
+  const rank = (s: string) => (s === "waiting_approval" ? 0 : s === "done" ? 2 : 1);
+  return [...tasks].sort((a, b) => rank(a.status) - rank(b.status));
+};
+
 /** Human-friendly label for a task/decision status (the raw value still drives CSS). */
 export const statusLabel = (s: string): string =>
-  s === "waiting_approval" ? "Needs approval" : s.replace(/_/g, " ");
+  s === "waiting_approval"
+    ? "Needs approval"
+    : s === "auditing"
+      ? "CEO audit"
+      : s.replace(/_/g, " ");
 
 /** Human-friendly label for a decision kind. */
 export const decisionKindLabel = (kind: string): string =>
@@ -230,4 +262,6 @@ export const decisionKindLabel = (kind: string): string =>
     risky_action: "Risky action",
     strategy: "Strategy",
     plan_approval: "Plan approval",
+    hire_approval: "Hire request",
+    user_action: "Action requested",
   }[kind] ?? kind.replace(/_/g, " "));

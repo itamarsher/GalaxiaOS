@@ -25,7 +25,7 @@ from app.models.enums import (
 )
 from app.providers.base import ToolSpec
 from app.runtime.breakers import loop_signature
-from app.runtime.tools.base import ToolOutcome, consume_approval_grant
+from app.runtime.tools.base import ToolOutcome, consume_approval_grant, unsupported_capability
 from app.services import metrics as metrics_svc
 
 SPECS: list[ToolSpec] = [
@@ -155,6 +155,34 @@ SPECS: list[ToolSpec] = [
                 },
             },
             "required": ["kind", "summary"],
+        },
+    ),
+    ToolSpec(
+        name="request_user_action",
+        description=(
+            "Ask the founder to perform a real-world action you cannot do through any "
+            "tool — something only a human can carry out (e.g. make a phone call, sign "
+            "up for an account, inspect something offline, confirm an external result) — "
+            "and report back. This pauses your task until they respond; their reported "
+            "results come back to you so you can continue with them. Use this instead of "
+            "guessing an outcome or giving up when the only path forward needs a person."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "description": (
+                        "The concrete action you need the founder to perform, written so "
+                        "they know exactly what to do and what result to report back."
+                    ),
+                },
+                "reason": {
+                    "type": "string",
+                    "description": "Why you need this action and how the result unblocks your task.",
+                },
+            },
+            "required": ["action"],
         },
     ),
     ToolSpec(
@@ -379,6 +407,11 @@ async def _write_memory(db, ctx, *, agent: Agent, task: Task, args: dict) -> Too
 async def _register_domain(db, ctx, *, agent: Agent, task: Task, args: dict) -> ToolOutcome:
     domain = args["domain"]
     registrar = get_registrar()
+    if registrar is None:
+        return unsupported_capability(
+            "Registering a domain",
+            hint="No real domain registrar is configured (set ABOS_DOMAIN_REGISTRAR).",
+        )
     quote = await registrar.check(domain)
     if not quote.available:
         # No charge: nothing was reserved or spent.
@@ -411,15 +444,19 @@ EMAIL_KEY_PROVIDER = "resend"
 
 
 async def _resolve_email_sender(db, company_id):
-    """Return the email sender for this company.
+    """Return the email sender for this company, or ``None`` if none is wired.
 
     BYOK extends to email: if the founder attached a Resend key (onboarding or
     Settings), the company sends real mail via Resend — chosen for its generous
-    free tier and custom-domain support — regardless of the global default.
-    Without one, fall back to the configured sender: offline ``simulated`` unless
-    the deployment set a global real provider (e.g. SMTP).
+    free tier and custom-domain support — regardless of the global default, using
+    the company's own ``email_from`` ("From:") address when one is set. Without a
+    key, fall back to the configured sender, which is ``None`` unless the
+    deployment set a global real provider (e.g. SMTP); there is no simulated
+    sender, so an unconfigured environment resolves to ``None`` and the tool
+    reports the capability is unsupported.
     """
     from app.integrations.email import get_email_sender
+    from app.models import Company
     from app.services import apikeys
 
     key = await apikeys.get_plaintext_key(
@@ -428,7 +465,10 @@ async def _resolve_email_sender(db, company_id):
     if key:
         from app.integrations.resend import ResendEmailSender
 
-        return ResendEmailSender(api_key=key)
+        # Per-company verified "From:" overrides the global ABOS_EMAIL_FROM.
+        company = await db.get(Company, company_id)
+        sender = company.email_from if company else None
+        return ResendEmailSender(api_key=key, sender=sender or None)
     return get_email_sender()
 
 
@@ -437,10 +477,16 @@ async def _send_email(db, ctx, *, agent: Agent, task: Task, args: dict) -> ToolO
     from app.services import memory as memory_svc
 
     sender = await _resolve_email_sender(db, task.company_id)
-    try:
-        res = await sender.send(
-            to=args["to"], subject=args["subject"], body=args["body"]
+    if sender is None:
+        return unsupported_capability(
+            "Sending email",
+            hint=(
+                "No email provider is connected (set ABOS_EMAIL_PROVIDER=smtp + SMTP creds, "
+                "or add a Resend API key in Settings)."
+            ),
         )
+    try:
+        res = await sender.send(to=args["to"], subject=args["subject"], body=args["body"])
     except EmailError as exc:
         return ToolOutcome(observation=f"email send failed: {exc}", is_error=True)
     # Log the outbound communication for auditability / recall.
@@ -485,19 +531,19 @@ async def _record_metric(db, ctx, *, agent: Agent, task: Task, args: dict) -> To
 WEB_SEARCH_PROVIDER = "tavily"
 
 
-async def _resolve_web_search(db, company_id) -> tuple[object, int]:
+async def _resolve_web_search(db, company_id) -> tuple[object | None, int]:
     """Return ``(provider, cost_cents)`` for this company's web search.
 
     A founder can attach a Tavily key per company (onboarding or Settings); with
-    one we run real, billable web search. Without it we fall back to the
-    configured default — offline ``simulated`` (free, ``cost_cents == 0``) unless
-    the deployment set a global real provider. The returned ``cost_cents`` is the
-    *estimate* the CostMeter reserves up front (``web_search_cost_cents`` per
-    expected credit; advanced depth assumes two credits). The committed actual is
-    reconciled afterwards from the credits Tavily reports per call — see
-    :func:`_web_search`.
+    one we run real, billable web search. Without it we fall back to the configured
+    default, which is ``None`` unless the deployment set a global real provider —
+    there is no simulated provider, so an unconfigured environment resolves to
+    ``(None, 0)`` and the tool reports the capability is unsupported. The returned
+    ``cost_cents`` is the *estimate* the CostMeter reserves up front
+    (``web_search_cost_cents`` per expected credit; advanced depth assumes two
+    credits). The committed actual is reconciled afterwards from the credits Tavily
+    reports per call — see :func:`_web_search`.
     """
-    from app.integrations.websearch import SimulatedWebSearch
     from app.services import apikeys
 
     key = await apikeys.get_plaintext_key(
@@ -506,12 +552,12 @@ async def _resolve_web_search(db, company_id) -> tuple[object, int]:
     if key:
         from app.integrations.tavily import TavilyWebSearch
 
-        search: object = TavilyWebSearch(api_key=key)
+        search: object | None = TavilyWebSearch(api_key=key)
     else:
         search = get_web_search()
 
-    if isinstance(search, SimulatedWebSearch):
-        return search, 0
+    if search is None:
+        return None, 0
     multiplier = 2 if settings.tavily_search_depth == "advanced" else 1
     return search, settings.web_search_cost_cents * multiplier
 
@@ -519,6 +565,11 @@ async def _resolve_web_search(db, company_id) -> tuple[object, int]:
 async def _web_search(db, ctx, *, agent: Agent, task: Task, args: dict) -> ToolOutcome:
     query = args["query"]
     search, cost_cents = await _resolve_web_search(db, task.company_id)
+    if search is None:
+        return unsupported_capability(
+            "Web search",
+            hint="No web-search provider is connected (add a Tavily key in Settings).",
+        )
     try:
         if cost_cents > 0:
             # Real (paid) provider: reserve the estimated cost first, run the
@@ -610,6 +661,46 @@ async def _request_decision(db, ctx, *, agent: Agent, task: Task, args: dict) ->
     return ToolOutcome(observation="escalated to founder", park=True)
 
 
+async def _request_user_action(db, ctx, *, agent: Agent, task: Task, args: dict) -> ToolOutcome:
+    action = str(args.get("action") or "").strip()
+    if not action:
+        return ToolOutcome(
+            observation="Describe the action you need the founder to perform.", is_error=True
+        )
+    reason = str(args.get("reason") or "").strip()
+    summary = (
+        "**Action requested**\n\n"
+        f"The {agent.role.value} agent needs you to do something it can't do itself:\n\n"
+        f"{action}"
+    )
+    if reason:
+        summary += f"\n\n_Why:_ {reason}"
+    summary += (
+        "\n\nDo this, then approve with the **results in your note** so the agent can "
+        "continue with them (reject if it shouldn't be done)."
+    )
+    db.add(
+        DecisionRequest(
+            company_id=task.company_id,
+            agent_id=agent.id,
+            task_id=task.id,
+            kind=DecisionKind.user_action,
+            summary=summary,
+            payload={"tool": "request_user_action", "action": action, "reason": reason},
+            status=DecisionStatus.pending,
+        )
+    )
+    row = await db.get(Task, task.id)
+    if row is not None:
+        row.status = TaskStatus.waiting_approval
+    task.status = TaskStatus.waiting_approval  # keep the in-memory copy consistent
+    await db.flush()
+    return ToolOutcome(
+        observation="asked the founder to perform the action; waiting for their report",
+        park=True,
+    )
+
+
 async def _report_result(db, ctx, *, agent: Agent, task: Task, args: dict) -> ToolOutcome:
     return ToolOutcome(observation="reported", stop=True)
 
@@ -622,6 +713,7 @@ HANDLERS = {
     "register_domain": _register_domain,
     "send_email": _send_email,
     "request_decision": _request_decision,
+    "request_user_action": _request_user_action,
     "report_result": _report_result,
     "read_metrics": _read_metrics,
     "record_metric": _record_metric,

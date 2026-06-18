@@ -21,6 +21,7 @@ from app.models import (
     AgentEdge,
     Budget,
     Company,
+    InvestmentReview,
     KeyResult,
     Membership,
     Mission,
@@ -369,7 +370,13 @@ def _weighted_split(weights: list[float], total_cents: int | None) -> list[int |
 async def _reallocate_agent_budgets(
     db: AsyncSession, *, company_id: uuid.UUID, total_cents: int | None
 ) -> None:
-    """Re-split the company's monthly budget across agents, weighted by role."""
+    """Re-split the company's monthly budget across agents, weighted by role.
+
+    Start lean: only ``1 - launch_budget_reserve_fraction`` of the budget is
+    split across the fleet; the remainder stays unallocated as the CEO's pool, so
+    the team doesn't commit the whole budget up front and the CEO has reserve to
+    deploy later via approved hires.
+    """
     agents = (
         await db.scalars(
             select(Agent)
@@ -377,8 +384,12 @@ async def _reallocate_agent_budgets(
             .order_by(Agent.created_at.asc(), Agent.id.asc())
         )
     ).all()
+    allocatable = total_cents
+    if total_cents and total_cents > 0:
+        reserve = min(max(settings.launch_budget_reserve_fraction, 0.0), 1.0)
+        allocatable = int(total_cents * (1.0 - reserve))
     weights = [_ROLE_BUDGET_WEIGHTS.get(a.role, _DEFAULT_BUDGET_WEIGHT) for a in agents]
-    for agent, cents in zip(agents, _weighted_split(weights, total_cents), strict=True):
+    for agent, cents in zip(agents, _weighted_split(weights, allocatable), strict=True):
         agent.monthly_budget_cents = cents
     await db.flush()
 
@@ -429,7 +440,7 @@ async def generate(db: AsyncSession, *, company: Company) -> dict:
     budget = await db.scalar(select(Budget).where(Budget.company_id == company.id))
     meter = CostMeter(SessionLocal)
     set_progress(
-        company.id, phase="planning", pct=10, message="Reading your mission and budget"
+        company.id, phase="planning", pct=10, message="Processing…"
     )
 
     # ── LLM #1: mission → plan ────────────────────────────────────────────────
@@ -615,6 +626,34 @@ async def _current_plan_snapshot(db: AsyncSession, company: Company) -> dict:
     return {"company_name": company.name, "objectives": obj_payload, "agents": agent_payload}
 
 
+async def _investor_reviews_context(db: AsyncSession, company: Company) -> str:
+    """The investor verdicts as compact JSON, so the founder can discuss them with
+    the AI while refining the plan. Empty string when no review has been run."""
+    reviews = (
+        await db.scalars(
+            select(InvestmentReview)
+            .where(InvestmentReview.company_id == company.id)
+            .order_by(InvestmentReview.created_at)
+        )
+    ).all()
+    if not reviews:
+        return ""
+    payload = [
+        {
+            "persona": r.persona.value,
+            "stance": r.stance.value,
+            "conviction": r.conviction,
+            "headline": r.headline,
+            "thesis": r.thesis,
+            "strengths": r.strengths,
+            "risks": r.risks,
+            "conditions": r.conditions,
+        }
+        for r in reviews
+    ]
+    return json.dumps(payload)
+
+
 async def refine(db: AsyncSession, *, company: Company, message: str) -> dict:
     """Conversationally edit a draft company's objectives / agent fleet.
 
@@ -634,6 +673,7 @@ async def refine(db: AsyncSession, *, company: Company, message: str) -> dict:
     planner_model = provider.default_models["planner"]
 
     snapshot = await _current_plan_snapshot(db, company)
+    reviews_ctx = await _investor_reviews_context(db, company)
     meter = CostMeter(SessionLocal)
     resp = await meter.run_llm(
         provider,
@@ -648,7 +688,12 @@ async def refine(db: AsyncSession, *, company: Company, message: str) -> dict:
                 role="user",
                 content=(
                     f"Current plan:\n{json.dumps(snapshot)}\n\n"
-                    f"Founder instruction: {message}"
+                    + (
+                        f"Investor reviews of this plan:\n{reviews_ctx}\n\n"
+                        if reviews_ctx
+                        else ""
+                    )
+                    + f"Founder instruction: {message}"
                 ),
             )
         ],

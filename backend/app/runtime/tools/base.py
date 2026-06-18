@@ -65,6 +65,35 @@ async def consume_approval_grant(db, *, task_id: uuid.UUID, tool: str) -> bool:
     return False
 
 
+def unsupported_capability(capability: str, *, hint: str | None = None) -> ToolOutcome:
+    """Standard outcome for a tool that has no real backing provider.
+
+    Returned *instead* of a fabricated/simulated success so an agent never mistakes
+    a stubbed action for a real one. Faking success here is what poisons the loop:
+    a phantom result gets written to Company Memory and the metrics, then feeds back
+    into planning prompts, so agents confidently plan around leads/customers/spend
+    that never existed. This outcome is an explicit error and points the agent at the
+    built-in escalation path — ``request_capability`` — so a genuine gap becomes a
+    tracked platform request rather than a hallucination.
+    """
+    message = (
+        f"{capability} is not supported in this environment: it is not connected to a "
+        "real provider, so NOTHING happened — nothing was sent, logged, published, "
+        "created, or charged. Do not record or assume any result. If you need this to "
+        "do your job, call `request_capability` with a clear title and details so the "
+        "Platform agent can add it."
+    )
+    if hint:
+        message = f"{message} {hint}"
+    return ToolOutcome(observation=message, is_error=True)
+
+
 #: Every tool handler is an async callable returning a :class:`ToolOutcome`.
 Handler = Callable[..., Awaitable[ToolOutcome]]
-__all__ = ["ToolOutcome", "Handler", "Any", "consume_approval_grant"]
+__all__ = [
+    "ToolOutcome",
+    "Handler",
+    "Any",
+    "consume_approval_grant",
+    "unsupported_capability",
+]

@@ -25,8 +25,6 @@ export default function DecisionsPage() {
 
 function DecisionCard({ decision: d, onResolved }: { decision: Decision; onResolved: () => void }) {
   const [busy, setBusy] = useState(false);
-  const [note, setNote] = useState("");
-  const [showChat, setShowChat] = useState(false);
   const [chat, setChat] = useState<ChatTurn[]>([]);
   const [input, setInput] = useState("");
   const [thinking, setThinking] = useState(false);
@@ -34,27 +32,25 @@ function DecisionCard({ decision: d, onResolved }: { decision: Decision; onResol
   const act = async (approve: boolean) => {
     setBusy(true);
     try {
-      // When discussing, the conversation IS the guidance — the standalone note
-      // field is hidden and deliberately not sent with the verdict.
-      const guidance = showChat ? undefined : note || undefined;
-      if (approve) await api.approveDecision(d.id, guidance);
-      else await api.rejectDecision(d.id, guidance);
+      // The conversation IS the guidance: it's persisted server-side and applied
+      // with the verdict, so no separate note is sent.
+      if (approve) await api.approveDecision(d.id);
+      else await api.rejectDecision(d.id);
       onResolved();
     } finally {
       setBusy(false);
     }
   };
 
-  // The thread is persisted server-side; load it when the chat is opened so it
-  // survives reloads and is shared across devices.
+  // The thread is persisted server-side; load it on mount so it survives reloads
+  // and is shared across devices.
   useEffect(() => {
-    if (!showChat) return;
     let active = true;
     api.decisionChatThread(d.id)
       .then((res) => { if (active) setChat(res.thread); })
       .catch(() => { /* keep whatever is on screen */ });
     return () => { active = false; };
-  }, [showChat, d.id]);
+  }, [d.id]);
 
   const send = async () => {
     const q = input.trim();
@@ -113,63 +109,36 @@ function DecisionCard({ decision: d, onResolved }: { decision: Decision; onResol
       <label style={{ marginTop: 0 }}>Details</label>
       <Markdown>{d.summary}</Markdown>
 
-      {/* The standalone guidance note is for a quick approve/reject. Once the
-          founder opens the discussion, the chat replaces it as the guidance. */}
-      {!showChat && (
-        <>
-          <label>Guidance for the agent (optional — applied whether you approve or reject)</label>
-          <textarea
-            value={note}
-            onChange={(e) => setNote(e.target.value)}
-            placeholder="e.g. Go ahead, but cap the spend at $20 and use the .io domain."
-            style={{ minHeight: 60 }}
-          />
-        </>
-      )}
-
-      <div className="btnrow">
-        {!showChat && (
-          <>
-            <button disabled={busy} onClick={() => act(true)}>Approve</button>
-            <button className="ghost" disabled={busy} onClick={() => act(false)}>Reject</button>
-          </>
+      {/* The discussion is the only guidance channel: talk it through with the
+          agent, then give your verdict below. The whole conversation is what the
+          agent acts on. */}
+      <div style={{ marginTop: 12 }}>
+        {chat.length > 0 && (
+          <div className="chat" style={{ marginBottom: 10 }}>
+            {chat.map((t, i) => (
+              <div key={i} className={`msg ${t.who === "you" ? "user" : "bot"}`}>
+                {t.who === "agent" ? <Markdown>{t.text}</Markdown> : t.text}
+              </div>
+            ))}
+            {thinking && <div className="msg bot muted">thinking…</div>}
+          </div>
         )}
-        <button className="ghost" onClick={() => setShowChat((s) => !s)}>
-          {showChat ? "Hide chat" : "💬 Discuss"}
-        </button>
-      </div>
-
-      {showChat && (
-        <div style={{ marginTop: 12 }}>
-          {chat.length > 0 && (
-            <div className="chat" style={{ marginBottom: 10 }}>
-              {chat.map((t, i) => (
-                <div key={i} className={`msg ${t.who === "you" ? "user" : "bot"}`}>
-                  {t.who === "agent" ? <Markdown>{t.text}</Markdown> : t.text}
-                </div>
-              ))}
-              {thinking && <div className="msg bot muted">thinking…</div>}
-            </div>
-          )}
-          <div className="chatbar">
-            <input
-              placeholder="Ask the agent why, or how to change this…"
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && send()}
-              disabled={thinking}
-            />
-            <button onClick={send} disabled={thinking || !input.trim()}>Send</button>
-          </div>
-
-          {/* Verdict lives below the discussion: the whole conversation is the
-              guidance the agent acts on. */}
-          <div className="btnrow" style={{ marginTop: 12 }}>
-            <button disabled={busy} onClick={() => act(true)}>Approve</button>
-            <button className="ghost" disabled={busy} onClick={() => act(false)}>Reject</button>
-          </div>
+        <div className="chatbar">
+          <input
+            placeholder="Ask the agent why, or tell it how to change this…"
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && send()}
+            disabled={thinking}
+          />
+          <button onClick={send} disabled={thinking || !input.trim()}>Send</button>
         </div>
-      )}
+
+        <div className="btnrow" style={{ marginTop: 12 }}>
+          <button disabled={busy} onClick={() => act(true)}>Approve</button>
+          <button className="ghost" disabled={busy} onClick={() => act(false)}>Reject</button>
+        </div>
+      </div>
     </div>
   );
 }

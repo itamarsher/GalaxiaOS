@@ -1,8 +1,6 @@
 """Email seam — how agents send mail (sales, marketing, ops, support).
 
-Mirrors the other integration seams: a Protocol plus a ``simulated`` default
-that is deterministic and network-free, so the agent loop and tests never send
-real mail. Two real adapters are available:
+A Protocol plus two real, credential-gated adapters:
 
 - :class:`SmtpEmailSender` — vendor-agnostic; speaks plain SMTP over ``smtplib``
   in a worker thread, so it works with Gmail, SES, Mailgun, Postmark, etc.
@@ -15,14 +13,17 @@ real mail. Two real adapters are available:
   ``ABOS_EMAIL_FROM``).
 
 Without creds the real adapters raise :class:`EmailError` rather than attempting
-to send. Off by default (``ABOS_EMAIL_PROVIDER=simulated``); enable with
-``ABOS_EMAIL_PROVIDER=smtp`` or ``ABOS_EMAIL_PROVIDER=resend``.
+to send. There is deliberately NO simulated sender: faking a sent email would
+let agents believe outreach happened when it did not. When no provider is
+configured (``ABOS_EMAIL_PROVIDER`` defaults to ``simulated``/unset),
+:func:`get_email_sender` returns ``None`` and the ``send_email`` tool reports the
+capability is unsupported. Enable real send with ``ABOS_EMAIL_PROVIDER=smtp`` or
+``ABOS_EMAIL_PROVIDER=resend``.
 """
 
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import smtplib
 from dataclasses import dataclass
 from email.message import EmailMessage
@@ -46,14 +47,6 @@ class EmailSender(Protocol):
     async def send(self, *, to: str, subject: str, body: str) -> EmailResult:
         """Send an email. Raises :class:`EmailError` on failure."""
         ...
-
-
-class SimulatedEmailSender:
-    """Deterministic, offline sender. Same inputs -> same message id; no network."""
-
-    async def send(self, *, to: str, subject: str, body: str) -> EmailResult:
-        digest = hashlib.sha256(f"{to}|{subject}|{body}".encode()).hexdigest()[:12]
-        return EmailResult(message_id=f"sim:{digest}", provider="simulated")
 
 
 class SmtpEmailSender:
@@ -95,11 +88,16 @@ class SmtpEmailSender:
         return EmailResult(message_id=msg["Message-ID"] or f"smtp:{to}", provider="smtp")
 
 
-def get_email_sender(name: str | None = None) -> EmailSender:
-    """Return the configured email sender (defaults to simulated)."""
+def get_email_sender(name: str | None = None) -> EmailSender | None:
+    """Return the configured email sender, or ``None`` if none is wired.
+
+    There is no simulated fallback: an unconfigured environment returns ``None`` so
+    the ``send_email`` tool reports the capability is unsupported instead of
+    pretending mail was sent.
+    """
     key = (name or settings.email_provider).strip().lower()
     if key in ("", "none", "simulated"):
-        return SimulatedEmailSender()
+        return None
     if key == "smtp":
         return SmtpEmailSender()
     if key == "resend":

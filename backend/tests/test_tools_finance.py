@@ -1,14 +1,15 @@
-"""Tests for the finance tools module (DB-free)."""
+"""Tests for the finance tools module (DB-free).
+
+``read_financials`` / ``record_transaction`` operate on the company's own data and
+stay. ``generate_invoice`` has no billing provider behind it, so it reports the
+capability is unsupported instead of fabricating an invoice.
+"""
 
 from __future__ import annotations
 
 import pytest
 
-from app.integrations.invoicing import (
-    SimulatedInvoicer,
-    deterministic_invoice_id,
-    get_invoicer,
-)
+from app.integrations.invoicing import get_invoicer
 from app.runtime.tools import TOOL_SPECS
 from app.runtime.tools.finance import (
     HANDLERS,
@@ -81,24 +82,17 @@ def test_format_budget_summary_computes_remaining():
     assert "remaining $600.00" in summary
 
 
-def test_deterministic_invoice_id_is_stable():
-    a = deterministic_invoice_id("company-1", "Acme", 5000)
-    b = deterministic_invoice_id("company-1", "Acme", 5000)
-    assert a == b
-    assert a.startswith("INV-")
+def test_no_invoicer_is_wired_by_default():
+    # No real billing provider -> None, so generate_invoice reports unsupported.
+    assert get_invoicer() is None
 
 
-def test_deterministic_invoice_id_varies_with_inputs():
-    base = deterministic_invoice_id("company-1", "Acme", 5000)
-    assert deterministic_invoice_id("company-2", "Acme", 5000) != base
-    assert deterministic_invoice_id("company-1", "Beta", 5000) != base
-    assert deterministic_invoice_id("company-1", "Acme", 5001) != base
-
-
-def test_simulated_invoicer_is_deterministic():
-    invoicer = get_invoicer()
-    assert isinstance(invoicer, SimulatedInvoicer)
-    inv = invoicer.generate(company_id="c1", customer="Acme", amount_cents=2500, description="x")
-    assert inv.invoice_id == deterministic_invoice_id("c1", "Acme", 2500)
-    assert inv.amount_cents == 2500
-    assert inv.customer == "Acme"
+@pytest.mark.asyncio
+async def test_generate_invoice_reports_unsupported():
+    outcome = await HANDLERS["generate_invoice"](
+        None, None, agent=None, task=None,
+        args={"customer": "Acme", "amount_cents": 2500, "description": "x"},
+    )
+    assert outcome.is_error is True
+    assert "not supported" in outcome.observation
+    assert "request_capability" in outcome.observation

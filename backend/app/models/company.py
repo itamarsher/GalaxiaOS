@@ -26,3 +26,8 @@ class Company(Base, PKMixin, TimestampMixin):
     )
     # mission_id is denormalised for convenience; the authoritative link is Mission.company_id.
     mission_id: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), nullable=True)
+    # Sender ("From:") address agents send mail as, e.g. ``Acme <hello@acme.com>``.
+    # Set by the founder in the UI; for Resend it must be on a domain verified in
+    # their Resend account. When unset, the email sender falls back to the global
+    # ``ABOS_EMAIL_FROM``.
+    email_from: Mapped[str | None] = mapped_column(String(320), nullable=True)

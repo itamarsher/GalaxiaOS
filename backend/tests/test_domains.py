@@ -8,7 +8,6 @@ from app.integrations.availability import interpret_status
 from app.integrations.base import RegistrarError
 from app.integrations.rdap import RdapRegistrar
 from app.integrations.registry import get_registrar
-from app.integrations.simulated import SimulatedRegistrar
 from app.runtime.cost_meter import CostMeter
 from app.services import budget as budget_svc
 from app.services.budget import BudgetExceeded
@@ -24,17 +23,6 @@ def test_rdap_status_mapping():
     assert interpret_status(503) is None
 
 
-async def test_simulated_registrar_check_and_register():
-    reg = SimulatedRegistrar()
-    q = await reg.check("acme.com")
-    assert q.available and q.price_cents == 1200
-    assert (await reg.check("foo.test")).available is False  # reserved TLD
-    r = await reg.register("acme.io")
-    assert r.price_cents == 4000 and r.external_ref.startswith("sim:")
-    with pytest.raises(RegistrarError):
-        await reg.register("nope.test")
-
-
 async def test_rdap_registrar_unknown_availability_is_not_available(monkeypatch):
     # Simulate RDAP network failure (returns None) -> must NOT be available.
     async def fake_rdap(domain, *, timeout=4.0):
@@ -48,7 +36,9 @@ async def test_rdap_registrar_unknown_availability_is_not_available(monkeypatch)
 
 
 def test_registry_wiring():
-    assert isinstance(get_registrar("simulated"), SimulatedRegistrar)
+    # No simulated registrar: the default resolves to None so register_domain
+    # reports the capability is unsupported instead of faking a registration.
+    assert get_registrar("simulated") is None
     assert isinstance(get_registrar("rdap"), RdapRegistrar)
     # namecheap resolves (adapter constructed) but registering without creds raises.
     get_registrar("namecheap")

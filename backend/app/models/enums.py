@@ -76,6 +76,7 @@ class TaskStatus(str, enum.Enum):
     queued = "queued"
     running = "running"
     waiting_approval = "waiting_approval"
+    auditing = "auditing"
     done = "done"
     failed = "failed"
     blocked = "blocked"
@@ -130,6 +131,8 @@ class DecisionKind(str, enum.Enum):
     risky_action = "risky_action"
     strategy = "strategy"
     plan_approval = "plan_approval"
+    hire_approval = "hire_approval"
+    user_action = "user_action"
 
 
 class DecisionStatus(str, enum.Enum):
@@ -137,6 +140,30 @@ class DecisionStatus(str, enum.Enum):
     approved = "approved"
     rejected = "rejected"
     expired = "expired"
+
+
+class SiteStatus(str, enum.Enum):
+    """Lifecycle of a generated landing page / site."""
+
+    draft = "draft"
+    published = "published"
+    failed = "failed"
+
+
+class SiteConnectStatus(str, enum.Enum):
+    """State machine for connecting a bought domain to a hosted site.
+
+    Advances ``pending_ns -> ns_set -> zone_active -> attaching -> live`` as the
+    DNS zone is delegated, activates, and the host accepts the custom domain.
+    A reconciler job moves rows forward; ``failed`` is terminal-with-error.
+    """
+
+    pending_ns = "pending_ns"  # zone created; awaiting nameserver delegation
+    ns_set = "ns_set"  # nameservers pointed at the DNS provider
+    zone_active = "zone_active"  # provider reports the zone is active
+    attaching = "attaching"  # custom domain submitted to the host
+    live = "live"  # domain serves the site over TLS
+    failed = "failed"
 
 
 class ApiKeyStatus(str, enum.Enum):
@@ -167,3 +194,34 @@ class InvestmentStance(str, enum.Enum):
     invest = "invest"
     conditional = "conditional"
     pass_ = "pass"
+
+
+class CrmContactStatus(str, enum.Enum):
+    """Lifecycle stage of a CRM contact, from first touch to outcome."""
+
+    lead = "lead"  # captured, not yet qualified
+    qualified = "qualified"  # vetted as a real opportunity
+    customer = "customer"  # converted / paying
+    churned = "churned"  # was a customer, left
+    lost = "lost"  # disqualified / dropped before converting
+
+
+class CrmDealStage(str, enum.Enum):
+    """Pipeline stage of a CRM deal, in pipeline order."""
+
+    new = "new"
+    qualified = "qualified"
+    proposal = "proposal"
+    won = "won"
+    lost = "lost"
+
+
+class CrmActivityKind(str, enum.Enum):
+    """Type of a logged CRM interaction or planned touchpoint."""
+
+    note = "note"
+    call = "call"
+    email = "email"
+    meeting = "meeting"
+    task = "task"
+    followup = "followup"

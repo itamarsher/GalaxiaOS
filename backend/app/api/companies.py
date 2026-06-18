@@ -8,20 +8,33 @@ from fastapi import APIRouter, HTTPException, status
 from sqlalchemy import select
 
 from app.deps import CompanyDep, CurrentUser, DbDep
-from app.models import Agent, AgentEdge, Company, DecisionRequest, Membership, MemoryEntry, Task
+from app.models import (
+    Agent,
+    AgentEdge,
+    Company,
+    DecisionRequest,
+    Membership,
+    MemoryEntry,
+    SiteDomain,
+    Task,
+)
 from app.models.enums import AgentStatus, DecisionStatus, TaskStatus
 from app.runtime.transcript import transcript_lines
 from app.schemas import (
     AgentEdgeOut,
     AgentOut,
     CompanyOut,
+    CompanyUpdateRequest,
     DecisionOut,
     MemoryOut,
     OrgChartOut,
+    SiteDomainOut,
+    SiteOut,
     TaskDetailOut,
     TaskOut,
     TaskTranscriptOut,
 )
+from app.services import sites as sites_svc
 
 router = APIRouter(prefix="/companies/{company_id}", tags=["companies"])
 
@@ -44,6 +57,26 @@ async def list_my_companies(db: DbDep, user: CurrentUser):
 
 @router.get("", response_model=CompanyOut)
 async def get_company(company: CompanyDep):
+    return company
+
+
+@router.patch("", response_model=CompanyOut)
+async def update_company(company: CompanyDep, body: CompanyUpdateRequest, db: DbDep):
+    """Update founder-editable company settings (currently the sender address).
+
+    ``email_from`` is the "From:" agents send mail as; with Resend it must be on a
+    domain verified in the founder's Resend account. An empty string clears it
+    (falls back to the global ``ABOS_EMAIL_FROM``).
+    """
+    if body.email_from is not None:
+        sender = body.email_from.strip()
+        if sender and "@" not in sender:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                "Sender must be an email address, e.g. hello@acme.com or 'Acme <hello@acme.com>'.",
+            )
+        company.email_from = sender or None
+    await db.commit()
     return company
 
 
@@ -84,6 +117,31 @@ async def pause_agent(company: CompanyDep, agent_id: uuid.UUID, db: DbDep):
 @router.post("/agents/{agent_id}/resume", response_model=AgentOut)
 async def resume_agent(company: CompanyDep, agent_id: uuid.UUID, db: DbDep):
     return await _set_agent_status(db, company.id, agent_id, AgentStatus.active)
+
+
+@router.get("/sites", response_model=list[SiteOut])
+async def list_sites(company: CompanyDep, db: DbDep):
+    """Generated landing pages and the bought domains connected to each."""
+    sites = await sites_svc.list_sites(db, company_id=company.id)
+    domains = (
+        await db.scalars(select(SiteDomain).where(SiteDomain.company_id == company.id))
+    ).all()
+    by_site: dict[uuid.UUID, list[SiteDomainOut]] = {}
+    for d in domains:
+        if d.site_id is not None:
+            by_site.setdefault(d.site_id, []).append(SiteDomainOut.model_validate(d))
+    return [
+        SiteOut(
+            id=s.id,
+            slug=s.slug,
+            title=s.title,
+            status=s.status.value,
+            deployment_url=s.deployment_url,
+            created_at=s.created_at,
+            domains=by_site.get(s.id, []),
+        )
+        for s in sites
+    ]
 
 
 @router.get("/tasks", response_model=list[TaskOut])
