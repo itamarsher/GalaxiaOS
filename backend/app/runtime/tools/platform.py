@@ -41,8 +41,10 @@ async def _resolve_issue_tracker(db, company_id):
 
     A founder can attach a GitHub token per company (in onboarding or Settings);
     when present we file real issues against ``settings.github_repo``. Without one
-    we fall back to the configured default tracker (offline simulated unless the
-    deployment set a global GitHub token).
+    we fall back to the configured default tracker, which is ``None`` unless the
+    deployment set a global GitHub token — there is no simulated tracker, so
+    ``open_issue`` records the request to company memory instead (see
+    :func:`_open_issue`).
     """
     token = await apikeys.get_plaintext_key(
         db, company_id=company_id, provider=GITHUB_PROVIDER
@@ -206,14 +208,41 @@ async def _open_issue(db, ctx, *, agent: Agent, task: Task, args: dict) -> ToolO
     title = str(args["title"]).strip()
     body = str(args["body"]).strip()
     labels = [str(x) for x in (args.get("labels") or []) if str(x).strip()]
+    label_part = f" [{', '.join(labels)}]" if labels else ""
+
+    tracker = await _resolve_issue_tracker(db, task.company_id)
+
+    # No external tracker configured: don't fabricate an issue number/URL. Record
+    # the request to the company's own memory so the request_capability → open_issue
+    # escalation loop still produces a durable, honest artifact the founder can act
+    # on, and tell the agent plainly where it landed.
+    if tracker is None:
+        await memory_svc.write(
+            db,
+            company_id=task.company_id,
+            type=MemoryType.result,
+            title=f"Platform request: {title[:80]}",
+            content=(
+                f"Recorded internally{label_part} — no external issue tracker is "
+                "connected, so this was saved to company memory rather than filed in a "
+                f"tracker. Connect a GitHub token to file it externally.\n\n{body[:2000]}"
+            ),
+            source_task_id=task.id,
+        )
+        return ToolOutcome(
+            observation=(
+                f"No external issue tracker is connected, so {title[:80]!r} was recorded "
+                "internally to company memory (visible to the founder). To file it in a "
+                "real tracker, connect a GitHub token in Settings."
+            )
+        )
+
     try:
-        tracker = await _resolve_issue_tracker(db, task.company_id)
         result = await tracker.open_issue(title=title, body=body, labels=labels)
     except IssueTrackerError as exc:
         return ToolOutcome(observation=f"could not open issue: {exc}", is_error=True)
 
     # Audit trail: record the filed issue to company memory.
-    label_part = f" [{', '.join(labels)}]" if labels else ""
     await memory_svc.write(
         db,
         company_id=task.company_id,

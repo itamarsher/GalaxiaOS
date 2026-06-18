@@ -3,15 +3,16 @@
 The Platform agent is dormant — the CEO never dispatches it. It wakes only when
 another agent escalates via `report_bug` / `request_capability`, each of which
 spawns a queued task to the Platform agent (reusing the same `_spawn_child`
-mechanism the CEO uses). Once awake, it files a tracker issue with `open_issue`
-(offline simulated tracker by default) and records it to company memory.
+mechanism the CEO uses). Once awake, it files a tracker issue with `open_issue`.
+With no external tracker connected (the default), `open_issue` records the request
+to company memory instead of fabricating an external issue, so the escalation loop
+still completes offline.
 """
 
 from __future__ import annotations
 
 from sqlalchemy import select
 
-from app.integrations.issues import SimulatedIssueTracker
 from app.models import Agent, AgentRun, Task
 from app.models.enums import (
     AgentRole,
@@ -157,22 +158,11 @@ async def test_report_bug_without_platform_agent_is_graceful(
     assert child is None
 
 
-# ── open_issue via the simulated tracker ──────────────────────────────────────
-
-
-async def test_simulated_tracker_is_deterministic():
-    tracker = SimulatedIssueTracker()
-    a = await tracker.open_issue(title="t", body="b", labels=["bug"])
-    b = await tracker.open_issue(title="t", body="b", labels=["bug"])
-    c = await tracker.open_issue(title="t", body="DIFFERENT", labels=["bug"])
-    assert a == b  # same inputs -> same id/url/number
-    assert a.id != c.id  # different body -> different id
-    assert a.provider == "simulated"
-    assert str(a.number) in a.url
+# ── open_issue records internally when no external tracker is connected ────────
 
 
 @requires_db
-async def test_open_issue_files_and_writes_memory(
+async def test_open_issue_records_internally_and_writes_memory(
     session_factory, company_with_budget, monkeypatch
 ):
     company_id = company_with_budget
@@ -216,13 +206,10 @@ async def test_open_issue_files_and_writes_memory(
         )
         await db.commit()
 
-    # Deterministic id/url surfaced from the simulated tracker.
-    expected = await SimulatedIssueTracker().open_issue(
-        title="Fix .io registration", body="stack trace…", labels=["bug"]
-    )
+    # No external tracker connected -> recorded internally, not fabricated.
     assert outcome.is_error is False
-    assert expected.id in outcome.observation
-    assert expected.url in outcome.observation
+    assert "recorded internally" in outcome.observation
+    assert "company memory" in outcome.observation
     # Audit trail written to memory.
     assert len(recorded) == 1
     assert recorded[0]["type"] is MemoryType.result

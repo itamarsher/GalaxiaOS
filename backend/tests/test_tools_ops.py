@@ -1,9 +1,16 @@
-"""Tests for the OPS tools module — DB-free, no network."""
+"""Tests for the OPS tools module — DB-free, no network.
+
+``send_notification`` / ``create_calendar_event`` have no provider behind them and
+report the capability is unsupported. ``log_ops_event`` is a genuine internal memory
+write and stays (its DB behaviour is covered by the runtime/integration tests).
+"""
 
 from __future__ import annotations
 
+import pytest
+
 from app.runtime.tools import TOOL_SPECS
-from app.runtime.tools.ops import HANDLERS, SPECS, _deterministic_id
+from app.runtime.tools.ops import HANDLERS, SPECS
 
 
 def test_ops_tools_registered():
@@ -27,17 +34,16 @@ def test_handler_keys_are_callable():
         assert callable(handler)
 
 
-def test_deterministic_id_is_stable():
-    a = _deterministic_id("notif", "co1", "slack", "#general", "hello")
-    b = _deterministic_id("notif", "co1", "slack", "#general", "hello")
-    assert a == b
-    assert a.startswith("notif_")
-
-
-def test_deterministic_id_varies_with_inputs():
-    a = _deterministic_id("evt", "co1", "Launch review", "tomorrow")
-    b = _deterministic_id("evt", "co1", "Launch review", "next week")
-    assert a != b
-    # Prefix is honored and the id is compact.
-    assert a.startswith("evt_")
-    assert len(a) == len("evt_") + 16
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "name,args",
+    [
+        ("send_notification", {"channel": "slack", "target": "#general", "message": "hi"}),
+        ("create_calendar_event", {"title": "Launch review", "when": "tomorrow"}),
+    ],
+)
+async def test_external_handlers_report_unsupported(name, args):
+    outcome = await HANDLERS[name](None, None, agent=None, task=None, args=args)
+    assert outcome.is_error is True
+    assert "not supported" in outcome.observation
+    assert "request_capability" in outcome.observation

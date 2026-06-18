@@ -6,23 +6,16 @@ import pytest
 
 from app.integrations.email import (
     EmailError,
-    SimulatedEmailSender,
     SmtpEmailSender,
     get_email_sender,
 )
 
 
-@pytest.mark.asyncio
-async def test_simulated_is_deterministic_and_offline():
-    a = await SimulatedEmailSender().send(to="x@y.com", subject="hi", body="hello")
-    b = await SimulatedEmailSender().send(to="x@y.com", subject="hi", body="hello")
-    assert a == b
-    assert a.provider == "simulated" and a.message_id.startswith("sim:")
-
-
 def test_resolver_selects_smtp_and_default():
     assert isinstance(get_email_sender("smtp"), SmtpEmailSender)
-    assert isinstance(get_email_sender(), SimulatedEmailSender)  # default simulated
+    # No simulated sender: the default resolves to None so send_email reports the
+    # capability is unsupported instead of pretending mail was sent.
+    assert get_email_sender() is None
 
 
 @pytest.mark.asyncio

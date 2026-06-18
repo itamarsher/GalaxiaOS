@@ -10,7 +10,7 @@ from __future__ import annotations
 import base64
 import os
 
-from app.integrations.issues import GitHubIssueTracker, SimulatedIssueTracker
+from app.integrations.issues import GitHubIssueTracker
 from app.runtime.tools.platform import GITHUB_PROVIDER, _resolve_issue_tracker
 from app.services import apikeys
 from tests.conftest import requires_db
@@ -23,14 +23,15 @@ def _set_master_key() -> None:
 
 
 @requires_db
-async def test_issue_tracker_defaults_to_simulated_without_github_key(
+async def test_issue_tracker_is_none_without_github_key(
     session_factory, company_with_budget
 ):
     _set_master_key()
     async with session_factory() as db:
         tracker = await _resolve_issue_tracker(db, company_with_budget)
-    # No github key stored -> the configured default (offline simulated).
-    assert isinstance(tracker, SimulatedIssueTracker)
+    # No github key stored and no global tracker configured -> None, so open_issue
+    # records the request to company memory instead of fabricating an external issue.
+    assert tracker is None
 
 
 @requires_db

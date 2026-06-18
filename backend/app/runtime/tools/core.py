@@ -25,7 +25,7 @@ from app.models.enums import (
 )
 from app.providers.base import ToolSpec
 from app.runtime.breakers import loop_signature
-from app.runtime.tools.base import ToolOutcome, consume_approval_grant
+from app.runtime.tools.base import ToolOutcome, consume_approval_grant, unsupported_capability
 from app.services import metrics as metrics_svc
 
 SPECS: list[ToolSpec] = [
@@ -379,6 +379,11 @@ async def _write_memory(db, ctx, *, agent: Agent, task: Task, args: dict) -> Too
 async def _register_domain(db, ctx, *, agent: Agent, task: Task, args: dict) -> ToolOutcome:
     domain = args["domain"]
     registrar = get_registrar()
+    if registrar is None:
+        return unsupported_capability(
+            "Registering a domain",
+            hint="No real domain registrar is configured (set ABOS_DOMAIN_REGISTRAR).",
+        )
     quote = await registrar.check(domain)
     if not quote.available:
         # No charge: nothing was reserved or spent.
@@ -410,10 +415,14 @@ async def _send_email(db, ctx, *, agent: Agent, task: Task, args: dict) -> ToolO
     from app.integrations.email import EmailError, get_email_sender
     from app.services import memory as memory_svc
 
-    try:
-        res = await get_email_sender().send(
-            to=args["to"], subject=args["subject"], body=args["body"]
+    sender = get_email_sender()
+    if sender is None:
+        return unsupported_capability(
+            "Sending email",
+            hint="No email provider is connected (set ABOS_EMAIL_PROVIDER=smtp + SMTP creds).",
         )
+    try:
+        res = await sender.send(to=args["to"], subject=args["subject"], body=args["body"])
     except EmailError as exc:
         return ToolOutcome(observation=f"email send failed: {exc}", is_error=True)
     # Log the outbound communication for auditability / recall.
@@ -458,19 +467,19 @@ async def _record_metric(db, ctx, *, agent: Agent, task: Task, args: dict) -> To
 WEB_SEARCH_PROVIDER = "tavily"
 
 
-async def _resolve_web_search(db, company_id) -> tuple[object, int]:
+async def _resolve_web_search(db, company_id) -> tuple[object | None, int]:
     """Return ``(provider, cost_cents)`` for this company's web search.
 
     A founder can attach a Tavily key per company (onboarding or Settings); with
-    one we run real, billable web search. Without it we fall back to the
-    configured default — offline ``simulated`` (free, ``cost_cents == 0``) unless
-    the deployment set a global real provider. The returned ``cost_cents`` is the
-    *estimate* the CostMeter reserves up front (``web_search_cost_cents`` per
-    expected credit; advanced depth assumes two credits). The committed actual is
-    reconciled afterwards from the credits Tavily reports per call — see
-    :func:`_web_search`.
+    one we run real, billable web search. Without it we fall back to the configured
+    default, which is ``None`` unless the deployment set a global real provider —
+    there is no simulated provider, so an unconfigured environment resolves to
+    ``(None, 0)`` and the tool reports the capability is unsupported. The returned
+    ``cost_cents`` is the *estimate* the CostMeter reserves up front
+    (``web_search_cost_cents`` per expected credit; advanced depth assumes two
+    credits). The committed actual is reconciled afterwards from the credits Tavily
+    reports per call — see :func:`_web_search`.
     """
-    from app.integrations.websearch import SimulatedWebSearch
     from app.services import apikeys
 
     key = await apikeys.get_plaintext_key(
@@ -479,12 +488,12 @@ async def _resolve_web_search(db, company_id) -> tuple[object, int]:
     if key:
         from app.integrations.tavily import TavilyWebSearch
 
-        search: object = TavilyWebSearch(api_key=key)
+        search: object | None = TavilyWebSearch(api_key=key)
     else:
         search = get_web_search()
 
-    if isinstance(search, SimulatedWebSearch):
-        return search, 0
+    if search is None:
+        return None, 0
     multiplier = 2 if settings.tavily_search_depth == "advanced" else 1
     return search, settings.web_search_cost_cents * multiplier
 
@@ -492,6 +501,11 @@ async def _resolve_web_search(db, company_id) -> tuple[object, int]:
 async def _web_search(db, ctx, *, agent: Agent, task: Task, args: dict) -> ToolOutcome:
     query = args["query"]
     search, cost_cents = await _resolve_web_search(db, task.company_id)
+    if search is None:
+        return unsupported_capability(
+            "Web search",
+            hint="No web-search provider is connected (add a Tavily key in Settings).",
+        )
     try:
         if cost_cents > 0:
             # Real (paid) provider: reserve the estimated cost first, run the

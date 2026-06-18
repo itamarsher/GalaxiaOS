@@ -1,23 +1,25 @@
-"""Finance tools: budget/metrics visibility, transaction recording, invoicing.
+"""Finance tools: budget/metrics visibility and transaction recording.
 
-Area-specific tools for the finance function. Everything here is deterministic
-and simulated — there is no network, no new config, and no real-money charge.
-``read_financials`` is the finance agent's zero-cost window into the real
-numbers (the monthly :class:`Budget` plus recent metric signals);
-``record_transaction`` and ``generate_invoice`` persist outcomes as metric
-signals and institutional memory. Generating an invoice bills a customer, so it
-deliberately does *not* charge the company budget.
+``read_financials`` and ``record_transaction`` operate on the company's OWN data —
+they read the real monthly :class:`Budget` / metric signals and record observed
+revenue/expense to metrics and institutional memory — so they are genuine internal
+operations and stay.
+
+``generate_invoice`` is different: issuing an invoice means billing a real customer
+through a real billing provider, and none is connected. It used to fabricate an
+invoice id and log it as "invoiced" revenue, which is exactly the kind of fake
+outcome that misleads planning, so it now reports the capability is unavailable and
+points the agent at ``request_capability``.
 """
 
 from __future__ import annotations
 
 from sqlalchemy import select
 
-from app.integrations.invoicing import get_invoicer
 from app.models import Agent, Budget, Task
 from app.models.enums import BudgetPeriod, MemoryType, MetricSource
 from app.providers.base import ToolSpec
-from app.runtime.tools.base import ToolOutcome
+from app.runtime.tools.base import ToolOutcome, unsupported_capability
 from app.services import memory as memory_svc
 from app.services import metrics as metrics_svc
 
@@ -86,8 +88,8 @@ SPECS: list[ToolSpec] = [
     ToolSpec(
         name="generate_invoice",
         description=(
-            "Generate a deterministic customer invoice (no network). Logs the "
-            "invoice and records it as an 'invoiced' metric. Does not charge the budget."
+            "Issue a customer invoice via the billing provider. Does not charge the "
+            "company budget (it bills a customer, not the company)."
         ),
         input_schema={
             "type": "object",
@@ -152,39 +154,9 @@ async def _record_transaction(db, ctx, *, agent: Agent, task: Task, args: dict) 
 
 
 async def _generate_invoice(db, ctx, *, agent: Agent, task: Task, args: dict) -> ToolOutcome:
-    customer = args["customer"]
-    amount_cents = int(args["amount_cents"])
-    description = args.get("description")
-
-    invoice = get_invoicer().generate(
-        company_id=str(task.company_id),
-        customer=customer,
-        amount_cents=amount_cents,
-        description=description,
-    )
-
-    content = f"Invoice {invoice.invoice_id} to {customer} for {_dollars(amount_cents)}."
-    if description:
-        content += f" For: {description}"
-    await memory_svc.write(
-        db,
-        company_id=task.company_id,
-        type=MemoryType.decision,
-        title=f"Invoice {invoice.invoice_id} -> {customer}",
-        content=content,
-        source_task_id=task.id,
-    )
-    await metrics_svc.record_signal(
-        db,
-        company_id=task.company_id,
-        name="invoiced",
-        value=amount_cents / 100,
-        unit="USD",
-        source=MetricSource.agent,
-        note=f"invoice {invoice.invoice_id} -> {customer}",
-    )
-    return ToolOutcome(
-        observation=f"generated invoice {invoice.invoice_id} -> {customer} ({_dollars(amount_cents)})"
+    return unsupported_capability(
+        "Generating a customer invoice",
+        hint="No billing/invoicing provider is connected to issue the invoice.",
     )
 
 

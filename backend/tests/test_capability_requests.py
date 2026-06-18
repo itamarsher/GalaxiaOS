@@ -14,7 +14,6 @@ from types import SimpleNamespace
 from sqlalchemy import func, select
 
 from app.integrations.tavily import TavilyWebSearch
-from app.integrations.websearch import SimulatedWebSearch
 from app.models import Agent, Task
 from app.models.enums import AgentRole
 from app.runtime.tools.core import WEB_SEARCH_PROVIDER, _resolve_web_search
@@ -167,12 +166,14 @@ async def test_discuss_tool_call_files_request(session_factory, company_with_bud
 
 
 @requires_db
-async def test_web_search_defaults_to_simulated_and_is_free(session_factory, company_with_budget):
+async def test_web_search_is_unsupported_without_a_key(session_factory, company_with_budget):
     _set_master_key()
     async with session_factory() as db:
         search, cost = await _resolve_web_search(db, company_with_budget)
-    assert isinstance(search, SimulatedWebSearch)
-    assert cost == 0  # offline simulated provider is never charged
+    # No Tavily key and no global provider -> None, so web_search reports the
+    # capability is unsupported (no simulated results are fabricated).
+    assert search is None
+    assert cost == 0
 
 
 @requires_db

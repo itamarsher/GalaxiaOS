@@ -1,19 +1,19 @@
 """Issue-tracker seam — how the Platform agent files bug/feature tracker issues.
 
-Mirrors the other integration seams: a Protocol plus a ``simulated`` default that
-is deterministic and network-free, so the agent loop and tests never open a real
-issue. The real adapter (:class:`GitHubIssueTracker`) POSTs to the GitHub REST
-API and is credential-gated (``ABOS_GITHUB_TOKEN`` + ``ABOS_GITHUB_REPO``);
-without a token it raises :class:`IssueTrackerError` rather than hitting the
-network.
+A Protocol plus the real adapter (:class:`GitHubIssueTracker`), which POSTs to the
+GitHub REST API and is credential-gated (``ABOS_GITHUB_TOKEN`` + ``ABOS_GITHUB_REPO``);
+without a token it raises :class:`IssueTrackerError` rather than hitting the network.
 
-Off by default (``ABOS_ISSUE_TRACKER=simulated``); enable with
-``ABOS_ISSUE_TRACKER=github``.
+There is deliberately NO simulated tracker that fabricates an external issue
+number/URL. When no real tracker is configured, :func:`get_issue_tracker` returns
+``None`` and ``open_issue`` records the bug/feature request to the company's own
+memory instead — a durable, honest internal artifact — so the
+``request_capability`` → ``open_issue`` escalation loop still works offline. Enable
+real GitHub issues with ``ABOS_ISSUE_TRACKER=github`` (or a per-company token).
 """
 
 from __future__ import annotations
 
-import hashlib
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
@@ -43,25 +43,6 @@ class IssueTracker(Protocol):
     ) -> IssueResult:
         """Open a tracker issue. Raises :class:`IssueTrackerError` on failure."""
         ...
-
-
-class SimulatedIssueTracker:
-    """Deterministic, offline tracker. Same inputs -> same id/url; no network."""
-
-    async def open_issue(
-        self, *, title: str, body: str, labels: list[str] | None = None
-    ) -> IssueResult:
-        label_part = ",".join(sorted(labels or []))
-        digest = hashlib.sha256(f"{title}|{body}|{label_part}".encode()).hexdigest()
-        # A stable fake issue number derived from the hash (kept human-sized).
-        number = int(digest[:6], 16) % 90000 + 1
-        repo = settings.github_repo or "simulated/repo"
-        return IssueResult(
-            id=f"sim:{digest[:12]}",
-            number=number,
-            url=f"https://example.invalid/{repo}/issues/{number}",
-            provider="simulated",
-        )
 
 
 class GitHubIssueTracker:
@@ -116,11 +97,16 @@ class GitHubIssueTracker:
         )
 
 
-def get_issue_tracker(name: str | None = None) -> IssueTracker:
-    """Return the configured issue tracker (defaults to simulated)."""
+def get_issue_tracker(name: str | None = None) -> IssueTracker | None:
+    """Return the configured issue tracker, or ``None`` if none is wired.
+
+    There is no simulated fallback: an unconfigured environment returns ``None`` so
+    ``open_issue`` records the request to company memory instead of fabricating an
+    external issue.
+    """
     key = (name or settings.issue_tracker).strip().lower()
     if key in ("", "none", "simulated"):
-        return SimulatedIssueTracker()
+        return None
     if key == "github":
         return GitHubIssueTracker()
     raise ValueError(f"unknown issue tracker: {key!r}")

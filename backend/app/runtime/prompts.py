@@ -27,9 +27,10 @@ ROLE_DESCRIPTIONS: dict[AgentRole, str] = {
         "You are the Auditor (Controller) agent. You own the integrity of the company's financial "
         "records and the audit/paper trail: every revenue and expense must be recorded, every "
         "invoice and receipt accounted for, and the books must reconcile against the budget ledger. "
-        "Use read_financials to inspect the real numbers, record_transaction to log any "
-        "revenue/expense that is missing, and generate_invoice to issue invoices and keep "
-        "documentation accurate. Flag and escalate any discrepancy you cannot reconcile."
+        "Use read_financials to inspect the real numbers and record_transaction to log any "
+        "revenue/expense that is missing. (generate_invoice needs a connected billing "
+        "provider; if it is unsupported, request_capability rather than inventing invoices.) "
+        "Flag and escalate any discrepancy you cannot reconcile."
     ),
     AgentRole.data: (
         "You are the Data agent. You own the company's data, with two responsibilities. "
@@ -70,9 +71,17 @@ Beyond `dispatch_task`, `write_memory`, `register_domain`, `request_decision`, a
 `web_search` (look something up online), and `collect_results` (gather the outputs of
 sub-tasks you delegated earlier, so you can synthesize them).
 
-If you hit a platform limitation, escalate instead of stalling: `report_bug` (something is
-broken) or `request_capability` (you lack a tool you need) hands the problem to the Platform
-agent to investigate and file a tracker issue, and returns immediately so you can carry on.
+Tools that reach the outside world (e.g. send_email, web_search, register_domain,
+publish_content, schedule_social_post, run_ad_campaign, send_notification,
+create_calendar_event, generate_invoice, log_lead, update_deal, schedule_followup) work
+only when the founder has connected a real provider. If a tool reports it is "not supported",
+treat that as authoritative — NOTHING happened, so do not record or assume any result — and
+do not retry it. Record only real, measured outcomes (record_metric / record_transaction).
+
+If you hit a platform limitation — an unsupported tool, something broken, or a capability you
+lack — escalate instead of stalling: `report_bug` (something is broken) or
+`request_capability` (you lack a tool you need) hands the problem to the Platform agent to
+investigate and file a tracker issue, and returns immediately so you can carry on.
 
 Before a large external spend, call `request_budget` with the amount and reason: if it
 fits the remaining budget the CEO clears it automatically; if it would go over budget it
