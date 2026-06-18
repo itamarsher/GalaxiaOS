@@ -76,6 +76,7 @@ class TaskStatus(str, enum.Enum):
     queued = "queued"
     running = "running"
     waiting_approval = "waiting_approval"
+    auditing = "auditing"
     done = "done"
     failed = "failed"
     blocked = "blocked"
@@ -130,6 +131,8 @@ class DecisionKind(str, enum.Enum):
     risky_action = "risky_action"
     strategy = "strategy"
     plan_approval = "plan_approval"
+    hire_approval = "hire_approval"
+    user_action = "user_action"
 
 
 class DecisionStatus(str, enum.Enum):

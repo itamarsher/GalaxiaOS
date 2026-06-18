@@ -212,7 +212,7 @@ export default function Home() {
             onChange={(e) => setMission(e.target.value)}
             placeholder="Build the best vulnerability management platform for SMBs."
           />
-          <label>Monthly budget (USD)</label>
+          <label>Initial budget (USD)</label>
           <input value={budget} onChange={(e) => setBudget(e.target.value)} />
           <button disabled={busy || !mission} onClick={startOnboarding}>Continue</button>
         </div>
