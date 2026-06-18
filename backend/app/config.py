@@ -140,6 +140,13 @@ class Settings(BaseSettings):
     # same task before it is auto-accepted, so an audit↔redo loop can't run forever.
     max_audit_rounds: int = 2
 
+    # Failure-retry loop: when a delegated task fails unexpectedly, it lands in
+    # ``auditing`` and the CEO is woken to decide whether the failure looks
+    # transient (worth re-running) or persistent (abandon it). This caps how many
+    # times the CEO may re-run the same failed task before it stays failed, so a
+    # fail↔retry loop can't burn budget forever.
+    max_task_retries: int = 3
+
     # Restart safety: the durable business state lives in Postgres, but the work
     # queue is arq-on-Redis and ephemeral on this deployment. On worker startup,
     # rebuild the Redis queue from the DB (requeue orphaned/queued tasks and

@@ -87,6 +87,95 @@ async def should_audit(db: AsyncSession, *, agent: Agent, task: Task) -> bool:
     return parent_agent is not None and parent_agent.role is AgentRole.ceo
 
 
+async def should_review_failure(db: AsyncSession, *, agent: Agent, task: Task) -> bool:
+    """Whether a failed delegated task should go to the CEO to decide on a retry.
+
+    True only for a task the CEO delegated: the failing agent isn't the CEO, the
+    task was dispatched by the CEO (its parent task belongs to the CEO), and the
+    per-task retry cap hasn't been reached (so a fail↔retry loop ends). Mirrors
+    :func:`should_audit`, but for the failure path rather than the success path.
+    """
+    if agent.role is AgentRole.ceo or task.parent_task_id is None:
+        return False
+    if int((task.input or {}).get("retry_count", 0)) >= settings.max_task_retries:
+        return False
+    parent = await db.get(Task, task.parent_task_id)
+    if parent is None or parent.agent_id is None:
+        return False
+    parent_agent = await db.get(Agent, parent.agent_id)
+    return parent_agent is not None and parent_agent.role is AgentRole.ceo
+
+
+async def begin_failure_review(
+    db: AsyncSession, *, child_id: uuid.UUID, output: dict
+) -> uuid.UUID | None:
+    """Park a failed delegated task in ``auditing`` and wake the CEO to decide on a retry.
+
+    Mirrors :func:`begin_auditing`: instead of letting the failure stand, the result
+    is held in ``auditing`` (an active status, so the run stays alive) and a CEO
+    review task is created. From it the CEO either re-runs the task (transient
+    failure) or abandons it (persistent), via the ``retry_task`` tool. Returns the
+    new CEO review task id to enqueue, or ``None`` if there's no active CEO (the
+    caller then marks the task ``failed`` normally).
+    """
+    child = await db.get(Task, child_id)
+    if child is None:  # pragma: no cover
+        return None
+    ceo = await db.scalar(
+        select(Agent).where(
+            Agent.company_id == child.company_id,
+            Agent.role == AgentRole.ceo,
+            Agent.status == AgentStatus.active,
+        )
+    )
+    if ceo is None:
+        return None
+
+    retries = int((child.input or {}).get("retry_count", 0))
+    child.status = TaskStatus.auditing
+    child.output = output
+    # Mark the parked task as a failure review (vs a result audit) and drop any
+    # stale transcript — a retry starts the task fresh from its goal.
+    child.input = {**(child.input or {}), "failure_review": True}
+    child.transcript = None
+    await db.flush()
+
+    child_agent = await db.get(Agent, child.agent_id) if child.agent_id else None
+    role_name = child_agent.role.value if child_agent else "agent"
+    remaining = settings.max_task_retries - retries
+    error = output.get("error") or output.get("summary") or "(no failure detail)"
+    goal = (
+        f"A {role_name} task FAILED before completing.\n\n"
+        f"Task: {child.goal}\n\n"
+        f"Failure detail:\n{error}\n\n"
+        "Decide whether this looks like a TRANSIENT, non-persistent problem worth "
+        "another attempt (e.g. a flaky network/provider error) or a PERSISTENT issue "
+        "that would just fail again (e.g. a missing capability or a malformed goal). "
+        f"If it's worth re-running, retry it: `retry_task` with task_id {child.id}, "
+        f"decision 'retry' ({remaining} retr{'y' if remaining == 1 else 'ies'} left). "
+        "If it's persistent, don't waste budget: `retry_task` with decision 'abandon' "
+        "and a brief reason. Then finish with `report_result`."
+    )
+    review = Task(
+        company_id=child.company_id,
+        run_id=child.run_id,
+        root_run_id=child.root_run_id,
+        agent_id=ceo.id,
+        parent_task_id=child.id,
+        depth=child.depth + 1,
+        goal=goal,
+        # ``audit_target_*`` keys reuse the dangling-resolution safety net in the
+        # native backend; ``outcome="failed"`` makes an unresolved review settle as
+        # failed (don't silently auto-retry).
+        input={"audit_target_task_id": str(child.id), "audit_target_outcome": "failed"},
+        status=TaskStatus.queued,
+        loop_signature=breakers.loop_signature(ceo.id, f"retry-review {child.id} r{retries}"),
+    )
+    db.add(review)
+    await db.flush()
+    return review.id
+
+
 async def begin_auditing(
     db: AsyncSession, *, child_id: uuid.UUID, output: dict
 ) -> uuid.UUID | None:

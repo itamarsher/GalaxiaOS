@@ -31,6 +31,7 @@ from app.runtime import breakers
 from app.runtime.backends import get_backend
 from app.runtime.context import RuntimeContext
 from app.services import budget as budget_svc
+from app.services import tasks as task_svc
 
 #: Task statuses that mean the run is still doing (or waiting to do) work.
 #: ``auditing`` counts as active: a delegated result is parked there pending the
@@ -154,15 +155,31 @@ async def run_task(ctx: RuntimeContext, task_id: uuid.UUID) -> dict:
         # A task is flipped to ``running`` before dispatch; if the backend raises
         # (provider/network error, a bug, …) we must not leave it orphaned in
         # ``running`` — the run gate skips anything that isn't queued/waiting, so
-        # it could never recover. Mark it failed (visible, terminal) instead.
+        # it could never recover. For a task the CEO delegated, hand the failure to
+        # the CEO to decide whether it's transient (re-run) or persistent (abandon);
+        # otherwise mark it failed (visible, terminal).
+        error_text = f"{type(exc).__name__}: {exc}"[:1000]
+        review_task_id: uuid.UUID | None = None
         async with ctx.session_factory() as db:
             await set_tenant(db, task.company_id)
             row = await db.get(Task, task.id)
             if row is not None and row.status is TaskStatus.running:
-                row.status = TaskStatus.failed
-                row.output = {"error": f"{type(exc).__name__}: {exc}"[:1000]}
-                row.transcript = None  # terminal: drop the working-memory checkpoint
+                agent_row = await db.get(Agent, row.agent_id) if row.agent_id else None
+                if agent_row is not None and await task_svc.should_review_failure(
+                    db, agent=agent_row, task=row
+                ):
+                    review_task_id = await task_svc.begin_failure_review(
+                        db, child_id=row.id, output={"error": error_text}
+                    )
+                if review_task_id is None:
+                    row.status = TaskStatus.failed
+                    row.output = {"error": error_text}
+                    row.transcript = None  # terminal: drop the working-memory checkpoint
                 await db.commit()
+        if review_task_id is not None:
+            # Handled gracefully: the CEO will decide on a retry. Don't re-raise.
+            await ctx.enqueue_task(review_task_id)
+            return {"status": TaskStatus.auditing.value, "output": {"error": error_text}}
         raise
 
     # Keep the org alive: if this task completing means the whole run is now

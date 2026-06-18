@@ -37,6 +37,13 @@ def test_auditing_status_exists():
     assert TaskStatus.auditing.value == "auditing"
 
 
+def test_retry_task_registered():
+    spec = next((s for s in TOOL_SPECS if s.name == "retry_task"), None)
+    assert spec is not None
+    assert spec.input_schema["properties"]["decision"]["enum"] == ["retry", "abandon"]
+    assert spec.input_schema["required"] == ["task_id", "decision"]
+
+
 # ── DB-backed fixtures/helpers ───────────────────────────────────────────────
 async def _scaffold(session_factory, company_id):
     """CEO + growth agents, a CEO parent task, and a growth child it dispatched."""
@@ -226,3 +233,173 @@ async def test_audit_rejects_task_not_in_auditing(session_factory, company_with_
             args={"task_id": str(child.id), "decision": "approve"},
         )
     assert out.is_error and "isn't awaiting audit" in out.observation
+
+
+# ── should_review_failure ────────────────────────────────────────────────────
+@requires_db
+async def test_should_review_failure_for_ceo_dispatched_child(
+    session_factory, company_with_budget
+):
+    ceo, growth, parent, child = await _scaffold(session_factory, company_with_budget)
+    async with session_factory() as db:
+        g = await db.get(Agent, growth.id)
+        c = await db.get(Task, child.id)
+        assert await task_svc.should_review_failure(db, agent=g, task=c) is True
+
+
+@requires_db
+async def test_ceo_own_failure_is_not_reviewed(session_factory, company_with_budget):
+    ceo, growth, parent, child = await _scaffold(session_factory, company_with_budget)
+    async with session_factory() as db:
+        c = await db.get(Agent, ceo.id)
+        p = await db.get(Task, parent.id)  # CEO's own root task
+        assert await task_svc.should_review_failure(db, agent=c, task=p) is False
+
+
+@requires_db
+async def test_retry_cap_stops_review(session_factory, company_with_budget):
+    ceo, growth, parent, child = await _scaffold(session_factory, company_with_budget)
+    async with session_factory() as db:
+        c = await db.get(Task, child.id)
+        c.input = {"retry_count": settings.max_task_retries}
+        await db.commit()
+    async with session_factory() as db:
+        g = await db.get(Agent, growth.id)
+        c = await db.get(Task, child.id)
+        assert await task_svc.should_review_failure(db, agent=g, task=c) is False
+
+
+# ── begin_failure_review ─────────────────────────────────────────────────────
+@requires_db
+async def test_begin_failure_review_parks_child_and_spawns_ceo_task(
+    session_factory, company_with_budget
+):
+    ceo, growth, parent, child = await _scaffold(session_factory, company_with_budget)
+    async with session_factory() as db:
+        review_id = await task_svc.begin_failure_review(
+            db, child_id=child.id, output={"error": "TimeoutError: provider timed out"}
+        )
+        await db.commit()
+    assert review_id is not None
+
+    async with session_factory() as db:
+        c = await db.get(Task, child.id)
+        assert c.status is TaskStatus.auditing
+        assert c.input["failure_review"] is True
+        assert c.transcript is None  # a retry starts fresh from the goal
+        r = await db.get(Task, review_id)
+        assert r.agent_id == ceo.id
+        assert r.status is TaskStatus.queued
+        assert r.input["audit_target_task_id"] == str(child.id)
+        assert r.input["audit_target_outcome"] == "failed"
+        assert "FAILED" in r.goal and "provider timed out" in r.goal
+
+
+# ── retry_task: retry / abandon ──────────────────────────────────────────────
+async def _put_child_failure_review(session_factory, child_id, *, retry_count=0):
+    async with session_factory() as db:
+        c = await db.get(Task, child_id)
+        c.status = TaskStatus.auditing
+        c.output = {"error": "boom"}
+        c.input = {**(c.input or {}), "failure_review": True, "retry_count": retry_count}
+        await db.commit()
+
+
+@requires_db
+async def test_retry_requeues_and_increments_count(session_factory, company_with_budget):
+    ceo, growth, parent, child = await _scaffold(session_factory, company_with_budget)
+    await _put_child_failure_review(session_factory, child.id)
+
+    ctx = _Ctx()
+    async with session_factory() as db:
+        ceo_row = await db.get(Agent, ceo.id)
+        caller = await db.get(Task, parent.id)
+        out = await execute_tool(
+            db, ctx, agent=ceo_row, task=caller, name="retry_task",
+            args={"task_id": str(child.id), "decision": "retry", "reason": "looks transient"},
+        )
+        await db.commit()
+    assert not out.is_error and "Re-running" in out.observation
+
+    async with session_factory() as db:
+        c = await db.get(Task, child.id)
+        assert c.status is TaskStatus.queued
+        assert c.input["retry_count"] == 1
+        assert "failure_review" not in c.input  # marker cleared for a clean re-run
+    assert ctx.enqueued == [child.id]
+
+
+@requires_db
+async def test_abandon_finalizes_failed(session_factory, company_with_budget):
+    ceo, growth, parent, child = await _scaffold(session_factory, company_with_budget)
+    await _put_child_failure_review(session_factory, child.id)
+
+    ctx = _Ctx()
+    async with session_factory() as db:
+        ceo_row = await db.get(Agent, ceo.id)
+        caller = await db.get(Task, parent.id)
+        out = await execute_tool(
+            db, ctx, agent=ceo_row, task=caller, name="retry_task",
+            args={"task_id": str(child.id), "decision": "abandon", "reason": "missing capability"},
+        )
+        await db.commit()
+    assert not out.is_error and "Abandoned" in out.observation
+
+    async with session_factory() as db:
+        c = await db.get(Task, child.id)
+        assert c.status is TaskStatus.failed
+        assert c.output["abandon_reason"] == "missing capability"
+    assert ctx.enqueued == []  # abandon doesn't re-queue
+
+
+@requires_db
+async def test_retry_cap_enforced_in_tool(session_factory, company_with_budget):
+    ceo, growth, parent, child = await _scaffold(session_factory, company_with_budget)
+    await _put_child_failure_review(
+        session_factory, child.id, retry_count=settings.max_task_retries
+    )
+
+    ctx = _Ctx()
+    async with session_factory() as db:
+        ceo_row = await db.get(Agent, ceo.id)
+        caller = await db.get(Task, parent.id)
+        out = await execute_tool(
+            db, ctx, agent=ceo_row, task=caller, name="retry_task",
+            args={"task_id": str(child.id), "decision": "retry"},
+        )
+        await db.commit()
+    assert out.is_error and "retries" in out.observation.lower()
+    async with session_factory() as db:
+        c = await db.get(Task, child.id)
+        assert c.status is TaskStatus.failed  # capped → left failed
+    assert ctx.enqueued == []
+
+
+@requires_db
+async def test_retry_rejects_non_failure_review(session_factory, company_with_budget):
+    """A result audit (auditing without the failure marker) isn't retryable."""
+    ceo, growth, parent, child = await _scaffold(session_factory, company_with_budget)
+    await _put_child_auditing(session_factory, child.id)  # no failure_review marker
+
+    async with session_factory() as db:
+        ceo_row = await db.get(Agent, ceo.id)
+        caller = await db.get(Task, parent.id)
+        out = await execute_tool(
+            db, _Ctx(), agent=ceo_row, task=caller, name="retry_task",
+            args={"task_id": str(child.id), "decision": "retry"},
+        )
+    assert out.is_error and "isn't awaiting a retry decision" in out.observation
+
+
+@requires_db
+async def test_non_ceo_cannot_retry(session_factory, company_with_budget):
+    ceo, growth, parent, child = await _scaffold(session_factory, company_with_budget)
+    await _put_child_failure_review(session_factory, child.id)
+    async with session_factory() as db:
+        g = await db.get(Agent, growth.id)
+        caller = await db.get(Task, child.id)
+        out = await execute_tool(
+            db, _Ctx(), agent=g, task=caller, name="retry_task",
+            args={"task_id": str(child.id), "decision": "retry"},
+        )
+    assert out.is_error and "CEO" in out.observation

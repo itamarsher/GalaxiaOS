@@ -359,13 +359,21 @@ class NativeBackend:
         return {"status": status.value, "output": output}
 
     async def _resolve_dangling_audit(self, db, task: Task) -> None:
-        target_id = (task.input or {}).get("audit_target_task_id")
+        info = task.input or {}
+        target_id = info.get("audit_target_task_id")
         if not target_id:
             return
         target = await db.get(Task, uuid.UUID(str(target_id)))
         if target is not None and target.status is TaskStatus.auditing:
+            # A result audit settles as ``done``; a failure review the CEO never
+            # resolved settles as ``failed`` (don't silently auto-retry it).
+            outcome = (
+                TaskStatus.failed
+                if info.get("audit_target_outcome") == "failed"
+                else TaskStatus.done
+            )
             await task_svc.finalize(
-                db, task=target, status=TaskStatus.done, output=target.output or {"summary": ""}
+                db, task=target, status=outcome, output=target.output or {"summary": ""}
             )
 
     async def _inject_audit_feedback(

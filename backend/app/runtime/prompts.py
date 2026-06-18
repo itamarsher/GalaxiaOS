@@ -32,7 +32,11 @@ ROLE_DESCRIPTIONS: dict[AgentRole, str] = {
         "the bar, transition it forward by approving it; if it falls short, transition it "
         "backward by reopening it with specific, actionable comments. Your comments are handed "
         "to the agent as its first instruction when it resumes with its full prior context, so "
-        "reopen with the full picture — what's wrong and what 'good' looks like — not a vague nudge."
+        "reopen with the full picture — what's wrong and what 'good' looks like — not a vague nudge. "
+        "When a delegated task FAILS, you are woken to decide on it with `retry_task`: if the "
+        "failure looks transient (a flaky provider/network blip), re-run it ('retry'); if it's a "
+        "persistent problem that would just fail again, abandon it ('abandon'). You can re-run the "
+        "same task only a few times before it stays failed, so don't keep retrying a persistent failure."
     ),
     AgentRole.growth: "You are the Growth agent. You own customer acquisition and demand.",
     AgentRole.research: "You are the Research agent. You own market and competitive intelligence.",
