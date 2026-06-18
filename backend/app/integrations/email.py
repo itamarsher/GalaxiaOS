@@ -1,16 +1,24 @@
 """Email seam — how agents send mail (sales, marketing, ops, support).
 
-A Protocol plus the real, vendor-agnostic SMTP adapter (:class:`SmtpEmailSender`),
-which speaks plain SMTP over ``smtplib`` in a worker thread, so it works with Gmail,
-SES, Mailgun, Postmark, etc. without adding a dependency. It is credential-gated
-(``ABOS_SMTP_*`` + ``ABOS_EMAIL_FROM``); without creds it raises :class:`EmailError`
-rather than attempting to send.
+A Protocol plus two real, credential-gated adapters:
 
-There is deliberately NO simulated sender: faking a sent email would let agents
-believe outreach happened when it did not. When no provider is configured
-(``ABOS_EMAIL_PROVIDER`` defaults to ``simulated``/unset), :func:`get_email_sender`
-returns ``None`` and the ``send_email`` tool reports the capability is unsupported.
-Enable real send with ``ABOS_EMAIL_PROVIDER=smtp``.
+- :class:`SmtpEmailSender` — vendor-agnostic; speaks plain SMTP over ``smtplib``
+  in a worker thread, so it works with Gmail, SES, Mailgun, Postmark, etc.
+  without adding a dependency. Credential-gated (``ABOS_SMTP_*`` +
+  ``ABOS_EMAIL_FROM``).
+- :class:`~app.integrations.resend.ResendEmailSender` — the Resend HTTP API,
+  chosen for its **generous free tier** (3,000 emails/month, 100/day) and
+  first-class **custom-domain** support, so an autonomous business can mail from
+  ``hello@yourstartup.com`` at $0. Credential-gated (``ABOS_RESEND_API_KEY`` +
+  ``ABOS_EMAIL_FROM``).
+
+Without creds the real adapters raise :class:`EmailError` rather than attempting
+to send. There is deliberately NO simulated sender: faking a sent email would
+let agents believe outreach happened when it did not. When no provider is
+configured (``ABOS_EMAIL_PROVIDER`` defaults to ``simulated``/unset),
+:func:`get_email_sender` returns ``None`` and the ``send_email`` tool reports the
+capability is unsupported. Enable real send with ``ABOS_EMAIL_PROVIDER=smtp`` or
+``ABOS_EMAIL_PROVIDER=resend``.
 """
 
 from __future__ import annotations
@@ -92,4 +100,8 @@ def get_email_sender(name: str | None = None) -> EmailSender | None:
         return None
     if key == "smtp":
         return SmtpEmailSender()
+    if key == "resend":
+        from app.integrations.resend import ResendEmailSender
+
+        return ResendEmailSender()
     raise ValueError(f"unknown email provider: {key!r}")

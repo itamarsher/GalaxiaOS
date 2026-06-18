@@ -16,7 +16,12 @@ from sqlalchemy import func, select
 from app.integrations.tavily import TavilyWebSearch
 from app.models import Agent, Task
 from app.models.enums import AgentRole
-from app.runtime.tools.core import WEB_SEARCH_PROVIDER, _resolve_web_search
+from app.runtime.tools.core import (
+    EMAIL_KEY_PROVIDER,
+    WEB_SEARCH_PROVIDER,
+    _resolve_email_sender,
+    _resolve_web_search,
+)
 from app.services import apikeys, copilot, platform_requests
 from tests.conftest import requires_db
 
@@ -286,3 +291,33 @@ async def test_web_search_commits_measured_credits_not_the_estimate(
     # The Tavily request id is kept for the auditable vendor trail.
     assert charge is not None and charge.external_ref == "req-abc123"
     assert charge.payload and charge.payload.get("credits") == 2
+
+
+# ── per-company email (Resend) key ───────────────────────────────────────────
+
+
+@requires_db
+async def test_email_is_unsupported_without_a_key(session_factory, company_with_budget):
+    _set_master_key()
+    async with session_factory() as db:
+        sender = await _resolve_email_sender(db, company_with_budget)
+    # No Resend key and no global provider -> None, so send_email reports the
+    # capability is unsupported (no mail is faked).
+    assert sender is None
+
+
+@requires_db
+async def test_email_uses_resend_when_key_set(session_factory, company_with_budget):
+    from app.integrations.resend import ResendEmailSender
+
+    _set_master_key()
+    async with session_factory() as db:
+        await apikeys.store_key(
+            db, company_id=company_with_budget, provider=EMAIL_KEY_PROVIDER, plaintext="re_xxx"
+        )
+        await db.commit()
+    async with session_factory() as db:
+        sender = await _resolve_email_sender(db, company_with_budget)
+    assert isinstance(sender, ResendEmailSender)
+    # The per-company key is what's used — not the (empty) global default.
+    assert sender._api_key == "re_xxx"

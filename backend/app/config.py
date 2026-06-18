@@ -173,13 +173,16 @@ class Settings(BaseSettings):
     tavily_search_depth: str = "basic"  # basic | advanced
 
     # Email seam (agents send sales/marketing/ops mail); "simulated" is offline.
-    email_provider: str = "simulated"  # simulated | smtp
+    email_provider: str = "simulated"  # simulated | smtp | resend
     email_from: str = ""
     smtp_host: str = ""
     smtp_port: int = 587
     smtp_username: str = ""
     smtp_password: str = ""
     smtp_use_tls: bool = True
+    # Resend (only used when email_provider == "resend"): a developer-first email
+    # API with a generous free tier (3,000/mo, 100/day) and custom-domain support.
+    resend_api_key: str = ""
 
     # Issue-tracker seam (the Platform agent files bug/feature issues here);
     # "simulated" is offline and deterministic.

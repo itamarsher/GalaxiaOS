@@ -26,6 +26,12 @@ const SLOTS: { provider: string; label: string; hint: string; placeholder: strin
     hint: "Optional. Enables real web search for your agents. Without it, web search returns simulated (placeholder) results.",
     placeholder: "tvly-…",
   },
+  {
+    provider: "resend",
+    label: "Resend API key",
+    hint: "Optional. Lets agents send real email from your own domain via Resend (generous free tier: 3,000/mo). With a key set, Resend becomes the email provider; without it, email is simulated.",
+    placeholder: "re_…",
+  },
 ];
 
 export default function SettingsPage() {
