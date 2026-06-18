@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
-import { api, fmtUsd, statusLabel, type Task } from "@/lib/api";
+import { api, fmtUsd, sortTasksForView, statusLabel, type Task } from "@/lib/api";
 import { usePoll } from "@/lib/useApi";
 
 interface EventFrame {
@@ -53,7 +53,8 @@ export default function Overview() {
     return acc;
   }, {});
   const inFlight = (counts["running"] ?? 0) + (counts["queued"] ?? 0);
-  const recent = tasks.slice(0, 6);
+  // Decisions awaiting the founder float to the top, done tasks sink to the bottom.
+  const recent = sortTasksForView(tasks).slice(0, 6);
 
   const deleteCompany = async () => {
     if (!window.confirm(

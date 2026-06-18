@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useParams } from "next/navigation";
-import { api, fmtUsd, statusLabel, type Task, type TaskDetail } from "@/lib/api";
+import { api, fmtUsd, sortTasksForView, statusLabel, type Task, type TaskDetail } from "@/lib/api";
 import { usePoll } from "@/lib/useApi";
 import { Markdown } from "@/lib/markdown";
 
@@ -50,7 +50,7 @@ export default function TasksPage() {
     return () => es.close();
   }, [id]);
 
-  const tasks: Task[] = streamed ?? polled.data ?? [];
+  const tasks: Task[] = sortTasksForView(streamed ?? polled.data ?? []);
 
   return (
     <div>

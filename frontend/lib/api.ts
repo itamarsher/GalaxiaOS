@@ -219,6 +219,14 @@ export const api = {
 export const fmtUsd = (cents: number | null | undefined) =>
   cents == null ? "—" : `$${(cents / 100).toFixed(2)}`;
 
+/** Order tasks for the list views: tasks awaiting a founder decision first,
+ *  completed (done) tasks last, everything else in between. Stable, so the
+ *  backend's ordering is preserved within each group. */
+export const sortTasksForView = <T extends { status: string }>(tasks: T[]): T[] => {
+  const rank = (s: string) => (s === "waiting_approval" ? 0 : s === "done" ? 2 : 1);
+  return [...tasks].sort((a, b) => rank(a.status) - rank(b.status));
+};
+
 /** Human-friendly label for a task/decision status (the raw value still drives CSS). */
 export const statusLabel = (s: string): string =>
   s === "waiting_approval"
