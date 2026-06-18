@@ -33,16 +33,29 @@ _API = "https://api.cloudflare.com/client/v4"
 _TIMEOUT = 30.0
 
 
-def _require_token(error: type[Exception] = SiteHostError) -> str:
-    if not settings.cloudflare_api_token:
-        raise error("Cloudflare credentials missing: set ABOS_CLOUDFLARE_API_TOKEN.")
-    return settings.cloudflare_api_token
+class _CloudflareBase:
+    """Holds Cloudflare credentials, per-instance with an env-var fallback.
 
+    Credentials are normally per-company (BYO Cloudflare) and passed in by the
+    resolver; when omitted they fall back to ``ABOS_CLOUDFLARE_*`` so a single
+    platform account still works.
+    """
 
-def _require_account(error: type[Exception] = SiteHostError) -> str:
-    if not settings.cloudflare_account_id:
-        raise error("Cloudflare account missing: set ABOS_CLOUDFLARE_ACCOUNT_ID.")
-    return settings.cloudflare_account_id
+    _error: type[Exception] = RuntimeError
+
+    def __init__(self, token: str | None = None, account_id: str | None = None) -> None:
+        self._tok = token or settings.cloudflare_api_token
+        self._acct = account_id or settings.cloudflare_account_id
+
+    def _token(self) -> str:
+        if not self._tok:
+            raise self._error("Cloudflare credentials missing: no API token configured.")
+        return self._tok
+
+    def _account(self) -> str:
+        if not self._acct:
+            raise self._error("Cloudflare account missing: no account id configured.")
+        return self._acct
 
 
 async def _request(
@@ -53,7 +66,7 @@ async def _request(
     json: dict | None = None,
     data: dict | None = None,
     files: dict | None = None,
-    token: str | None = None,
+    token: str,
     expected: tuple[int, ...] = (200,),
 ) -> dict[str, Any]:
     """Call the Cloudflare API and return the ``result`` payload.
@@ -61,7 +74,7 @@ async def _request(
     Cloudflare wraps every response in ``{success, errors, result}``; a non-2xx or
     ``success: false`` is surfaced as ``error`` with the joined messages.
     """
-    headers = {"Authorization": f"Bearer {token or _require_token(error)}"}
+    headers = {"Authorization": f"Bearer {token}"}
     try:
         async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
             resp = await client.request(
@@ -81,12 +94,14 @@ async def _request(
     return body.get("result") or {}
 
 
-class CloudflareSiteHost:
+class CloudflareSiteHost(_CloudflareBase):
     """Cloudflare Pages site host (Direct Upload of a single HTML page)."""
 
+    _error = SiteHostError
+
     async def publish(self, *, slug: str, title: str, html: str) -> HostedSite:
-        account = _require_account()
-        token = _require_token()
+        account = self._account()
+        token = self._token()
         project = _project_name(slug)
         await self._ensure_project(account, project, token)
         deployment_id = await self._deploy_index_html(account, project, html, token)
@@ -98,22 +113,22 @@ class CloudflareSiteHost:
         )
 
     async def attach_domain(self, *, project: str, domain: str) -> str:
-        account = _require_account()
         result = await _request(
             "POST",
-            f"/accounts/{account}/pages/projects/{project}/domains",
+            f"/accounts/{self._account()}/pages/projects/{project}/domains",
             json={"name": domain},
             error=SiteHostError,
+            token=self._token(),
             expected=(200, 201),
         )
         return str(result.get("status") or "attaching")
 
     async def domain_status(self, *, project: str, domain: str) -> str:
-        account = _require_account()
         result = await _request(
             "GET",
-            f"/accounts/{account}/pages/projects/{project}/domains/{domain}",
+            f"/accounts/{self._account()}/pages/projects/{project}/domains/{domain}",
             error=SiteHostError,
+            token=self._token(),
         )
         return str(result.get("status") or "unknown")
 
@@ -197,11 +212,13 @@ class CloudflareSiteHost:
         return str(deployment.get("id") or "")
 
 
-class CloudflareDns:
+class CloudflareDns(_CloudflareBase):
     """Cloudflare DNS provider (zone + record management)."""
 
+    _error = DnsError
+
     async def ensure_zone(self, domain: str) -> Zone:
-        account = _require_account(DnsError)
+        account = self._account()
         existing = await self._find_zone(domain)
         if existing is not None:
             return existing
@@ -210,21 +227,24 @@ class CloudflareDns:
             "/zones",
             json={"name": domain, "account": {"id": account}, "type": "full"},
             error=DnsError,
+            token=self._token(),
             expected=(200, 201),
         )
         return _zone_from_result(result)
 
     async def zone_status(self, zone_id: str) -> str:
-        result = await _request("GET", f"/zones/{zone_id}", error=DnsError)
+        result = await _request("GET", f"/zones/{zone_id}", error=DnsError, token=self._token())
         return str(result.get("status") or "unknown")
 
     async def upsert_record(
         self, *, zone_id: str, type: str, name: str, content: str, proxied: bool = True
     ) -> str:
+        token = self._token()
         existing = await _request(
             "GET",
             f"/zones/{zone_id}/dns_records?type={type}&name={name}",
             error=DnsError,
+            token=token,
         )
         body = {"type": type, "name": name, "content": content, "proxied": proxied}
         # ``existing`` is a list when querying with filters; reuse the first match.
@@ -235,6 +255,7 @@ class CloudflareDns:
                 f"/zones/{zone_id}/dns_records/{record['id']}",
                 json=body,
                 error=DnsError,
+                token=token,
             )
         else:
             result = await _request(
@@ -242,15 +263,29 @@ class CloudflareDns:
                 f"/zones/{zone_id}/dns_records",
                 json=body,
                 error=DnsError,
+                token=token,
                 expected=(200, 201),
             )
         return str(result.get("id") or "")
 
     async def _find_zone(self, domain: str) -> Zone | None:
-        result = await _request("GET", f"/zones?name={domain}", error=DnsError)
+        result = await _request(
+            "GET", f"/zones?name={domain}", error=DnsError, token=self._token()
+        )
         if isinstance(result, list) and result:
             return _zone_from_result(result[0])
         return None
+
+
+async def verify_credentials(token: str, account_id: str) -> None:
+    """Confirm a token can access the given account. Raises SiteHostError if not.
+
+    Used when the founder saves credentials so a bad token/account is rejected up
+    front (the REST API requires a working token for everything else).
+    """
+    await _request(
+        "GET", f"/accounts/{account_id}", error=SiteHostError, token=token
+    )
 
 
 # ── helpers ────────────────────────────────────────────────────────────────────

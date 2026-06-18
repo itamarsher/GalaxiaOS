@@ -155,6 +155,17 @@ class ApiKeyOut(ORMModel):
     status: str
 
 
+# ── Integrations (Cloudflare site host + DNS) ────────────────────────────────
+class CloudflareCredsRequest(BaseModel):
+    api_token: str = Field(min_length=8)
+    account_id: str = Field(min_length=8)
+
+
+class CloudflareStatusOut(BaseModel):
+    configured: bool
+    account_id: str | None = None
+
+
 # ── Budget ───────────────────────────────────────────────────────────────────
 class BudgetOut(ORMModel):
     id: uuid.UUID

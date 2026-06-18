@@ -11,8 +11,8 @@ success that pollutes memory, metrics, and plans.
 
 from __future__ import annotations
 
-from app.integrations.dns import DnsError, get_dns_provider
-from app.integrations.sitehost import SiteHostError, get_site_host
+from app.integrations.dns import DnsError
+from app.integrations.sitehost import SiteHostError
 from app.models import Agent, Task
 from app.models.enums import DecisionKind, DecisionStatus, SiteConnectStatus
 from app.models.governance import DecisionRequest
@@ -23,6 +23,7 @@ from app.runtime.tools.base import (
     unsupported_capability,
 )
 from app.services import sites as sites_svc
+from app.services.integrations import resolve_dns_provider, resolve_site_host
 
 # Channels that publish to a real static host via the site-host seam.
 _SITE_CHANNELS = {"landing_page", "blog"}
@@ -114,11 +115,11 @@ async def _publish_content(db, ctx, *, agent: Agent, task: Task, args: dict) -> 
             hint="Only landing_page and blog channels have a connected host.",
         )
 
-    host = get_site_host()
+    host = await resolve_site_host(db, company_id=task.company_id)
     if host is None:
         return unsupported_capability(
             "Publishing marketing content",
-            hint="No website host is connected (set ABOS_SITE_HOST).",
+            hint="No website host is connected — add Cloudflare credentials in Settings.",
         )
 
     title = str(args["title"]).strip()
@@ -142,8 +143,8 @@ async def _connect_domain(db, ctx, *, agent: Agent, task: Task, args: dict) -> T
     if not domain or "." not in domain:
         return ToolOutcome(observation=f"'{domain}' is not a valid domain", is_error=True)
 
-    host = get_site_host()
-    dns = get_dns_provider()
+    host = await resolve_site_host(db, company_id=task.company_id)
+    dns = await resolve_dns_provider(db, company_id=task.company_id)
     if host is None or dns is None:
         return unsupported_capability(
             "Connecting a domain to a site",

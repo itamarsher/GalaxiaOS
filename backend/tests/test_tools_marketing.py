@@ -38,11 +38,14 @@ def test_handlers_match_specs():
     assert set(marketing_mod.HANDLERS.keys()) == spec_names
 
 
+# NB: publish_content / connect_domain are now real capabilities (gated on a
+# configured Cloudflare host + per-company credentials), so their "unsupported when
+# unconfigured" path is covered in test_sites.py where the resolver is mocked. The
+# tools below have no provider at all and are unconditionally unsupported.
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "name,args",
     [
-        ("publish_content", {"channel": "blog", "title": "Launch", "body": "hi"}),
         ("schedule_social_post", {"platform": "x", "content": "hi"}),
         ("run_ad_campaign", {"platform": "x", "objective": "signups", "amount_cents": 5000}),
     ],

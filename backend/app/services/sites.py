@@ -21,11 +21,12 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.integrations.base import RegistrarError
-from app.integrations.dns import DnsError, DnsProvider, get_dns_provider
+from app.integrations.dns import DnsError
 from app.integrations.registry import get_registrar
-from app.integrations.sitehost import SiteHost, SiteHostError, get_site_host
+from app.integrations.sitehost import SiteHost, SiteHostError
 from app.models import Site, SiteDomain
 from app.models.enums import SiteConnectStatus, SiteStatus
+from app.services.integrations import resolve_dns_provider, resolve_site_host
 
 # Host statuses Cloudflare Pages reports for a fully provisioned custom domain.
 _LIVE_DOMAIN_STATUSES = frozenset({"active", "live"})
@@ -189,7 +190,9 @@ async def begin_connection(
     ``nameservers`` recorded) when the founder must point the domain at Cloudflare
     manually. Then advances as far as it can.
     """
-    dns = _require_dns()
+    dns = await resolve_dns_provider(db, company_id=sd.company_id)
+    if dns is None:
+        raise DnsError("No DNS provider is configured for this company.")
     zone = await dns.ensure_zone(sd.domain)
     sd.zone_id = zone.zone_id
     sd.nameservers = zone.nameservers
@@ -220,8 +223,8 @@ async def advance_connection(db: AsyncSession, *, sd: SiteDomain) -> SiteDomain:
     reconciler on a schedule). Provider errors are recorded in ``last_error`` and the
     status is left in place so the next pass retries, rather than failing hard.
     """
-    dns = get_dns_provider()
-    host = get_site_host()
+    dns = await resolve_dns_provider(db, company_id=sd.company_id)
+    host = await resolve_site_host(db, company_id=sd.company_id)
     if dns is None or host is None or not sd.zone_id:
         return sd
 
@@ -268,12 +271,3 @@ async def pending_connections(db: AsyncSession, *, company_id: uuid.UUID) -> lis
         )
     )
     return list(rows)
-
-
-def _require_dns() -> DnsProvider:
-    dns = get_dns_provider()
-    if dns is None:
-        from app.integrations.dns import DnsError
-
-        raise DnsError("No DNS provider is configured (set ABOS_DNS_PROVIDER).")
-    return dns

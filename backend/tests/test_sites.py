@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import uuid
+
 import pytest
 
 from app.integrations.dns import DnsError, Zone, get_dns_provider
@@ -61,10 +63,19 @@ def test_render_page_html_escapes_and_structures():
 # ── tool guards (no provider wired) ─────────────────────────────────────────────
 
 
+class _Task:
+    """Minimal stand-in for a Task (only company_id is read on these paths)."""
+
+    company_id = uuid.uuid4()
+
+
 async def test_publish_unsupported_without_host(monkeypatch):
-    monkeypatch.setattr("app.runtime.tools.marketing.get_site_host", lambda: None)
+    async def _none(db, *, company_id):
+        return None
+
+    monkeypatch.setattr("app.runtime.tools.marketing.resolve_site_host", _none)
     out = await _publish_content(
-        None, None, agent=None, task=None,
+        None, None, agent=None, task=_Task(),
         args={"channel": "landing_page", "title": "t", "body": "b"},
     )
     assert out.is_error and "not supported" in out.observation
@@ -79,10 +90,16 @@ async def test_publish_unsupported_channel():
 
 
 async def test_connect_unsupported_without_providers(monkeypatch):
-    monkeypatch.setattr("app.runtime.tools.marketing.get_site_host", lambda: object())
-    monkeypatch.setattr("app.runtime.tools.marketing.get_dns_provider", lambda: None)
+    async def _host(db, *, company_id):
+        return object()
+
+    async def _none(db, *, company_id):
+        return None
+
+    monkeypatch.setattr("app.runtime.tools.marketing.resolve_site_host", _host)
+    monkeypatch.setattr("app.runtime.tools.marketing.resolve_dns_provider", _none)
     out = await _connect_domain(
-        None, None, agent=None, task=None, args={"domain": "acme.com"}
+        None, None, agent=None, task=_Task(), args={"domain": "acme.com"}
     )
     assert out.is_error and "not supported" in out.observation
 
@@ -119,8 +136,14 @@ class _OkRegistrar:
 
 
 def _wire(monkeypatch, *, dns, host, registrar):
-    monkeypatch.setattr("app.services.sites.get_dns_provider", lambda: dns)
-    monkeypatch.setattr("app.services.sites.get_site_host", lambda: host)
+    async def _dns(db, *, company_id):
+        return dns
+
+    async def _host(db, *, company_id):
+        return host
+
+    monkeypatch.setattr("app.services.sites.resolve_dns_provider", _dns)
+    monkeypatch.setattr("app.services.sites.resolve_site_host", _host)
     monkeypatch.setattr("app.services.sites.get_registrar", lambda: registrar)
 
 

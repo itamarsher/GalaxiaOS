@@ -102,9 +102,12 @@ class Settings(BaseSettings):
     namecheap_client_ip: str = ""
     # Registrant contact as JSON, e.g. ABOS_NAMECHEAP_CONTACT='{"FirstName":...}'
     namecheap_contact: dict = Field(default_factory=dict)
-    # Site hosting + DNS (landing pages and connecting bought domains)
-    site_host: str = "none"  # none | cloudflare
-    dns_provider: str = "none"  # none | cloudflare
+    # Site hosting + DNS (landing pages and connecting bought domains). Default to
+    # Cloudflare; actual credentials are per-company (BYO Cloudflare) configured in
+    # Settings, falling back to these env vars. With no credentials the capability
+    # resolves to None and reports unsupported (never faked).
+    site_host: str = "cloudflare"  # none | cloudflare
+    dns_provider: str = "cloudflare"  # none | cloudflare
     cloudflare_api_token: str = ""
     cloudflare_account_id: str = ""
 
