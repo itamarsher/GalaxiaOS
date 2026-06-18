@@ -187,7 +187,9 @@ class CloudflareSiteHost:
         deployment = await _request(
             "POST",
             f"/accounts/{account}/pages/projects/{project}/deployments",
-            data={"manifest": _json({"/index.html": file_hash})},
+            # The manifest must be a multipart/form-data field, not urlencoded — a
+            # ``(None, value)`` part tells httpx to send it as a plain form field.
+            files={"manifest": (None, _json({"/index.html": file_hash}))},
             error=SiteHostError,
             token=token,
             expected=(200, 201),
