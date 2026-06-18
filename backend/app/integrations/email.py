@@ -2,14 +2,21 @@
 
 Mirrors the other integration seams: a Protocol plus a ``simulated`` default
 that is deterministic and network-free, so the agent loop and tests never send
-real mail. The real adapter (:class:`SmtpEmailSender`) is vendor-agnostic — it
-speaks plain SMTP over ``smtplib`` in a worker thread, so it works with Gmail,
-SES, Mailgun, Postmark, etc. without adding a dependency. It is credential-gated
-(``ABOS_SMTP_*`` + ``ABOS_EMAIL_FROM``); without creds it raises
-:class:`EmailError` rather than attempting to send.
+real mail. Two real adapters are available:
 
-Off by default (``ABOS_EMAIL_PROVIDER=simulated``); enable with
-``ABOS_EMAIL_PROVIDER=smtp``.
+- :class:`SmtpEmailSender` — vendor-agnostic; speaks plain SMTP over ``smtplib``
+  in a worker thread, so it works with Gmail, SES, Mailgun, Postmark, etc.
+  without adding a dependency. Credential-gated (``ABOS_SMTP_*`` +
+  ``ABOS_EMAIL_FROM``).
+- :class:`~app.integrations.resend.ResendEmailSender` — the Resend HTTP API,
+  chosen for its **generous free tier** (3,000 emails/month, 100/day) and
+  first-class **custom-domain** support, so an autonomous business can mail from
+  ``hello@yourstartup.com`` at $0. Credential-gated (``ABOS_RESEND_API_KEY`` +
+  ``ABOS_EMAIL_FROM``).
+
+Without creds the real adapters raise :class:`EmailError` rather than attempting
+to send. Off by default (``ABOS_EMAIL_PROVIDER=simulated``); enable with
+``ABOS_EMAIL_PROVIDER=smtp`` or ``ABOS_EMAIL_PROVIDER=resend``.
 """
 
 from __future__ import annotations
@@ -95,4 +102,8 @@ def get_email_sender(name: str | None = None) -> EmailSender:
         return SimulatedEmailSender()
     if key == "smtp":
         return SmtpEmailSender()
+    if key == "resend":
+        from app.integrations.resend import ResendEmailSender
+
+        return ResendEmailSender()
     raise ValueError(f"unknown email provider: {key!r}")
