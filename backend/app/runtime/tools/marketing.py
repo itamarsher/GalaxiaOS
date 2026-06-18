@@ -1,8 +1,8 @@
 """Marketing area tools: publish content, connect a domain, schedule posts, ads.
 
-``publish_content`` (landing pages / blog) and ``connect_domain`` are REAL when a
-site host + DNS provider are wired (see ``ABOS_SITE_HOST`` / ``ABOS_DNS_PROVIDER``):
-they host a generated page and point a bought domain at it. The remaining channels
+``publish_content`` (landing pages / blog) and ``connect_domain`` are REAL when the
+company has saved Cloudflare credentials in Settings (bring-your-own-key): they host
+a generated page and point a bought domain at it. The remaining channels
 (social/email) and ``schedule_social_post`` / ``run_ad_campaign`` reach providers
 that aren't wired, so they stay unsupported — each reports the capability is
 unavailable and points the agent at ``request_capability`` rather than fabricating a
@@ -148,8 +148,7 @@ async def _connect_domain(db, ctx, *, agent: Agent, task: Task, args: dict) -> T
     if host is None or dns is None:
         return unsupported_capability(
             "Connecting a domain to a site",
-            hint="A site host and DNS provider must be connected "
-            "(set ABOS_SITE_HOST and ABOS_DNS_PROVIDER).",
+            hint="No website host is connected — add Cloudflare credentials in Settings.",
         )
 
     site = await sites_svc.resolve_site(

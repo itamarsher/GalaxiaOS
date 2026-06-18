@@ -85,16 +85,6 @@ envVarGroups:
       # Single free instance → in-memory limiter (no Redis dependency for this).
       - key: ABOS_RATE_LIMIT_BACKEND
         value: memory
-      # Landing-page hosting + domain connection (Cloudflare Pages + DNS). On by
-      # default; credentials are per-company (BYO Cloudflare) configured in Settings.
-      # The env vars below are an optional single-account fallback (token scopes:
-      # Pages:Edit, DNS:Edit, Zone:Edit). With no credentials the capability reports
-      # unsupported.
-      - key: ABOS_SITE_HOST
-        value: cloudflare
-      - key: ABOS_DNS_PROVIDER
-        value: cloudflare
-      - key: ABOS_CLOUDFLARE_API_TOKEN
-        sync: false
-      - key: ABOS_CLOUDFLARE_ACCOUNT_ID
-        sync: false
+      # NB: landing-page hosting + domain connection (Cloudflare Pages + DNS) are
+      # bring-your-own-key — each company sets its own Cloudflare API token + account
+      # id in Settings. There are intentionally no global Cloudflare env vars here.

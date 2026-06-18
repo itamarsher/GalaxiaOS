@@ -4,10 +4,10 @@ Today this is the **Cloudflare** credential pair (API token + account id) that
 powers both the site-host and DNS seams. The token is a secret, so it is stored
 through the same envelope-encrypted :class:`~app.models.apikey.ApiKey` store as the
 other BYO keys (``provider="cloudflare"``); the non-secret account id rides along in
-the encrypted JSON payload. The runtime resolves a per-company adapter at call time,
-falling back to the ``ABOS_CLOUDFLARE_*`` env vars (a single platform account) and to
-``None`` when nothing is configured — so an unconfigured company reports the
-capability is unsupported rather than faking a result.
+the encrypted JSON payload. Hosting/DNS is **bring-your-own-key**: the runtime
+resolves a per-company adapter only when that company has saved its own credentials,
+and returns ``None`` otherwise — so a company without a key reports the capability is
+unsupported rather than faking a result. There is no platform-wide fallback.
 """
 
 from __future__ import annotations
@@ -17,7 +17,6 @@ import uuid
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.config import settings
 from app.integrations.dns import DnsProvider
 from app.integrations.sitehost import SiteHost
 from app.services import apikeys
@@ -74,49 +73,25 @@ async def clear_cloudflare(db: AsyncSession, *, company_id: uuid.UUID) -> bool:
     return await apikeys.revoke_key(db, company_id=company_id, key_id=row.id)
 
 
-async def _cloudflare_creds(
-    db: AsyncSession, company_id: uuid.UUID
-) -> tuple[str, str] | None:
-    """Per-company creds, falling back to the platform env vars."""
-    creds = await get_cloudflare(db, company_id=company_id)
-    if creds is not None:
-        return creds
-    if settings.cloudflare_api_token and settings.cloudflare_account_id:
-        return settings.cloudflare_api_token, settings.cloudflare_account_id
-    return None
-
-
 async def resolve_site_host(
     db: AsyncSession, *, company_id: uuid.UUID
 ) -> SiteHost | None:
-    """The company's site host, or ``None`` when hosting is off / unconfigured."""
-    if settings.site_host == "none":
+    """The company's site host — enabled only when it has saved Cloudflare creds."""
+    creds = await get_cloudflare(db, company_id=company_id)
+    if creds is None:
         return None
-    if settings.site_host == "cloudflare":
-        creds = await _cloudflare_creds(db, company_id)
-        if creds is None:
-            return None
-        from app.integrations.cloudflare import CloudflareSiteHost
+    from app.integrations.cloudflare import CloudflareSiteHost
 
-        return CloudflareSiteHost(token=creds[0], account_id=creds[1])
-    from app.integrations.sitehost import get_site_host
-
-    return get_site_host()
+    return CloudflareSiteHost(token=creds[0], account_id=creds[1])
 
 
 async def resolve_dns_provider(
     db: AsyncSession, *, company_id: uuid.UUID
 ) -> DnsProvider | None:
-    """The company's DNS provider, or ``None`` when DNS is off / unconfigured."""
-    if settings.dns_provider == "none":
+    """The company's DNS provider — enabled only when it has saved Cloudflare creds."""
+    creds = await get_cloudflare(db, company_id=company_id)
+    if creds is None:
         return None
-    if settings.dns_provider == "cloudflare":
-        creds = await _cloudflare_creds(db, company_id)
-        if creds is None:
-            return None
-        from app.integrations.cloudflare import CloudflareDns
+    from app.integrations.cloudflare import CloudflareDns
 
-        return CloudflareDns(token=creds[0], account_id=creds[1])
-    from app.integrations.dns import get_dns_provider
-
-    return get_dns_provider()
+    return CloudflareDns(token=creds[0], account_id=creds[1])

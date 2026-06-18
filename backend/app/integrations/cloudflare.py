@@ -9,9 +9,9 @@ One vendor backs both new seams:
   **Cloudflare DNS**: create/look up the zone (returning nameservers to delegate),
   report activation, and upsert records.
 
-Credentials come from settings (``ABOS_CLOUDFLARE_API_TOKEN`` /
-``ABOS_CLOUDFLARE_ACCOUNT_ID``); without them every method raises rather than
-attempting a no-op. The token needs **Pages:Edit**, **DNS:Edit**, **Zone:Edit**.
+Credentials are per-company (bring-your-own-key) and passed in by the resolver; an
+adapter built without them raises rather than attempting a no-op. The token needs
+**Pages:Edit**, **DNS:Edit**, **Zone:Edit**.
 
 ⚠️  These perform REAL changes on a live Cloudflare account and have not been
 exercised against the live API in this repo. Both seams default to ``none``
@@ -25,7 +25,6 @@ from typing import Any
 
 import httpx
 
-from app.config import settings
 from app.integrations.dns import DnsError, Zone
 from app.integrations.sitehost import HostedSite, SiteHostError
 
@@ -34,18 +33,18 @@ _TIMEOUT = 30.0
 
 
 class _CloudflareBase:
-    """Holds Cloudflare credentials, per-instance with an env-var fallback.
+    """Holds the per-company Cloudflare credentials for an adapter instance.
 
-    Credentials are normally per-company (BYO Cloudflare) and passed in by the
-    resolver; when omitted they fall back to ``ABOS_CLOUDFLARE_*`` so a single
-    platform account still works.
+    Credentials are bring-your-own-key, passed in by the resolver. An instance
+    built without them raises (via :meth:`_token` / :meth:`_account`) instead of
+    silently doing nothing.
     """
 
     _error: type[Exception] = RuntimeError
 
     def __init__(self, token: str | None = None, account_id: str | None = None) -> None:
-        self._tok = token or settings.cloudflare_api_token
-        self._acct = account_id or settings.cloudflare_account_id
+        self._tok = token
+        self._acct = account_id
 
     def _token(self) -> str:
         if not self._tok:

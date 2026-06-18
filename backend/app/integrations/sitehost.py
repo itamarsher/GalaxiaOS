@@ -3,13 +3,12 @@
 A :class:`SiteHost` publishes a single HTML page to a real static host and can
 attach a custom domain to it. Like the registrar seam there is deliberately NO
 simulated host: fabricating a "published" URL lets agents believe a page went live
-when it did not. Until a real adapter is wired, :func:`get_site_host` returns
-``None`` and the ``publish_content`` tool reports the capability is unsupported.
+when it did not.
 
-Selection is driven by ``settings.site_host`` (env ``ABOS_SITE_HOST``):
-
-- ``none`` (default) — :func:`get_site_host` returns ``None``.
-- ``cloudflare`` — Cloudflare Pages (Direct Upload), credential-gated.
+Hosting is bring-your-own-key: the runtime entry point is
+:func:`app.services.integrations.resolve_site_host`, which builds a per-company
+adapter only when that company has saved credentials. :func:`get_site_host` is a
+plain name→adapter selector (``cloudflare`` by default; ``none`` → ``None``).
 """
 
 from __future__ import annotations
@@ -48,15 +47,12 @@ class SiteHost(Protocol):
 
 
 def get_site_host(name: str | None = None) -> SiteHost | None:
-    """Return the configured site host, or ``None`` if none is wired.
+    """Construct a site host by name (no credentials; the resolver supplies those).
 
-    ``name`` overrides ``settings.site_host`` when given. Unknown names raise
-    ``ValueError`` so a misconfiguration fails loudly rather than silently doing
-    nothing.
+    ``cloudflare`` (the default) → a :class:`CloudflareSiteHost`; ``none`` → ``None``;
+    anything else raises ``ValueError`` so a typo fails loudly.
     """
-    from app.config import settings
-
-    key = (name or settings.site_host).strip().lower()
+    key = (name or "cloudflare").strip().lower()
     if key == "none":
         return None
     if key == "cloudflare":

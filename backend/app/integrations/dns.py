@@ -3,13 +3,13 @@
 A :class:`DnsProvider` creates/looks up the authoritative zone for a domain
 (returning the nameservers the registrar must delegate to), reports when the zone
 is active, and upserts records. As with the other seams there is no simulated
-provider: :func:`get_dns_provider` returns ``None`` when unconfigured and callers
-report the capability is unsupported rather than faking DNS changes.
+provider: callers report the capability is unsupported rather than faking DNS
+changes.
 
-Selection is driven by ``settings.dns_provider`` (env ``ABOS_DNS_PROVIDER``):
-
-- ``none`` (default) — :func:`get_dns_provider` returns ``None``.
-- ``cloudflare`` — Cloudflare DNS, credential-gated.
+DNS is bring-your-own-key: the runtime entry point is
+:func:`app.services.integrations.resolve_dns_provider`, which builds a per-company
+adapter only when that company has saved credentials. :func:`get_dns_provider` is a
+plain name→adapter selector (``cloudflare`` by default; ``none`` → ``None``).
 """
 
 from __future__ import annotations
@@ -49,14 +49,12 @@ class DnsProvider(Protocol):
 
 
 def get_dns_provider(name: str | None = None) -> DnsProvider | None:
-    """Return the configured DNS provider, or ``None`` if none is wired.
+    """Construct a DNS provider by name (no credentials; the resolver supplies those).
 
-    ``name`` overrides ``settings.dns_provider`` when given. Unknown names raise
-    ``ValueError`` so a misconfiguration fails loudly.
+    ``cloudflare`` (the default) → a :class:`CloudflareDns`; ``none`` → ``None``;
+    anything else raises ``ValueError`` so a typo fails loudly.
     """
-    from app.config import settings
-
-    key = (name or settings.dns_provider).strip().lower()
+    key = (name or "cloudflare").strip().lower()
     if key == "none":
         return None
     if key == "cloudflare":

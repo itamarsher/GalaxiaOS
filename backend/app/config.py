@@ -102,14 +102,10 @@ class Settings(BaseSettings):
     namecheap_client_ip: str = ""
     # Registrant contact as JSON, e.g. ABOS_NAMECHEAP_CONTACT='{"FirstName":...}'
     namecheap_contact: dict = Field(default_factory=dict)
-    # Site hosting + DNS (landing pages and connecting bought domains). Default to
-    # Cloudflare; actual credentials are per-company (BYO Cloudflare) configured in
-    # Settings, falling back to these env vars. With no credentials the capability
-    # resolves to None and reports unsupported (never faked).
-    site_host: str = "cloudflare"  # none | cloudflare
-    dns_provider: str = "cloudflare"  # none | cloudflare
-    cloudflare_api_token: str = ""
-    cloudflare_account_id: str = ""
+    # Site hosting + DNS (landing pages and connecting bought domains) are
+    # bring-your-own-key: credentials are per-company (Cloudflare) configured in
+    # Settings, never global env vars. With no saved key the capability resolves to
+    # None and reports unsupported (never faked).
 
     # Budget OS / Copilot
     runway_alert_days: float = 14.0  # raise a decision request below this runway
