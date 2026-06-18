@@ -1,8 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
-import { api, type ApiKey } from "@/lib/api";
+import { api, type ApiKey, type Company } from "@/lib/api";
 import { usePoll } from "@/lib/useApi";
 
 // The two keys ABOS understands today: the BYOK LLM provider key (required to
@@ -37,12 +37,15 @@ const SLOTS: { provider: string; label: string; hint: string; placeholder: strin
 export default function SettingsPage() {
   const { id } = useParams<{ id: string }>();
   const keys = usePoll(() => api.apiKeys(id), 0, [id]);
+  const company = usePoll(() => api.company(id), 0, [id]);
   const list = keys.data ?? [];
 
   return (
     <div>
       <h2>Settings</h2>
       <p className="muted">Manage the API keys this company uses. Plaintext is never stored or shown — only a fingerprint.</p>
+
+      <FromAddress companyId={id} current={company.data ?? null} onChange={() => company.reload()} />
 
       {SLOTS.map((slot) => (
         <KeySlot
@@ -132,6 +135,70 @@ function CloudflareCard({ companyId }: { companyId: string }) {
         </button>
         {configured && <button className="ghost danger" disabled={busy} onClick={remove}>Remove</button>}
       </div>
+      {err && <div className="err">{err}</div>}
+    </div>
+  );
+}
+
+function FromAddress({
+  companyId,
+  current,
+  onChange,
+}: {
+  companyId: string;
+  current: Company | null;
+  onChange: () => void;
+}) {
+  const [value, setValue] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [saved, setSaved] = useState(false);
+
+  // Seed the input from the saved value once it loads.
+  useEffect(() => {
+    setValue(current?.email_from ?? "");
+  }, [current?.email_from]);
+
+  const save = async () => {
+    const v = value.trim();
+    if (v && !v.includes("@")) { setErr("Enter an email address, e.g. hello@acme.com."); return; }
+    setBusy(true); setErr(null); setSaved(false);
+    try {
+      await api.updateCompany(companyId, { email_from: v });
+      setSaved(true);
+      onChange();
+    } catch (e) {
+      setErr(String(e instanceof Error ? e.message : e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="card">
+      <div className="step" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <span>Sender (&ldquo;From:&rdquo;) address</span>
+        {current?.email_from
+          ? <span className="status active">Set</span>
+          : <span className="status pending">Using default</span>}
+      </div>
+      <p className="muted" style={{ fontSize: 13, margin: "6px 0 0" }}>
+        The address your agents send email as. With a Resend key, this must be on a domain
+        you&apos;ve verified in your Resend account (add its SPF/DKIM DNS records first). Accepts
+        a plain address or a display name, e.g. <code>hello@acme.com</code> or <code>Acme &lt;hello@acme.com&gt;</code>.
+        Leave blank to use the deployment default.
+      </p>
+      <label>From address</label>
+      <input
+        value={value}
+        placeholder="hello@yourstartup.com"
+        onChange={(e) => { setValue(e.target.value); setSaved(false); }}
+        onKeyDown={(e) => e.key === "Enter" && save()}
+      />
+      <div className="btnrow">
+        <button disabled={busy || value.trim() === (current?.email_from ?? "")} onClick={save}>Save</button>
+      </div>
+      {saved && <div className="muted" style={{ fontSize: 13 }}>Saved.</div>}
       {err && <div className="err">{err}</div>}
     </div>
   );

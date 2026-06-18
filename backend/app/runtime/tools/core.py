@@ -448,13 +448,15 @@ async def _resolve_email_sender(db, company_id):
 
     BYOK extends to email: if the founder attached a Resend key (onboarding or
     Settings), the company sends real mail via Resend — chosen for its generous
-    free tier and custom-domain support — regardless of the global default.
-    Without one, fall back to the configured sender, which is ``None`` unless the
+    free tier and custom-domain support — regardless of the global default, using
+    the company's own ``email_from`` ("From:") address when one is set. Without a
+    key, fall back to the configured sender, which is ``None`` unless the
     deployment set a global real provider (e.g. SMTP); there is no simulated
     sender, so an unconfigured environment resolves to ``None`` and the tool
     reports the capability is unsupported.
     """
     from app.integrations.email import get_email_sender
+    from app.models import Company
     from app.services import apikeys
 
     key = await apikeys.get_plaintext_key(
@@ -463,7 +465,10 @@ async def _resolve_email_sender(db, company_id):
     if key:
         from app.integrations.resend import ResendEmailSender
 
-        return ResendEmailSender(api_key=key)
+        # Per-company verified "From:" overrides the global ABOS_EMAIL_FROM.
+        company = await db.get(Company, company_id)
+        sender = company.email_from if company else None
+        return ResendEmailSender(api_key=key, sender=sender or None)
     return get_email_sender()
 
 

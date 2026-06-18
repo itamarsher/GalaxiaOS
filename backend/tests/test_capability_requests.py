@@ -321,3 +321,23 @@ async def test_email_uses_resend_when_key_set(session_factory, company_with_budg
     assert isinstance(sender, ResendEmailSender)
     # The per-company key is what's used — not the (empty) global default.
     assert sender._api_key == "re_xxx"
+
+
+@requires_db
+async def test_email_uses_company_from_address_when_set(session_factory, company_with_budget):
+    from app.integrations.resend import ResendEmailSender
+    from app.models import Company
+
+    _set_master_key()
+    async with session_factory() as db:
+        await apikeys.store_key(
+            db, company_id=company_with_budget, provider=EMAIL_KEY_PROVIDER, plaintext="re_xxx"
+        )
+        company = await db.get(Company, company_with_budget)
+        company.email_from = "Acme <hello@acme.com>"
+        await db.commit()
+    async with session_factory() as db:
+        sender = await _resolve_email_sender(db, company_with_budget)
+    assert isinstance(sender, ResendEmailSender)
+    # The founder's verified "From:" overrides the global default.
+    assert sender._sender == "Acme <hello@acme.com>"

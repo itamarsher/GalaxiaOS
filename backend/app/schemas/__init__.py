@@ -40,6 +40,17 @@ class CompanyOut(ORMModel):
     name: str
     status: str
     mission_id: uuid.UUID | None = None
+    email_from: str | None = None
+
+
+class CompanyUpdateRequest(BaseModel):
+    """Founder-editable company settings. Fields left unset are not changed."""
+
+    # Sender ("From:") address agents send mail as, e.g. ``Acme <hello@acme.com>``
+    # or ``hello@acme.com``. Empty string clears it (falls back to the global
+    # default). Validated loosely — it must contain an ``@`` — so display names
+    # and angle-bracket forms are accepted.
+    email_from: str | None = Field(default=None, max_length=320)
 
 
 class KeyResultOut(ORMModel):

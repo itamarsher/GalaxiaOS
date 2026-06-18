@@ -25,7 +25,7 @@ async function req<T>(path: string, init: RequestInit = {}): Promise<T> {
 
 // ── Types ────────────────────────────────────────────────────────────────────
 export interface TokenResponse { access_token: string; token_type: string }
-export interface Company { id: string; name: string; status: string; mission_id: string | null }
+export interface Company { id: string; name: string; status: string; mission_id: string | null; email_from: string | null }
 export interface ApiKey { id: string; provider: string; key_fingerprint: string; status: string }
 export interface CloudflareStatus { configured: boolean; account_id: string | null }
 export interface Agent {
@@ -163,6 +163,8 @@ export const api = {
   launch: (companyId: string) => req<Company>(`/onboarding/${companyId}/launch`, { method: "POST" }),
 
   company: (companyId: string) => req<Company>(`/companies/${companyId}`),
+  updateCompany: (companyId: string, patch: { email_from?: string }) =>
+    req<Company>(`/companies/${companyId}`, { method: "PATCH", body: JSON.stringify(patch) }),
   deleteCompany: (companyId: string) =>
     req<void>(`/companies/${companyId}`, { method: "DELETE" }),
   org: (companyId: string) => req<{ agents: Agent[]; edges: AgentEdge[] }>(`/companies/${companyId}/org`),

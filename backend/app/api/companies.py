@@ -24,6 +24,7 @@ from app.schemas import (
     AgentEdgeOut,
     AgentOut,
     CompanyOut,
+    CompanyUpdateRequest,
     DecisionOut,
     MemoryOut,
     OrgChartOut,
@@ -56,6 +57,26 @@ async def list_my_companies(db: DbDep, user: CurrentUser):
 
 @router.get("", response_model=CompanyOut)
 async def get_company(company: CompanyDep):
+    return company
+
+
+@router.patch("", response_model=CompanyOut)
+async def update_company(company: CompanyDep, body: CompanyUpdateRequest, db: DbDep):
+    """Update founder-editable company settings (currently the sender address).
+
+    ``email_from`` is the "From:" agents send mail as; with Resend it must be on a
+    domain verified in the founder's Resend account. An empty string clears it
+    (falls back to the global ``ABOS_EMAIL_FROM``).
+    """
+    if body.email_from is not None:
+        sender = body.email_from.strip()
+        if sender and "@" not in sender:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                "Sender must be an email address, e.g. hello@acme.com or 'Acme <hello@acme.com>'.",
+            )
+        company.email_from = sender or None
+    await db.commit()
     return company
 
 
