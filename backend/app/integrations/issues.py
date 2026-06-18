@@ -4,11 +4,15 @@ A Protocol plus the real adapter (:class:`GitHubIssueTracker`), which talks to t
 GitHub REST API and is credential-gated (``ABOS_GITHUB_TOKEN`` + ``ABOS_GITHUB_REPO``);
 without a token it raises :class:`IssueTrackerError` rather than hitting the network.
 
-Deduplication: agents hit the same gaps, so :meth:`GitHubIssueTracker.report_issue`
-first looks for an existing OPEN issue with the same title. If one is found it adds a
-👍 reaction instead of opening a duplicate, and returns the current 👍 count — a
-running demand signal for how many want that capability/fix. Only when there is no
-match does it open a new issue (seeded with a 👍 so demand starts at 1).
+Deduplication & demand: agents hit the same gaps, so
+:meth:`GitHubIssueTracker.report_issue` first looks for an existing OPEN issue with
+the same title. Rather than open a duplicate, it posts a marked "+1" comment and
+returns how many such demand comments the issue now has — a running tally of how
+many want that capability/fix. Comments are counted (not reactions) so demand keeps
+climbing even when every agent acts through the same bot token. A newly opened issue
+gets its first "+1" comment too, so demand starts at 1. The marker
+(:data:`_DEMAND_MARKER`) is a hidden HTML comment, so the count ignores ordinary
+human discussion on the thread.
 
 There is deliberately NO simulated tracker that fabricates an external issue
 number/URL. When no real tracker is configured, :func:`get_issue_tracker` returns
@@ -30,6 +34,16 @@ from app.config import settings
 
 _GITHUB_API = "https://api.github.com"
 
+#: Hidden marker on demand "+1" comments so they can be counted regardless of any
+#: ordinary human discussion on the thread.
+_DEMAND_MARKER = "<!-- abos:capability-demand -->"
+_DEMAND_COMMENT = (
+    f"{_DEMAND_MARKER}\n+1 — another agent reported needing this "
+    "(logged automatically by the Platform agent)."
+)
+#: Safety cap on comment pagination when tallying demand (100 comments/page).
+_MAX_COMMENT_PAGES = 10
+
 
 @dataclass(frozen=True)
 class IssueResult:
@@ -37,10 +51,10 @@ class IssueResult:
     number: int
     url: str
     provider: str
-    #: ``False`` when an existing duplicate was upvoted instead of a new issue filed.
+    #: ``False`` when an existing duplicate was +1'd instead of a new issue filed.
     created: bool = True
-    #: Current 👍 count on the issue — how many have requested this capability/fix.
-    upvotes: int = 0
+    #: Number of "+1" demand comments — how many have requested this capability/fix.
+    demand: int = 0
 
 
 class IssueTrackerError(RuntimeError):
@@ -58,10 +72,10 @@ class IssueTracker(Protocol):
     async def report_issue(
         self, *, title: str, body: str, labels: list[str] | None = None
     ) -> IssueResult:
-        """Open an issue, or upvote (👍) an existing open duplicate with the same title.
+        """Open an issue, or +1 an existing open duplicate with the same title.
 
         Returns the resulting issue with ``created`` indicating whether it was newly
-        opened and ``upvotes`` the current demand count.
+        opened and ``demand`` the current "+1" comment count.
         """
         ...
 
@@ -124,25 +138,25 @@ class GitHubIssueTracker:
                 existing = await self._find_open_issue_by_title(client, repo, headers, title)
                 if existing is not None:
                     number = int(existing.get("number") or 0)
-                    upvotes = await self._upvote(client, repo, headers, number)
+                    demand = await self._register_demand(client, repo, headers, number)
                     return IssueResult(
                         id=str(existing.get("id") or ""),
                         number=number,
                         url=str(existing.get("html_url") or ""),
                         provider="github",
                         created=False,
-                        upvotes=upvotes,
+                        demand=demand,
                     )
                 created = await self._create_issue(client, repo, headers, title, body, labels)
-                # Seed demand at 1 so the 👍 count tracks how many reported it.
-                upvotes = await self._upvote(client, repo, headers, created.number)
+                # Seed demand at 1 so the "+1" comment count tracks how many reported it.
+                demand = await self._register_demand(client, repo, headers, created.number)
                 return IssueResult(
                     id=created.id,
                     number=created.number,
                     url=created.url,
                     provider="github",
                     created=True,
-                    upvotes=upvotes,
+                    demand=demand,
                 )
         except httpx.HTTPError as exc:
             raise IssueTrackerError(f"GitHub request failed: {exc}") from exc
@@ -196,32 +210,51 @@ class GitHubIssueTracker:
                 return item
         return None
 
-    async def _upvote(
+    async def _register_demand(
         self, client: httpx.AsyncClient, repo: str, headers: dict[str, str], number: int
     ) -> int:
-        """Add a 👍 reaction (best-effort) and return the current 👍 count.
+        """Post a marked "+1" demand comment, then return the current demand count."""
+        await self._add_demand_comment(client, repo, headers, number)
+        return await self._count_demand_comments(client, repo, headers, number)
 
-        Note: GitHub reactions are idempotent per authenticated account, so repeated
-        👍 from the same bot token do not double-count; the figure reflects DISTINCT
-        reacting accounts plus any human upvotes.
-        """
+    async def _add_demand_comment(
+        self, client: httpx.AsyncClient, repo: str, headers: dict[str, str], number: int
+    ) -> None:
         try:
             await client.post(
-                f"{_GITHUB_API}/repos/{repo}/issues/{number}/reactions",
-                json={"content": "+1"},
+                f"{_GITHUB_API}/repos/{repo}/issues/{number}/comments",
+                json={"body": _DEMAND_COMMENT},
                 headers=headers,
             )
         except httpx.HTTPError:
-            pass  # reacting is best-effort; the dedupe itself already succeeded
-        try:
-            resp = await client.get(
-                f"{_GITHUB_API}/repos/{repo}/issues/{number}", headers=headers
-            )
+            pass  # commenting is best-effort; the dedupe itself already succeeded
+
+    async def _count_demand_comments(
+        self, client: httpx.AsyncClient, repo: str, headers: dict[str, str], number: int
+    ) -> int:
+        """Tally "+1" demand comments (those carrying :data:`_DEMAND_MARKER`)."""
+        count = 0
+        for page in range(1, _MAX_COMMENT_PAGES + 1):
+            try:
+                resp = await client.get(
+                    f"{_GITHUB_API}/repos/{repo}/issues/{number}/comments",
+                    params={"per_page": 100, "page": page},
+                    headers=headers,
+                )
+            except httpx.HTTPError:
+                break
             if resp.status_code != 200:
-                return 0
-            return int((resp.json().get("reactions") or {}).get("+1") or 0)
-        except (httpx.HTTPError, ValueError):
-            return 0
+                break
+            try:
+                items = resp.json()
+            except ValueError:
+                break
+            if not items:
+                break
+            count += sum(1 for c in items if _DEMAND_MARKER in str(c.get("body") or ""))
+            if len(items) < 100:
+                break
+        return count
 
 
 def get_issue_tracker(name: str | None = None) -> IssueTracker | None:

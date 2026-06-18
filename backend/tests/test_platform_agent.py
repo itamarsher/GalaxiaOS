@@ -15,7 +15,7 @@ import httpx
 import pytest
 from sqlalchemy import select
 
-from app.integrations.issues import GitHubIssueTracker
+from app.integrations.issues import _DEMAND_MARKER, GitHubIssueTracker
 from app.models import Agent, AgentRun, Task
 from app.models.enums import (
     AgentRole,
@@ -277,13 +277,24 @@ async def test_open_issue_internal_dedupes_and_counts_repeat_requests(
     assert wrote == []  # no duplicate memory written
 
 
-# ── GitHub report_issue: dedupe + 👍 (network-free via a mock transport) ───────
+# ── GitHub report_issue: dedupe + "+1" comments (network-free mock transport) ──
 
 
 def _github_tracker(handler) -> GitHubIssueTracker:
     return GitHubIssueTracker(
         token="ghp_x", repo="o/r", transport=httpx.MockTransport(handler)
     )
+
+
+# Built from the real marker so the count logic and the fixtures stay in sync.
+_DEMAND_COMMENT_PLACEHOLDER = f"{_DEMAND_MARKER}\n+1 — agent needs this"
+
+
+def _demand_comments(n: int) -> list[dict]:
+    """``n`` marked demand comments plus an unrelated human comment (must be ignored)."""
+    return [{"body": _DEMAND_COMMENT_PLACEHOLDER} for _ in range(n)] + [
+        {"body": "just a human chiming in, no marker here"}
+    ]
 
 
 @pytest.mark.asyncio
@@ -299,10 +310,10 @@ async def test_report_issue_opens_new_when_no_duplicate():
             return httpx.Response(
                 201, json={"id": 111, "number": 7, "html_url": "https://gh/o/r/issues/7"}
             )
-        if path.endswith("/reactions"):
-            return httpx.Response(201, json={"content": "+1"})
-        if path == "/repos/o/r/issues/7":
-            return httpx.Response(200, json={"reactions": {"+1": 1}})
+        if request.method == "POST" and path == "/repos/o/r/issues/7/comments":
+            return httpx.Response(201, json={"id": 1})
+        if request.method == "GET" and path == "/repos/o/r/issues/7/comments":
+            return httpx.Response(200, json=_demand_comments(1))
         return httpx.Response(404)  # pragma: no cover
 
     result = await _github_tracker(handler).report_issue(
@@ -310,12 +321,13 @@ async def test_report_issue_opens_new_when_no_duplicate():
     )
     assert result.created is True
     assert result.number == 7
-    assert result.upvotes == 1  # seeded so demand starts at 1
+    assert result.demand == 1  # seeded so demand starts at 1 (human comment ignored)
     assert "POST /repos/o/r/issues" in calls  # a new issue was actually created
+    assert "POST /repos/o/r/issues/7/comments" in calls  # +1 comment posted
 
 
 @pytest.mark.asyncio
-async def test_report_issue_upvotes_existing_duplicate_instead_of_filing():
+async def test_report_issue_comments_on_existing_duplicate_instead_of_filing():
     calls: list[str] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -331,21 +343,21 @@ async def test_report_issue_upvotes_existing_duplicate_instead_of_filing():
                     ]
                 },
             )
-        if path.endswith("/reactions"):
-            return httpx.Response(201, json={"content": "+1"})
-        if path == "/repos/o/r/issues/5":
-            return httpx.Response(200, json={"reactions": {"+1": 4}})
+        if request.method == "POST" and path == "/repos/o/r/issues/5/comments":
+            return httpx.Response(201, json={"id": 1})
+        if request.method == "GET" and path == "/repos/o/r/issues/5/comments":
+            return httpx.Response(200, json=_demand_comments(4))
         return httpx.Response(404)  # pragma: no cover
 
     result = await _github_tracker(handler).report_issue(
         title="Add a Slack tool", body="to post updates", labels=["enhancement"]
     )
-    assert result.created is False  # upvoted the existing one
+    assert result.created is False  # commented on the existing one
     assert result.number == 5
-    assert result.upvotes == 4  # current demand
-    # Crucially, no new issue was POSTed — only the reaction.
+    assert result.demand == 4  # current demand (4 marked comments; human one ignored)
+    # Crucially, no new issue was POSTed — only the +1 comment.
     assert "POST /repos/o/r/issues" not in calls
-    assert "POST /repos/o/r/issues/5/reactions" in calls
+    assert "POST /repos/o/r/issues/5/comments" in calls
 
 
 @pytest.mark.asyncio
@@ -364,10 +376,10 @@ async def test_report_issue_title_match_is_exact_not_fuzzy():
             return httpx.Response(
                 201, json={"id": 3, "number": 8, "html_url": "https://gh/o/r/issues/8"}
             )
-        if path.endswith("/reactions"):
-            return httpx.Response(201, json={})
-        if path == "/repos/o/r/issues/8":
-            return httpx.Response(200, json={"reactions": {"+1": 1}})
+        if request.method == "POST" and path == "/repos/o/r/issues/8/comments":
+            return httpx.Response(201, json={"id": 1})
+        if request.method == "GET" and path == "/repos/o/r/issues/8/comments":
+            return httpx.Response(200, json=_demand_comments(1))
         return httpx.Response(404)  # pragma: no cover
 
     result = await _github_tracker(handler).report_issue(

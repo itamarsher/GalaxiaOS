@@ -106,10 +106,10 @@ SPECS: list[ToolSpec] = [
         description=(
             "Platform agent: file a tracker issue (bug or feature request). It first "
             "checks for an existing open issue with the SAME title and, if found, adds a "
-            "👍 instead of opening a duplicate — so the 👍 count tracks how many agents "
-            "need it. Routes through the configured tracker (GitHub when credentials are "
-            "set; otherwise recorded and counted in company memory) and records the "
-            "outcome for the audit trail. Investigate the relevant code with "
+            "'+1' comment instead of opening a duplicate — so the comment count tracks how "
+            "many agents need it. Routes through the configured tracker (GitHub when "
+            "credentials are set; otherwise recorded and counted in company memory) and "
+            "records the outcome for the audit trail. Investigate the relevant code with "
             "`list_repo_files` / `read_repo_file` first, and reuse a consistent title so "
             "duplicates collapse into one counted request."
         ),
@@ -307,18 +307,18 @@ async def _open_issue(db, ctx, *, agent: Agent, task: Task, args: dict) -> ToolO
         db,
         company_id=task.company_id,
         type=MemoryType.result,
-        title=f"Issue upvoted: {title[:80]}",
+        title=f"Issue +1'd: {title[:80]}",
         content=(
             f"A duplicate of existing tracker issue #{result.number} "
-            f"({result.provider}){label_part}; added 👍 instead of filing a new one. "
-            f"Demand so far: {result.upvotes} 👍.\nURL: {result.url}"
+            f"({result.provider}){label_part}; added a +1 comment instead of filing a new "
+            f"one. Demand so far: {result.demand} request(s).\nURL: {result.url}"
         ),
         source_task_id=task.id,
     )
     return ToolOutcome(
         observation=(
-            f"found existing issue #{result.number} for this and added 👍 instead of "
-            f"opening a duplicate — demand is now {result.upvotes} 👍 ({result.url})"
+            f"found existing issue #{result.number} for this and added a +1 comment instead "
+            f"of opening a duplicate — demand is now {result.demand} request(s) ({result.url})"
         )
     )
 
