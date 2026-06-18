@@ -104,11 +104,14 @@ SPECS: list[ToolSpec] = [
     ToolSpec(
         name="open_issue",
         description=(
-            "Platform agent: file a tracker issue (bug or feature request). Routes "
-            "through the configured issue tracker (offline simulated by default; "
-            "GitHub when credentials are set) and records the filed issue to company "
-            "memory for the audit trail. Investigate the relevant code with "
-            "`list_repo_files` / `read_repo_file` first so the issue is precise."
+            "Platform agent: file a tracker issue (bug or feature request). It first "
+            "checks for an existing open issue with the SAME title and, if found, adds a "
+            "👍 instead of opening a duplicate — so the 👍 count tracks how many agents "
+            "need it. Routes through the configured tracker (GitHub when credentials are "
+            "set; otherwise recorded and counted in company memory) and records the "
+            "outcome for the audit trail. Investigate the relevant code with "
+            "`list_repo_files` / `read_repo_file` first, and reuse a consistent title so "
+            "duplicates collapse into one counted request."
         ),
         input_schema={
             "type": "object",
@@ -202,6 +205,61 @@ async def _request_capability(db, ctx, *, agent: Agent, task: Task, args: dict) 
     )
 
 
+async def _record_request_internally(
+    db, task: Task, *, title: str, body: str, label_part: str
+) -> ToolOutcome:
+    """Track a bug/capability request in company memory when no tracker is wired.
+
+    Deduplicates by title: a repeat of an existing request bumps a counter on the
+    same entry (so we can see how many agents need it) instead of stacking duplicate
+    memories.
+    """
+    from app.services import memory as memory_svc
+
+    mem_title = f"Platform request: {title[:80]}"
+    existing = await memory_svc.find_latest_by_title(
+        db, company_id=task.company_id, title=mem_title
+    )
+    if existing is not None:
+        structured = dict(existing.structured or {})
+        count = int(structured.get("request_count") or 1) + 1
+        structured["request_count"] = count
+        existing.structured = structured
+        existing.content = (
+            f"Recorded internally{label_part} — no external issue tracker is connected. "
+            f"Demand so far: {count} request(s) from agents.\n\n{body[:2000]}"
+        )
+        await db.flush()
+        return ToolOutcome(
+            observation=(
+                f"This was already recorded internally; counted another request for it "
+                f"(demand now {count}) instead of duplicating it. Connect a GitHub token "
+                "in Settings to file it in a real tracker."
+            )
+        )
+
+    await memory_svc.write(
+        db,
+        company_id=task.company_id,
+        type=MemoryType.result,
+        title=mem_title,
+        content=(
+            f"Recorded internally{label_part} — no external issue tracker is connected, so "
+            "this was saved to company memory rather than filed in a tracker. Demand so "
+            f"far: 1 request.\n\n{body[:2000]}"
+        ),
+        source_task_id=task.id,
+        structured={"request_count": 1, "kind": "platform_request"},
+    )
+    return ToolOutcome(
+        observation=(
+            f"No external issue tracker is connected, so {title[:80]!r} was recorded "
+            "internally to company memory (demand: 1). To file it in a real tracker, "
+            "connect a GitHub token in Settings."
+        )
+    )
+
+
 async def _open_issue(db, ctx, *, agent: Agent, task: Task, args: dict) -> ToolOutcome:
     from app.services import memory as memory_svc
 
@@ -212,52 +270,55 @@ async def _open_issue(db, ctx, *, agent: Agent, task: Task, args: dict) -> ToolO
 
     tracker = await _resolve_issue_tracker(db, task.company_id)
 
-    # No external tracker configured: don't fabricate an issue number/URL. Record
-    # the request to the company's own memory so the request_capability → open_issue
-    # escalation loop still produces a durable, honest artifact the founder can act
-    # on, and tell the agent plainly where it landed.
+    # No external tracker configured: track the request in the company's own memory
+    # (deduped + counted) so the request_capability → open_issue escalation loop still
+    # produces a durable, honest artifact the founder can act on.
     if tracker is None:
+        return await _record_request_internally(
+            db, task, title=title, body=body, label_part=label_part
+        )
+
+    try:
+        result = await tracker.report_issue(title=title, body=body, labels=labels)
+    except IssueTrackerError as exc:
+        return ToolOutcome(observation=f"could not open issue: {exc}", is_error=True)
+
+    # Audit trail: record what happened to company memory.
+    if result.created:
         await memory_svc.write(
             db,
             company_id=task.company_id,
             type=MemoryType.result,
-            title=f"Platform request: {title[:80]}",
+            title=f"Issue filed: {title[:80]}",
             content=(
-                f"Recorded internally{label_part} — no external issue tracker is "
-                "connected, so this was saved to company memory rather than filed in a "
-                f"tracker. Connect a GitHub token to file it externally.\n\n{body[:2000]}"
+                f"Tracker issue #{result.number} opened via {result.provider}{label_part}.\n"
+                f"URL: {result.url}\n\n{body[:2000]}"
             ),
             source_task_id=task.id,
         )
         return ToolOutcome(
             observation=(
-                f"No external issue tracker is connected, so {title[:80]!r} was recorded "
-                "internally to company memory (visible to the founder). To file it in a "
-                "real tracker, connect a GitHub token in Settings."
+                f"opened issue #{result.number} via {result.provider} "
+                f"(id {result.id}, {result.url})"
             )
         )
 
-    try:
-        result = await tracker.open_issue(title=title, body=body, labels=labels)
-    except IssueTrackerError as exc:
-        return ToolOutcome(observation=f"could not open issue: {exc}", is_error=True)
-
-    # Audit trail: record the filed issue to company memory.
     await memory_svc.write(
         db,
         company_id=task.company_id,
         type=MemoryType.result,
-        title=f"Issue filed: {title[:80]}",
+        title=f"Issue upvoted: {title[:80]}",
         content=(
-            f"Tracker issue #{result.number} opened via {result.provider}{label_part}.\n"
-            f"URL: {result.url}\n\n{body[:2000]}"
+            f"A duplicate of existing tracker issue #{result.number} "
+            f"({result.provider}){label_part}; added 👍 instead of filing a new one. "
+            f"Demand so far: {result.upvotes} 👍.\nURL: {result.url}"
         ),
         source_task_id=task.id,
     )
     return ToolOutcome(
         observation=(
-            f"opened issue #{result.number} via {result.provider} "
-            f"(id {result.id}, {result.url})"
+            f"found existing issue #{result.number} for this and added 👍 instead of "
+            f"opening a duplicate — demand is now {result.upvotes} 👍 ({result.url})"
         )
     )
 

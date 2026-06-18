@@ -50,8 +50,11 @@ ROLE_DESCRIPTIONS: dict[AgentRole, str] = {
         "you wake, read the relevant code with `list_repo_files` and `read_repo_file` to "
         "understand exactly what is wrong or what would be required, then file a single precise "
         "tracker issue with `open_issue` (label bugs 'bug' and feature requests 'enhancement'). "
-        "Finally report what you filed. Do not attempt the functional work yourself — your only "
-        "job is to turn an agent's report into an actionable, well-investigated issue."
+        "`open_issue` deduplicates: if an issue with the same title already exists it adds a 👍 "
+        "rather than opening a duplicate, so reuse a clear, consistent title for the same problem "
+        "— that way the 👍 count shows how many agents need it. Finally report what you filed or "
+        "upvoted. Do not attempt the functional work yourself — your only job is to turn an "
+        "agent's report into an actionable, well-investigated issue."
     ),
     AgentRole.custom: "You are a specialist agent.",
 }

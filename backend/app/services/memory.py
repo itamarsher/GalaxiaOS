@@ -40,6 +40,24 @@ async def write(
     return entry
 
 
+async def find_latest_by_title(
+    db: AsyncSession, *, company_id: uuid.UUID, title: str
+) -> MemoryEntry | None:
+    """Return the most recent entry with this exact title for the company, or ``None``.
+
+    Used to deduplicate append-only records (e.g. internally-tracked platform
+    requests) so repeated reports update a single counted entry instead of stacking
+    duplicates.
+    """
+    stmt = (
+        select(MemoryEntry)
+        .where(MemoryEntry.company_id == company_id, MemoryEntry.title == title[:500])
+        .order_by(MemoryEntry.created_at.desc())
+        .limit(1)
+    )
+    return await db.scalar(stmt)
+
+
 async def query(
     db: AsyncSession,
     *,

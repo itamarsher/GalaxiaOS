@@ -11,8 +11,11 @@ still completes offline.
 
 from __future__ import annotations
 
+import httpx
+import pytest
 from sqlalchemy import select
 
+from app.integrations.issues import GitHubIssueTracker
 from app.models import Agent, AgentRun, Task
 from app.models.enums import (
     AgentRole,
@@ -189,14 +192,18 @@ async def test_open_issue_records_internally_and_writes_memory(
         await db.commit()
 
     # The memory table is excluded from the test schema (pgvector), so record the
-    # write instead of hitting it — we only need to assert the audit-trail call.
+    # write / dedupe lookup instead of hitting it — we only need the audit-trail call.
     recorded: list[dict] = []
 
     async def _fake_write(db, **kwargs):
         recorded.append(kwargs)
         return None
 
+    async def _no_existing(db, **kwargs):
+        return None
+
     monkeypatch.setattr("app.services.memory.write", _fake_write)
+    monkeypatch.setattr("app.services.memory.find_latest_by_title", _no_existing)
 
     async with session_factory() as db:
         outcome = await execute_tool(
@@ -206,14 +213,168 @@ async def test_open_issue_records_internally_and_writes_memory(
         )
         await db.commit()
 
-    # No external tracker connected -> recorded internally, not fabricated.
+    # No external tracker connected -> recorded internally, not fabricated, demand 1.
     assert outcome.is_error is False
     assert "recorded internally" in outcome.observation
     assert "company memory" in outcome.observation
-    # Audit trail written to memory.
+    assert "demand: 1" in outcome.observation
+    # Audit trail written to memory with the demand counter seeded.
     assert len(recorded) == 1
     assert recorded[0]["type"] is MemoryType.result
     assert "Fix .io registration" in recorded[0]["title"]
+    assert recorded[0]["structured"]["request_count"] == 1
+
+
+@requires_db
+async def test_open_issue_internal_dedupes_and_counts_repeat_requests(
+    session_factory, company_with_budget, monkeypatch
+):
+    """A repeat request bumps the counter on the existing memory, not a new write."""
+    from types import SimpleNamespace
+
+    company_id = company_with_budget
+    async with session_factory() as db:
+        agent = Agent(company_id=company_id, role=AgentRole.platform, name="Platform")
+        db.add(agent)
+        await db.flush()
+        run = AgentRun(
+            company_id=company_id, trigger=RunTrigger.onboarding, status=RunStatus.running
+        )
+        db.add(run)
+        await db.flush()
+        run.root_run_id = run.id
+        task = Task(
+            company_id=company_id, run_id=run.id, root_run_id=run.id,
+            agent_id=agent.id, goal="file an issue", status=TaskStatus.running,
+        )
+        db.add(task)
+        await db.commit()
+
+    wrote: list[dict] = []
+    existing = SimpleNamespace(structured={"request_count": 2}, content="old")
+
+    async def _fake_write(db, **kwargs):  # pragma: no cover - must not run
+        wrote.append(kwargs)
+        return None
+
+    async def _found(db, **kwargs):
+        return existing
+
+    monkeypatch.setattr("app.services.memory.write", _fake_write)
+    monkeypatch.setattr("app.services.memory.find_latest_by_title", _found)
+
+    async with session_factory() as db:
+        outcome = await execute_tool(
+            db, object(), agent=agent, task=task,
+            name="open_issue",
+            args={"title": "need a Slack tool", "body": "to post updates", "labels": ["enhancement"]},
+        )
+        await db.commit()
+
+    assert outcome.is_error is False
+    assert "demand now 3" in outcome.observation  # 2 -> 3
+    assert existing.structured["request_count"] == 3
+    assert wrote == []  # no duplicate memory written
+
+
+# ── GitHub report_issue: dedupe + 👍 (network-free via a mock transport) ───────
+
+
+def _github_tracker(handler) -> GitHubIssueTracker:
+    return GitHubIssueTracker(
+        token="ghp_x", repo="o/r", transport=httpx.MockTransport(handler)
+    )
+
+
+@pytest.mark.asyncio
+async def test_report_issue_opens_new_when_no_duplicate():
+    calls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        calls.append(f"{request.method} {path}")
+        if path == "/search/issues":
+            return httpx.Response(200, json={"items": []})  # nothing matches
+        if request.method == "POST" and path == "/repos/o/r/issues":
+            return httpx.Response(
+                201, json={"id": 111, "number": 7, "html_url": "https://gh/o/r/issues/7"}
+            )
+        if path.endswith("/reactions"):
+            return httpx.Response(201, json={"content": "+1"})
+        if path == "/repos/o/r/issues/7":
+            return httpx.Response(200, json={"reactions": {"+1": 1}})
+        return httpx.Response(404)  # pragma: no cover
+
+    result = await _github_tracker(handler).report_issue(
+        title="Add a Slack tool", body="to post updates", labels=["enhancement"]
+    )
+    assert result.created is True
+    assert result.number == 7
+    assert result.upvotes == 1  # seeded so demand starts at 1
+    assert "POST /repos/o/r/issues" in calls  # a new issue was actually created
+
+
+@pytest.mark.asyncio
+async def test_report_issue_upvotes_existing_duplicate_instead_of_filing():
+    calls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        calls.append(f"{request.method} {path}")
+        if path == "/search/issues":
+            return httpx.Response(
+                200,
+                json={
+                    "items": [
+                        {"id": 9, "number": 5, "title": "Add a Slack tool",
+                         "html_url": "https://gh/o/r/issues/5"}
+                    ]
+                },
+            )
+        if path.endswith("/reactions"):
+            return httpx.Response(201, json={"content": "+1"})
+        if path == "/repos/o/r/issues/5":
+            return httpx.Response(200, json={"reactions": {"+1": 4}})
+        return httpx.Response(404)  # pragma: no cover
+
+    result = await _github_tracker(handler).report_issue(
+        title="Add a Slack tool", body="to post updates", labels=["enhancement"]
+    )
+    assert result.created is False  # upvoted the existing one
+    assert result.number == 5
+    assert result.upvotes == 4  # current demand
+    # Crucially, no new issue was POSTed — only the reaction.
+    assert "POST /repos/o/r/issues" not in calls
+    assert "POST /repos/o/r/issues/5/reactions" in calls
+
+
+@pytest.mark.asyncio
+async def test_report_issue_title_match_is_exact_not_fuzzy():
+    """A fuzzy search hit with a different title must NOT be treated as a duplicate."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if path == "/search/issues":
+            return httpx.Response(
+                200,
+                json={"items": [{"id": 1, "number": 2, "title": "Add a Slack BOT",
+                                 "html_url": "https://gh/o/r/issues/2"}]},
+            )
+        if request.method == "POST" and path == "/repos/o/r/issues":
+            return httpx.Response(
+                201, json={"id": 3, "number": 8, "html_url": "https://gh/o/r/issues/8"}
+            )
+        if path.endswith("/reactions"):
+            return httpx.Response(201, json={})
+        if path == "/repos/o/r/issues/8":
+            return httpx.Response(200, json={"reactions": {"+1": 1}})
+        return httpx.Response(404)  # pragma: no cover
+
+    result = await _github_tracker(handler).report_issue(
+        title="Add a Slack tool", body="x", labels=None
+    )
+    assert result.created is True
+    assert result.number == 8
 
 
 # ── Fleet membership & dispatch isolation ─────────────────────────────────────
