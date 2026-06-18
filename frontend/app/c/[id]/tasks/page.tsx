@@ -153,7 +153,7 @@ function TaskDrawer({ companyId, taskId, onClose }: { companyId: string; taskId:
             <LiveActivity companyId={companyId} taskId={taskId} initialStatus={task.status} />
 
             <h4>Execution summary</h4>
-            {summary ? <p style={{ margin: 0 }}>{summary}</p>
+            {summary ? <Markdown>{summary}</Markdown>
               : <p className="muted" style={{ margin: 0 }}>No summary yet — this task is still in progress.</p>}
 
             <h4>Result</h4>

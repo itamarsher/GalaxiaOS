@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { api, fmtUsd, statusLabel, type Task } from "@/lib/api";
 import { usePoll } from "@/lib/useApi";
+import { Markdown } from "@/lib/markdown";
 
 interface EventFrame {
   tasks: Task[];
@@ -154,9 +155,7 @@ export default function Overview() {
           </button>
         </div>
         {digest.data?.summary_md ? (
-          <pre style={{ whiteSpace: "pre-wrap", fontFamily: "inherit", margin: "8px 0 0" }}>
-            {digest.data.summary_md}
-          </pre>
+          <Markdown className="digest-md">{digest.data.summary_md}</Markdown>
         ) : (
           <div className="empty">Preparing your first digest…</div>
         )}
