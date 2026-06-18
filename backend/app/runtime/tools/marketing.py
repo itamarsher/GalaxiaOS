@@ -1,19 +1,31 @@
-"""Marketing area tools: publish content, schedule social posts, run ad campaigns.
+"""Marketing area tools: publish content, connect a domain, schedule posts, ads.
 
-These reach the world OUTSIDE the company (a CMS/social API, an ad network) and
-there is no real provider wired for them, so they are unsupported here. They used
-to fabricate a published URL / scheduled post / launched campaign (and
-``run_ad_campaign`` even charged the budget for an action that never happened). Each
-handler now reports the capability is unavailable and points the agent at
-``request_capability`` rather than returning a fake success that pollutes memory,
-metrics, and plans.
+``publish_content`` (landing pages / blog) and ``connect_domain`` are REAL when a
+site host + DNS provider are wired (see ``ABOS_SITE_HOST`` / ``ABOS_DNS_PROVIDER``):
+they host a generated page and point a bought domain at it. The remaining channels
+(social/email) and ``schedule_social_post`` / ``run_ad_campaign`` reach providers
+that aren't wired, so they stay unsupported — each reports the capability is
+unavailable and points the agent at ``request_capability`` rather than fabricating a
+success that pollutes memory, metrics, and plans.
 """
 
 from __future__ import annotations
 
+from app.integrations.dns import DnsError, get_dns_provider
+from app.integrations.sitehost import SiteHostError, get_site_host
 from app.models import Agent, Task
+from app.models.enums import DecisionKind, DecisionStatus, SiteConnectStatus
+from app.models.governance import DecisionRequest
 from app.providers.base import ToolSpec
-from app.runtime.tools.base import ToolOutcome, unsupported_capability
+from app.runtime.tools.base import (
+    ToolOutcome,
+    consume_approval_grant,
+    unsupported_capability,
+)
+from app.services import sites as sites_svc
+
+# Channels that publish to a real static host via the site-host seam.
+_SITE_CHANNELS = {"landing_page", "blog"}
 
 SPECS: list[ToolSpec] = [
     ToolSpec(
@@ -33,6 +45,26 @@ SPECS: list[ToolSpec] = [
                 "body": {"type": "string"},
             },
             "required": ["channel", "title", "body"],
+        },
+    ),
+    ToolSpec(
+        name="connect_domain",
+        description=(
+            "Connect a domain you own to a published landing page: create its DNS "
+            "zone, point the domain at the host, and provision HTTPS. If the domain's "
+            "nameservers can't be delegated automatically, the founder is asked to "
+            "set them. Defaults to the most recently published site."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "domain": {"type": "string"},
+                "site_slug": {
+                    "type": "string",
+                    "description": "Optional slug of the site to connect; defaults to the latest.",
+                },
+            },
+            "required": ["domain"],
         },
     ),
     ToolSpec(
@@ -74,9 +106,110 @@ SPECS: list[ToolSpec] = [
 
 
 async def _publish_content(db, ctx, *, agent: Agent, task: Task, args: dict) -> ToolOutcome:
-    return unsupported_capability(
-        "Publishing marketing content",
-        hint="No CMS/website provider is connected to publish to.",
+    channel = str(args.get("channel") or "").strip()
+    if channel not in _SITE_CHANNELS:
+        # social / email reach providers that aren't wired.
+        return unsupported_capability(
+            f"Publishing to the {channel or 'unknown'} channel",
+            hint="Only landing_page and blog channels have a connected host.",
+        )
+
+    host = get_site_host()
+    if host is None:
+        return unsupported_capability(
+            "Publishing marketing content",
+            hint="No website host is connected (set ABOS_SITE_HOST).",
+        )
+
+    title = str(args["title"]).strip()
+    body = str(args["body"])
+    try:
+        site = await sites_svc.publish_site(
+            db, host, company_id=task.company_id, title=title, body=body
+        )
+    except SiteHostError as exc:
+        return ToolOutcome(observation=f"publish failed: {exc}", is_error=True)
+    return ToolOutcome(
+        observation=(
+            f"published '{title}' at {site.deployment_url} (slug {site.slug}). "
+            "Use connect_domain to point a bought domain at it."
+        )
+    )
+
+
+async def _connect_domain(db, ctx, *, agent: Agent, task: Task, args: dict) -> ToolOutcome:
+    domain = str(args["domain"]).strip().lower().lstrip("@").rstrip(".")
+    if not domain or "." not in domain:
+        return ToolOutcome(observation=f"'{domain}' is not a valid domain", is_error=True)
+
+    host = get_site_host()
+    dns = get_dns_provider()
+    if host is None or dns is None:
+        return unsupported_capability(
+            "Connecting a domain to a site",
+            hint="A site host and DNS provider must be connected "
+            "(set ABOS_SITE_HOST and ABOS_DNS_PROVIDER).",
+        )
+
+    site = await sites_svc.resolve_site(
+        db, company_id=task.company_id, slug=args.get("site_slug")
+    )
+    if site is None or not site.project_name:
+        return ToolOutcome(
+            observation="no published site to connect — call publish_content first",
+            is_error=True,
+        )
+
+    sd = await sites_svc.get_or_create_domain(
+        db, company_id=task.company_id, domain=domain, site=site
+    )
+    # On resume after the founder approved the "set your nameservers" decision,
+    # consume the grant so we trust the delegation instead of re-parking.
+    delegated = await consume_approval_grant(db, task_id=task.id, tool="connect_domain")
+    try:
+        sd = await sites_svc.begin_connection(db, sd=sd, founder_delegated=delegated)
+    except (DnsError, SiteHostError) as exc:
+        return ToolOutcome(observation=f"connecting {domain} failed: {exc}", is_error=True)
+
+    if sd.status == SiteConnectStatus.live:
+        return ToolOutcome(observation=f"{domain} is live and serving {site.title} over HTTPS")
+
+    # Nameservers couldn't be delegated automatically — ask the founder to point
+    # the domain at Cloudflare. Park the task until they confirm (the connection
+    # reconciler then finishes attaching + provisioning HTTPS).
+    if sd.status == SiteConnectStatus.pending_ns and sd.nameservers:
+        ns = "\n".join(f"- `{n}`" for n in sd.nameservers)
+        db.add(
+            DecisionRequest(
+                company_id=task.company_id,
+                agent_id=agent.id,
+                task_id=task.id,
+                kind=DecisionKind.user_action,
+                summary=(
+                    f"**Point `{domain}` at our DNS to go live**\n\n"
+                    f"At your domain registrar, set the nameservers for `{domain}` to:\n\n"
+                    f"{ns}\n\n"
+                    "Approve once you've updated them — the site finishes connecting "
+                    "automatically (this can take a little while to propagate)."
+                ),
+                payload={"tool": "connect_domain", "args": args},
+                status=DecisionStatus.pending,
+            )
+        )
+        await db.flush()
+        return ToolOutcome(
+            observation=(
+                f"created DNS zone for {domain}; asked the founder to delegate "
+                "nameservers. Connection resumes once they confirm."
+            ),
+            park=True,
+        )
+
+    return ToolOutcome(
+        observation=(
+            f"{domain} connection in progress (status: {sd.status.value}); HTTPS "
+            "provisioning completes shortly."
+        )
     )
 
 
@@ -97,6 +230,7 @@ async def _run_ad_campaign(db, ctx, *, agent: Agent, task: Task, args: dict) -> 
 
 HANDLERS = {
     "publish_content": _publish_content,
+    "connect_domain": _connect_domain,
     "schedule_social_post": _schedule_social_post,
     "run_ad_campaign": _run_ad_campaign,
 }

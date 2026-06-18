@@ -19,6 +19,7 @@ export default function Overview() {
   const budget = usePoll(() => api.budget(id), 5000, [id]);
   const decisions = usePoll(() => api.decisions(id, true), 5000, [id]);
   const digest = usePoll(() => api.digestLatest(id), 0, [id]);
+  const sites = usePoll(() => api.sites(id), 10000, [id]);
   // TEMP dev tools — remove before launch.
   const dev = usePoll(() => api.devStatus(), 0, [id]);
 
@@ -161,6 +162,32 @@ export default function Overview() {
           <div className="empty">Preparing your first digest…</div>
         )}
       </div>
+
+      {sites.data && sites.data.length > 0 && (
+        <div className="card">
+          <div className="step">Sites &amp; domains</div>
+          <div style={{ marginTop: 10 }}>
+            {sites.data.map((s) => (
+              <div key={s.id} className="kv" style={{ flexWrap: "wrap" }}>
+                <span>
+                  {s.deployment_url ? (
+                    <a className="md" href={s.deployment_url} target="_blank" rel="noopener noreferrer"
+                       style={{ color: "var(--accent-strong)" }}>{s.title}</a>
+                  ) : s.title}
+                </span>
+                <span className="muted" style={{ fontSize: 12 }}>
+                  {s.domains.length > 0
+                    ? s.domains.map((d) => `${d.domain} (${d.status})`).join(", ")
+                    : "no domain connected"}
+                </span>
+              </div>
+            ))}
+          </div>
+          <p className="muted" style={{ marginTop: 10, fontSize: 12 }}>
+            Landing pages your agents published, and the status of any domain being connected.
+          </p>
+        </div>
+      )}
 
       <div className="card danger-zone">
         <div className="step">Danger zone</div>

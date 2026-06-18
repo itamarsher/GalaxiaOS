@@ -87,6 +87,11 @@ export interface RefineResponse { reply: string; preview: Preview }
 export interface Memory { id: string; type: string; title: string; content: string; created_at: string }
 export interface Runway { projected_days_remaining: number | null; burn_rate_cents_per_day: number; balance_cents: number | null }
 export interface Digest { summary_md: string | null; open_decisions: number; period_date: string | null }
+export interface SiteDomain { id: string; domain: string; status: string }
+export interface Site {
+  id: string; slug: string; title: string; status: string;
+  deployment_url: string | null; created_at: string; domains: SiteDomain[];
+}
 export interface AgentListing {
   id: string; name: string; role: string; description: string; provider: string; price_cents: number;
   trust: number | null; accuracy: number | null; roi: number | null; reliability: number | null;
@@ -161,6 +166,8 @@ export const api = {
   runway: (companyId: string) => req<Runway>(`/companies/${companyId}/runway`),
   recomputeRunway: (companyId: string) =>
     req<Runway>(`/companies/${companyId}/runway/recompute`, { method: "POST" }),
+
+  sites: (companyId: string) => req<Site[]>(`/companies/${companyId}/sites`),
 
   tasks: (companyId: string) => req<Task[]>(`/companies/${companyId}/tasks`),
   task: (companyId: string, taskId: string) =>

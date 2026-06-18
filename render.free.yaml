@@ -85,3 +85,14 @@ envVarGroups:
       # Single free instance → in-memory limiter (no Redis dependency for this).
       - key: ABOS_RATE_LIMIT_BACKEND
         value: memory
+      # Landing-page hosting + domain connection (Cloudflare Pages + DNS). Set the
+      # providers to "cloudflare" and supply a token (scopes: Pages:Edit, DNS:Edit,
+      # Zone:Edit) + account id to enable. Default "none" → capability unsupported.
+      - key: ABOS_SITE_HOST
+        value: none
+      - key: ABOS_DNS_PROVIDER
+        value: none
+      - key: ABOS_CLOUDFLARE_API_TOKEN
+        sync: false
+      - key: ABOS_CLOUDFLARE_ACCOUNT_ID
+        sync: false

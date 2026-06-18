@@ -25,6 +25,7 @@ from app.models.memory import MemoryEntry
 from app.models.metrics import MetricSignal
 from app.models.mission import KeyResult, Mission, Objective
 from app.models.run import AgentRun, Task
+from app.models.site import Site, SiteDomain
 from app.models.user import Membership, User
 
 __all__ = [
@@ -57,4 +58,6 @@ __all__ = [
     "InvestmentReview",
     "ApiKey",
     "FounderDigest",
+    "Site",
+    "SiteDomain",
 ]

@@ -97,6 +97,23 @@ class PreviewOut(BaseModel):
     company: CompanyOut
     objectives: list[ObjectiveOut]
     org: OrgChartOut
+
+
+# ── Sites & connected domains ────────────────────────────────────────────────
+class SiteDomainOut(ORMModel):
+    id: uuid.UUID
+    domain: str
+    status: str
+
+
+class SiteOut(ORMModel):
+    id: uuid.UUID
+    slug: str
+    title: str
+    status: str
+    deployment_url: str | None = None
+    created_at: datetime
+    domains: list[SiteDomainOut] = []
     cost_estimate_cents: int | None = None
     investment_reviews: list[InvestmentReviewOut] = Field(default_factory=list)
 

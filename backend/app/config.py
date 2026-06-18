@@ -102,6 +102,11 @@ class Settings(BaseSettings):
     namecheap_client_ip: str = ""
     # Registrant contact as JSON, e.g. ABOS_NAMECHEAP_CONTACT='{"FirstName":...}'
     namecheap_contact: dict = Field(default_factory=dict)
+    # Site hosting + DNS (landing pages and connecting bought domains)
+    site_host: str = "none"  # none | cloudflare
+    dns_provider: str = "none"  # none | cloudflare
+    cloudflare_api_token: str = ""
+    cloudflare_account_id: str = ""
 
     # Budget OS / Copilot
     runway_alert_days: float = 14.0  # raise a decision request below this runway

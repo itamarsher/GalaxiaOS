@@ -102,3 +102,16 @@ envVarGroups:
         value: "true"
       - key: ABOS_RATE_LIMIT_PER_MINUTE
         value: "120"
+      # Landing-page hosting + domain connection (Cloudflare Pages + DNS). Set the
+      # providers to "cloudflare" and supply a token (scopes: Pages:Edit, DNS:Edit,
+      # Zone:Edit) + account id to enable. Default "none" → the capability reports
+      # unsupported. The reconciler that finishes domain connections runs in the
+      # worker, which also reads this group.
+      - key: ABOS_SITE_HOST
+        value: none
+      - key: ABOS_DNS_PROVIDER
+        value: none
+      - key: ABOS_CLOUDFLARE_API_TOKEN
+        sync: false
+      - key: ABOS_CLOUDFLARE_ACCOUNT_ID
+        sync: false

@@ -95,6 +95,38 @@ class NamecheapRegistrar:
 
         return self._parse_create_response(domain, resp.text)
 
+    async def set_nameservers(self, domain: str, nameservers: list[str]) -> None:
+        """Point ``domain`` at custom nameservers via ``domains.dns.setCustom``."""
+        if not nameservers:
+            raise RegistrarError("no nameservers given for delegation")
+        sld, _, tld = domain.partition(".")
+        if not sld or not tld:
+            raise RegistrarError(f"cannot parse SLD/TLD from {domain!r}")
+        params = self._require_credentials()
+        params.update(
+            {
+                "Command": "namecheap.domains.dns.setCustom",
+                "SLD": sld,
+                "TLD": tld,
+                "Nameservers": ",".join(nameservers),
+            }
+        )
+        url = _SANDBOX_URL if settings.namecheap_sandbox else _PROD_URL
+        try:
+            async with httpx.AsyncClient(timeout=settings.rdap_timeout_seconds * 3) as client:
+                resp = await client.get(url, params=params)
+                resp.raise_for_status()
+        except httpx.HTTPError as exc:
+            raise RegistrarError(f"Namecheap request failed: {exc}") from exc
+
+        try:
+            root = ET.fromstring(resp.text)
+        except ET.ParseError as exc:
+            raise RegistrarError(f"Namecheap returned non-XML: {exc}") from exc
+        if root.attrib.get("Status") != "OK":
+            errors = [e.text or "" for e in root.iter() if _local(e.tag) == "Error"]
+            raise RegistrarError(f"Namecheap error: {'; '.join(errors) or 'unknown'}")
+
     def _parse_create_response(self, domain: str, body: str) -> DomainRegistration:
         try:
             root = ET.fromstring(body)
