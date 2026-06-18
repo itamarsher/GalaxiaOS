@@ -406,12 +406,39 @@ async def _register_domain(db, ctx, *, agent: Agent, task: Task, args: dict) -> 
     )
 
 
+#: Provider name under which a company's email (Resend) key is stored (BYOK).
+EMAIL_KEY_PROVIDER = "resend"
+
+
+async def _resolve_email_sender(db, company_id):
+    """Return the email sender for this company.
+
+    BYOK extends to email: if the founder attached a Resend key (onboarding or
+    Settings), the company sends real mail via Resend — chosen for its generous
+    free tier and custom-domain support — regardless of the global default.
+    Without one, fall back to the configured sender: offline ``simulated`` unless
+    the deployment set a global real provider (e.g. SMTP).
+    """
+    from app.integrations.email import get_email_sender
+    from app.services import apikeys
+
+    key = await apikeys.get_plaintext_key(
+        db, company_id=company_id, provider=EMAIL_KEY_PROVIDER
+    )
+    if key:
+        from app.integrations.resend import ResendEmailSender
+
+        return ResendEmailSender(api_key=key)
+    return get_email_sender()
+
+
 async def _send_email(db, ctx, *, agent: Agent, task: Task, args: dict) -> ToolOutcome:
-    from app.integrations.email import EmailError, get_email_sender
+    from app.integrations.email import EmailError
     from app.services import memory as memory_svc
 
+    sender = await _resolve_email_sender(db, task.company_id)
     try:
-        res = await get_email_sender().send(
+        res = await sender.send(
             to=args["to"], subject=args["subject"], body=args["body"]
         )
     except EmailError as exc:

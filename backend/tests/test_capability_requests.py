@@ -17,7 +17,12 @@ from app.integrations.tavily import TavilyWebSearch
 from app.integrations.websearch import SimulatedWebSearch
 from app.models import Agent, Task
 from app.models.enums import AgentRole
-from app.runtime.tools.core import WEB_SEARCH_PROVIDER, _resolve_web_search
+from app.runtime.tools.core import (
+    EMAIL_KEY_PROVIDER,
+    WEB_SEARCH_PROVIDER,
+    _resolve_email_sender,
+    _resolve_web_search,
+)
 from app.services import apikeys, copilot, platform_requests
 from tests.conftest import requires_db
 
@@ -285,3 +290,33 @@ async def test_web_search_commits_measured_credits_not_the_estimate(
     # The Tavily request id is kept for the auditable vendor trail.
     assert charge is not None and charge.external_ref == "req-abc123"
     assert charge.payload and charge.payload.get("credits") == 2
+
+
+# ── per-company email (Resend) key ───────────────────────────────────────────
+
+
+@requires_db
+async def test_email_defaults_to_simulated_without_a_key(session_factory, company_with_budget):
+    from app.integrations.email import SimulatedEmailSender
+
+    _set_master_key()
+    async with session_factory() as db:
+        sender = await _resolve_email_sender(db, company_with_budget)
+    assert isinstance(sender, SimulatedEmailSender)
+
+
+@requires_db
+async def test_email_uses_resend_when_key_set(session_factory, company_with_budget):
+    from app.integrations.resend import ResendEmailSender
+
+    _set_master_key()
+    async with session_factory() as db:
+        await apikeys.store_key(
+            db, company_id=company_with_budget, provider=EMAIL_KEY_PROVIDER, plaintext="re_xxx"
+        )
+        await db.commit()
+    async with session_factory() as db:
+        sender = await _resolve_email_sender(db, company_with_budget)
+    assert isinstance(sender, ResendEmailSender)
+    # The per-company key is what's used — not the (empty) global default.
+    assert sender._api_key == "re_xxx"

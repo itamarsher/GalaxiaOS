@@ -21,6 +21,7 @@ export default function Home() {
   const [apiKey, setApiKey] = useState("");
   const [githubKey, setGithubKey] = useState("");
   const [tavilyKey, setTavilyKey] = useState("");
+  const [resendKey, setResendKey] = useState("");
   const [preview, setPreview] = useState<Preview | null>(null);
 
   // Multi-business: a user can run several companies, listed after auth.
@@ -84,7 +85,7 @@ export default function Home() {
 
   const newBusiness = () => {
     // Reset the onboarding wizard so creating an Nth business starts clean.
-    setCompanyId(null); setApiKey(""); setGithubKey(""); setTavilyKey(""); setPreview(null);
+    setCompanyId(null); setApiKey(""); setGithubKey(""); setTavilyKey(""); setResendKey(""); setPreview(null);
     setChat([]); setProgress(null); setMission(""); setBudget("500"); setErr(null);
     setStep("mission");
   };
@@ -105,6 +106,8 @@ export default function Home() {
       if (githubKey.trim()) await api.addApiKey(companyId, githubKey.trim(), "github");
       // Optional: a Tavily key enables real web search (else it's simulated).
       if (tavilyKey.trim()) await api.addApiKey(companyId, tavilyKey.trim(), "tavily");
+      // Optional: a Resend key makes Resend the email provider (else simulated).
+      if (resendKey.trim()) await api.addApiKey(companyId, resendKey.trim(), "resend");
       setProgress({ phase: "queued", pct: 0, message: "Starting…", status: "running", error: null, events: [] });
       setStep("generating");
       const poll = setInterval(async () => {
@@ -228,9 +231,12 @@ export default function Home() {
           <input type="password" value={githubKey} onChange={(e) => setGithubKey(e.target.value)} placeholder="ghp_… — lets the platform agent file real issues" />
           <label>Tavily API key <span className="muted">(optional)</span></label>
           <input type="password" value={tavilyKey} onChange={(e) => setTavilyKey(e.target.value)} placeholder="tvly-… — enables real web search" />
+          <label>Resend API key <span className="muted">(optional)</span></label>
+          <input type="password" value={resendKey} onChange={(e) => setResendKey(e.target.value)} placeholder="re_… — send real email from your domain (free tier)" />
           <p className="muted" style={{ fontSize: 12, marginTop: 4 }}>
             Optional. Without GitHub, bug/capability requests use an offline tracker; without
-            Tavily, web search returns simulated results. You can add or change these later in Settings.
+            Tavily, web search returns simulated results; without Resend, email is simulated. You
+            can add or change these later in Settings.
           </p>
           <button disabled={busy || !apiKey} onClick={submitKeyAndGenerate}>
             Generate organization
