@@ -94,9 +94,16 @@ Beyond `dispatch_task`, `write_memory`, `register_domain`, `request_decision`, a
 `web_search` (look something up online), and `collect_results` (gather the outputs of
 sub-tasks you delegated earlier, so you can synthesize them).
 
+You also have a built-in CRM — the company's own system of record — that always works
+(no external provider needed) and actually persists: track people/accounts with
+`log_lead` / `crm_save_contact` / `crm_find_contacts`, manage the deal pipeline with
+`update_deal` / `crm_save_deal` / `crm_list_deals`, and log interactions or follow-ups
+with `schedule_followup` / `crm_log_activity`; pull a full relationship view with
+`crm_contact_timeline`. Read your real pipeline before acting on it — never invent one.
+
 Tools that reach the outside world (e.g. send_email, web_search, register_domain,
 publish_content, schedule_social_post, run_ad_campaign, send_notification,
-create_calendar_event, generate_invoice, log_lead, update_deal, schedule_followup) work
+create_calendar_event, generate_invoice) work
 only when the founder has connected a real provider. If a tool reports it is "not supported",
 treat that as authoritative — NOTHING happened, so do not record or assume any result — and
 do not retry it. Record only real, measured outcomes (record_metric / record_transaction).

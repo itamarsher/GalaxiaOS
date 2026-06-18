@@ -12,6 +12,7 @@ from app.models.budget import (
     SpendEntry,
 )
 from app.models.company import Company
+from app.models.crm import CrmActivity, CrmContact, CrmDeal
 from app.models.founder import FounderDigest
 from app.models.governance import (
     CircuitBreaker,
@@ -31,6 +32,9 @@ __all__ = [
     "User",
     "Membership",
     "Company",
+    "CrmContact",
+    "CrmDeal",
+    "CrmActivity",
     "Mission",
     "Objective",
     "KeyResult",

@@ -170,3 +170,34 @@ class InvestmentStance(str, enum.Enum):
     invest = "invest"
     conditional = "conditional"
     pass_ = "pass"
+
+
+class CrmContactStatus(str, enum.Enum):
+    """Lifecycle stage of a CRM contact, from first touch to outcome."""
+
+    lead = "lead"  # captured, not yet qualified
+    qualified = "qualified"  # vetted as a real opportunity
+    customer = "customer"  # converted / paying
+    churned = "churned"  # was a customer, left
+    lost = "lost"  # disqualified / dropped before converting
+
+
+class CrmDealStage(str, enum.Enum):
+    """Pipeline stage of a CRM deal, in pipeline order."""
+
+    new = "new"
+    qualified = "qualified"
+    proposal = "proposal"
+    won = "won"
+    lost = "lost"
+
+
+class CrmActivityKind(str, enum.Enum):
+    """Type of a logged CRM interaction or planned touchpoint."""
+
+    note = "note"
+    call = "call"
+    email = "email"
+    meeting = "meeting"
+    task = "task"
+    followup = "followup"
