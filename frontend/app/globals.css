@@ -258,6 +258,8 @@ th { color: var(--muted); font-weight: 500; white-space: nowrap; }
 .md strong { color: var(--text); }
 /* Chat bubbles render Markdown too — drop the pre-wrap so block tags lay out. */
 .msg .md { white-space: normal; }
+/* Latest digest sits below its card header — keep the small gap it used to have. */
+.digest-md { margin-top: 8px; }
 
 /* ── Generation progress ── */
 .spinner {
