@@ -1,28 +1,32 @@
 """Sales tools: lead logging, deal-stage tracking, and follow-up scheduling.
 
-These tools are NOT connected to a real CRM, calendar, or any external system, so
-they are unsupported in this environment. They used to be "simulated": they wrote a
-lead/deal/follow-up into Company Memory and bumped a metric signal, then returned a
-fabricated success. That fabrication is exactly what produced hallucinated plans —
-phantom leads and revenue surfaced back into the planning prompts as if they were
-real. Each handler now reports the capability is unavailable and points the agent at
-``request_capability`` instead of inventing pipeline that does not exist.
+These used to be unsupported stubs — there was no CRM behind them, so they could
+only fabricate pipeline, which poisoned the planning loop. They are now backed by
+the self-coded CRM (:mod:`app.services.crm`): a lead becomes a real
+:class:`~app.models.crm.CrmContact`, a deal update a real
+:class:`~app.models.crm.CrmDeal`, and a follow-up a real
+:class:`~app.models.crm.CrmActivity`. Nothing is invented; everything persists and
+can be read back (see the richer ``crm_*`` tools for search and pipeline views).
 """
 
 from __future__ import annotations
 
 from app.models import Agent, Task
+from app.models.enums import CrmActivityKind, CrmDealStage, MetricSource
 from app.providers.base import ToolSpec
-from app.runtime.tools.base import ToolOutcome, unsupported_capability
+from app.runtime.tools.base import ToolOutcome
+from app.runtime.tools.crm import format_contact, format_deal
+from app.services import crm as crm_svc
+from app.services import metrics as metrics_svc
 
-#: Allowed deal stages, in pipeline order (kept for the ``update_deal`` schema).
-DEAL_STAGES: tuple[str, ...] = ("new", "qualified", "proposal", "won", "lost")
+#: Allowed deal stages, in pipeline order (the CRM enum is the source of truth).
+DEAL_STAGES: tuple[str, ...] = tuple(s.value for s in CrmDealStage)
 
 
 SPECS: list[ToolSpec] = [
     ToolSpec(
         name="log_lead",
-        description="Record a new sales lead (name, optional email/company/source/note).",
+        description="Record a new sales lead in the CRM (name, optional email/company/source/note).",
         input_schema={
             "type": "object",
             "properties": {
@@ -38,13 +42,16 @@ SPECS: list[ToolSpec] = [
     ToolSpec(
         name="update_deal",
         description=(
-            "Move a deal to a new pipeline stage "
+            "Move a deal to a new pipeline stage in the CRM "
             "(new|qualified|proposal|won|lost); records revenue when won."
         ),
         input_schema={
             "type": "object",
             "properties": {
-                "lead": {"type": "string", "description": "Lead or deal identifier."},
+                "lead": {
+                    "type": "string",
+                    "description": "Lead or deal identifier (name or title).",
+                },
                 "stage": {
                     "type": "string",
                     "enum": list(DEAL_STAGES),
@@ -60,11 +67,14 @@ SPECS: list[ToolSpec] = [
     ),
     ToolSpec(
         name="schedule_followup",
-        description="Schedule a follow-up touchpoint with a lead.",
+        description="Schedule a follow-up touchpoint with a lead in the CRM.",
         input_schema={
             "type": "object",
             "properties": {
-                "lead": {"type": "string", "description": "Lead or deal identifier."},
+                "lead": {
+                    "type": "string",
+                    "description": "Lead or deal identifier (name or title).",
+                },
                 "when": {"type": "string", "description": "When to follow up (free text)."},
                 "note": {"type": "string"},
             },
@@ -75,24 +85,76 @@ SPECS: list[ToolSpec] = [
 
 
 async def _log_lead(db, ctx, *, agent: Agent, task: Task, args: dict) -> ToolOutcome:
-    return unsupported_capability(
-        "Logging a sales lead",
-        hint="There is no CRM connected, so the lead would only be invented, not stored.",
-    )
+    try:
+        contact, created = await crm_svc.upsert_contact(
+            db,
+            company_id=task.company_id,
+            name=args["name"],
+            email=args.get("email"),
+            company_name=args.get("company"),
+            source=args.get("source"),
+            note=args.get("note"),
+        )
+    except ValueError as exc:
+        return ToolOutcome(observation=str(exc), is_error=True)
+    verb = "logged lead" if created else "updated lead"
+    return ToolOutcome(observation=f"{verb} {contact.id}: {format_contact(contact)}")
 
 
 async def _update_deal(db, ctx, *, agent: Agent, task: Task, args: dict) -> ToolOutcome:
-    return unsupported_capability(
-        "Updating a deal stage",
-        hint="There is no CRM connected; record real, measured revenue with record_metric.",
+    lead = args["lead"]
+    stage_raw = str(args["stage"]).strip().lower()
+    try:
+        stage = CrmDealStage(stage_raw)
+    except ValueError:
+        return ToolOutcome(
+            observation=f"invalid stage {args['stage']!r}; expected one of {', '.join(DEAL_STAGES)}",
+            is_error=True,
+        )
+    amount_cents = args.get("amount_cents")
+    amount_cents = int(amount_cents) if amount_cents is not None else None
+
+    # Link to an existing contact when the lead handle resolves to one.
+    contact = await crm_svc.resolve_contact(db, company_id=task.company_id, handle=lead)
+    deal, _created = await crm_svc.upsert_deal(
+        db,
+        company_id=task.company_id,
+        title=lead,
+        stage=stage,
+        amount_cents=amount_cents,
+        note=args.get("note"),
+        contact_id=contact.id if contact else None,
     )
+    if deal.stage == CrmDealStage.won and deal.amount_cents:
+        await metrics_svc.record_signal(
+            db,
+            company_id=task.company_id,
+            name="revenue",
+            value=deal.amount_cents / 100,
+            unit="USD",
+            source=MetricSource.agent,
+            note=f"deal won: {deal.title}",
+        )
+    return ToolOutcome(observation=f"updated deal {deal.id}: {format_deal(deal)}")
 
 
 async def _schedule_followup(db, ctx, *, agent: Agent, task: Task, args: dict) -> ToolOutcome:
-    return unsupported_capability(
-        "Scheduling a follow-up",
-        hint="There is no CRM or calendar connected to hold the reminder.",
+    lead = args["lead"]
+    when = args["when"]
+    contact = await crm_svc.resolve_contact(db, company_id=task.company_id, handle=lead)
+    body = f"Due: {when}"
+    if args.get("note"):
+        body += f"\n{args['note']}"
+    await crm_svc.log_activity(
+        db,
+        company_id=task.company_id,
+        kind=CrmActivityKind.followup,
+        subject=f"Follow up with {lead}",
+        body=body,
+        contact_id=contact.id if contact else None,
     )
+    where = f" (contact {contact.id})" if contact else ""
+    return ToolOutcome(observation=f"scheduled follow-up with {lead} at {when}{where}")
 
 
 HANDLERS = {
