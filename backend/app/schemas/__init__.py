@@ -177,6 +177,38 @@ class CloudflareStatusOut(BaseModel):
     account_id: str | None = None
 
 
+# ── Integrations (Google Drive file store) ───────────────────────────────────
+class GoogleDriveCredsRequest(BaseModel):
+    """The OAuth bundle a founder pastes to connect their personal Drive.
+
+    All three are required; ``root_folder_id`` is optional and defaults to the
+    Drive root ("root"). The whole bundle is stored envelope-encrypted and never
+    returned.
+    """
+
+    client_id: str = Field(min_length=8)
+    client_secret: str = Field(min_length=8)
+    refresh_token: str = Field(min_length=8)
+    root_folder_id: str | None = None
+
+
+class GoogleDriveStatusOut(BaseModel):
+    configured: bool
+    root_folder_id: str | None = None
+
+
+class CompanyFileOut(ORMModel):
+    id: uuid.UUID
+    category: str
+    name: str
+    description: str | None = None
+    mime_type: str
+    folder_path: str
+    web_url: str | None = None
+    size_bytes: int | None = None
+    created_at: datetime
+
+
 # ── Budget ───────────────────────────────────────────────────────────────────
 class BudgetOut(ORMModel):
     id: uuid.UUID

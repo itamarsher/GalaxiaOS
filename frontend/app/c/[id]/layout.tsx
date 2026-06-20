@@ -13,6 +13,7 @@ const TABS = [
   ["governance", "Governance"],
   ["decisions", "Decisions"],
   ["memory", "Memory"],
+  ["files", "Files"],
   ["marketplace", "Marketplace"],
   ["copilot", "Copilot"],
   ["settings", "Settings"],

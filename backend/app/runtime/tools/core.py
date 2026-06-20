@@ -498,6 +498,21 @@ async def _send_email(db, ctx, *, agent: Agent, task: Task, args: dict) -> ToolO
         content=args["body"][:2000],
         source_task_id=task.id,
     )
+    # Best-effort: keep a copy of the outbound email in the company's file store
+    # (Communications) so there's a durable comms trail for audits/DD. Never blocks
+    # the send — no-ops silently when no file provider is connected.
+    from app.models.enums import FileCategory
+    from app.services import files as files_svc
+
+    await files_svc.safe_archive(
+        db,
+        company_id=task.company_id,
+        category=FileCategory.communications,
+        name=f"email-{args['to']}-{args['subject'][:60]}",
+        content=f"To: {args['to']}\nSubject: {args['subject']}\n\n{args['body']}",
+        source_task_id=task.id,
+        description=f"Outbound email to {args['to']}",
+    )
     return ToolOutcome(
         observation=(
             f"email sent to {args['to']} via {res.provider} "

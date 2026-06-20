@@ -150,6 +150,21 @@ async def _record_transaction(db, ctx, *, agent: Agent, task: Task, args: dict) 
         content=content,
         source_task_id=task.id,
     )
+    # Best-effort: drop a record into the company's Financials folder so the audit
+    # trail accretes in external storage too. Never blocks the transaction — no-ops
+    # when no file provider is connected.
+    from app.models.enums import FileCategory
+    from app.services import files as files_svc
+
+    await files_svc.safe_archive(
+        db,
+        company_id=task.company_id,
+        category=FileCategory.financial,
+        name=f"transaction-{kind}-{_dollars(amount_cents).replace('$', '').replace(',', '')}",
+        content=f"# {kind.title()} — {_dollars(amount_cents)}\n\n{content}",
+        source_task_id=task.id,
+        description=f"{kind} {_dollars(amount_cents)}",
+    )
     return ToolOutcome(observation=f"recorded {detail}")
 
 

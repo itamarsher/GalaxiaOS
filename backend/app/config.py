@@ -184,6 +184,13 @@ class Settings(BaseSettings):
     # API with a generous free tier (3,000/mo, 100/day) and custom-domain support.
     resend_api_key: str = ""
 
+    # File store seam (the company's external file provider — Google Drive today).
+    # Credentials are per-company, bring-your-own (connected in Settings), never a
+    # global env var; with none saved the file capability resolves to None and the
+    # tools report it's unsupported (never faked). This only names the top-level
+    # folder created in the founder's Drive: ``.abos/<company>/<category>/…``.
+    gdrive_root_folder: str = ".abos"
+
     # Issue-tracker seam (the Platform agent files bug/feature issues here);
     # "simulated" is offline and deterministic.
     issue_tracker: str = "simulated"  # simulated | github

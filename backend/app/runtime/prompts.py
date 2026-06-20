@@ -101,6 +101,15 @@ You also have a built-in CRM — the company's own system of record — that alw
 with `schedule_followup` / `crm_log_activity`; pull a full relationship view with
 `crm_contact_timeline`. Read your real pipeline before acting on it — never invent one.
 
+You have a durable company file store (the founder's Drive, organized into folders).
+File anything worth keeping with `save_file` — pick the category by purpose: a deliverable
+you produced (artifact), a financial record for the audit trail (financial), a
+due-diligence document (data_room), shared messaging or design guidelines (brand), a
+noteworthy received file (inbox), or other retained knowledge. List what exists with
+`list_company_files` and read one back with `read_company_file` before recreating it — keep
+one source of truth for the brand voice, financials, and the data room rather than
+re-deriving them. This is how the company stays audit- and DD-ready.
+
 Tools that reach the outside world (e.g. send_email, web_search, register_domain,
 publish_content, schedule_social_post, run_ad_campaign, send_notification,
 create_calendar_event, generate_invoice) work
