@@ -18,7 +18,16 @@ from app.runtime.tools.team import HANDLERS, SPECS, _reallocate_hint, _require_c
 from app.services import budget as budget_svc
 from tests.conftest import requires_db
 
-TEAM_TOOL_NAMES = ("list_team", "hire_agent", "pause_agent", "resume_agent", "set_agent_budget")
+TEAM_TOOL_NAMES = (
+    "list_team",
+    "hire_agent",
+    "pause_agent",
+    "resume_agent",
+    "set_agent_budget",
+    "get_company_playbook",
+    "update_company_playbook",
+    "set_agent_directive",
+)
 
 
 # ── DB-free unit tests ───────────────────────────────────────────────────────

@@ -38,7 +38,9 @@ export interface Agent {
   id: string; role: string; name: string; autonomy_level: string;
   status: string; monthly_budget_cents: number | null; reports_to_agent_id: string | null;
   backend_type: string; source: string;
+  system_prompt: string; role_description: string;
 }
+export interface Playbook { playbook: string; customized: boolean; default: string }
 export interface AgentEdge { from_agent_id: string; to_agent_id: string; relation: string }
 export interface Objective { id: string; title: string; rationale: string | null; priority: number; status: string }
 export interface InvestmentReview {
@@ -191,6 +193,13 @@ export const api = {
     req<Company>(`/companies/${companyId}`, { method: "PATCH", body: JSON.stringify(patch) }),
   deleteCompany: (companyId: string) =>
     req<void>(`/companies/${companyId}`, { method: "DELETE" }),
+  playbook: (companyId: string) => req<Playbook>(`/companies/${companyId}/playbook`),
+  updatePlaybook: (companyId: string, playbook: string) =>
+    req<Playbook>(`/companies/${companyId}/playbook`, {
+      method: "PUT",
+      body: JSON.stringify({ playbook }),
+    }),
+
   org: (companyId: string) => req<{ agents: Agent[]; edges: AgentEdge[] }>(`/companies/${companyId}/org`),
   agents: (companyId: string) => req<Agent[]>(`/companies/${companyId}/agents`),
   pauseAgent: (companyId: string, agentId: string) =>

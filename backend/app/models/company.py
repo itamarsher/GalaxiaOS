@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import uuid
 
-from sqlalchemy import Enum, ForeignKey, String
+from sqlalchemy import Enum, ForeignKey, String, Text
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -31,3 +31,9 @@ class Company(Base, PKMixin, TimestampMixin):
     # their Resend account. When unset, the email sender falls back to the global
     # ``ABOS_EMAIL_FROM``.
     email_from: Mapped[str | None] = mapped_column(String(320), nullable=True)
+    # The company's global operating playbook — a system prompt injected into EVERY
+    # agent's launch prompt so the whole fleet shares the same best practices and
+    # company-specific directives. The CEO keeps it current (``update_company_playbook``)
+    # as emerging directives arise. When unset, the platform default
+    # (``prompts.DEFAULT_COMPANY_PLAYBOOK``) applies, so a company always has one.
+    playbook: Mapped[str | None] = mapped_column(Text, nullable=True)

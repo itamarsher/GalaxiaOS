@@ -19,6 +19,7 @@ from app.models import (
     Task,
 )
 from app.models.enums import AgentStatus, DecisionStatus, TaskStatus
+from app.runtime.prompts import ROLE_DESCRIPTIONS, effective_playbook
 from app.runtime.transcript import transcript_lines
 from app.schemas import (
     AgentEdgeOut,
@@ -28,6 +29,8 @@ from app.schemas import (
     DecisionOut,
     MemoryOut,
     OrgChartOut,
+    PlaybookOut,
+    PlaybookUpdateRequest,
     SiteDomainOut,
     SiteOut,
     TaskDetailOut,
@@ -35,6 +38,20 @@ from app.schemas import (
     TaskTranscriptOut,
 )
 from app.services import sites as sites_svc
+
+
+def _agent_out(agent: Agent) -> AgentOut:
+    """Serialize an agent, attaching the fixed role description for its role.
+
+    ``system_prompt`` (the agent's editable directive) comes straight off the ORM
+    row; ``role_description`` is computed from the role so the founder sees the
+    agent's full launch prompt — both the standing role behaviour and the
+    company-specific directive.
+    """
+    out = AgentOut.model_validate(agent)
+    out.role_description = ROLE_DESCRIPTIONS.get(agent.role, "")
+    return out
+
 
 router = APIRouter(prefix="/companies/{company_id}", tags=["companies"])
 
@@ -94,19 +111,47 @@ async def delete_company(company: CompanyDep, db: DbDep):
     return None
 
 
+@router.get("/playbook", response_model=PlaybookOut)
+async def get_playbook(company: CompanyDep):
+    """The company's global operating playbook — the system prompt every agent runs
+    under. Returns the effective text (custom if set, else the platform default),
+    whether it's been customized, and the default (so the UI can offer a reset)."""
+    raw = (company.playbook or "").strip()
+    return PlaybookOut(
+        playbook=effective_playbook(company.playbook),
+        customized=bool(raw),
+        default=effective_playbook(None),
+    )
+
+
+@router.put("/playbook", response_model=PlaybookOut)
+async def update_playbook(company: CompanyDep, body: PlaybookUpdateRequest, db: DbDep):
+    """Founder edit of the global playbook. An empty string clears the override and
+    reverts every agent to the platform default."""
+    text = body.playbook.strip()
+    company.playbook = text or None
+    await db.commit()
+    return PlaybookOut(
+        playbook=effective_playbook(company.playbook),
+        customized=bool(text),
+        default=effective_playbook(None),
+    )
+
+
 @router.get("/org", response_model=OrgChartOut)
 async def org_chart(company: CompanyDep, db: DbDep):
     agents = (await db.scalars(select(Agent).where(Agent.company_id == company.id))).all()
     edges = (await db.scalars(select(AgentEdge).where(AgentEdge.company_id == company.id))).all()
     return OrgChartOut(
-        agents=[AgentOut.model_validate(a) for a in agents],
+        agents=[_agent_out(a) for a in agents],
         edges=[AgentEdgeOut.model_validate(e) for e in edges],
     )
 
 
 @router.get("/agents", response_model=list[AgentOut])
 async def list_agents(company: CompanyDep, db: DbDep):
-    return (await db.scalars(select(Agent).where(Agent.company_id == company.id))).all()
+    agents = (await db.scalars(select(Agent).where(Agent.company_id == company.id))).all()
+    return [_agent_out(a) for a in agents]
 
 
 @router.post("/agents/{agent_id}/pause", response_model=AgentOut)

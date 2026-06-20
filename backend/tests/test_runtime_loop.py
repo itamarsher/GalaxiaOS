@@ -10,18 +10,25 @@ import pytest
 
 from app.config import settings
 from app.runtime.backends import native
-from app.runtime.prompts import AGENT_LOOP_SYSTEM
+from app.runtime.prompts import (
+    AGENT_LOOP_SYSTEM,
+    DEFAULT_COMPANY_PLAYBOOK,
+    effective_playbook,
+    render_agent_system,
+)
 from app.runtime.tools import TOOL_SPECS
 
 
-def test_system_prompt_has_memory_and_metrics_slots() -> None:
-    assert "{memory}" in AGENT_LOOP_SYSTEM
-    assert "{metrics}" in AGENT_LOOP_SYSTEM
+def test_system_prompt_has_all_slots() -> None:
+    for slot in ("{memory}", "{metrics}", "{role_desc}", "{directive}", "{playbook}"):
+        assert slot in AGENT_LOOP_SYSTEM
 
 
-def test_system_prompt_formats_with_all_slots() -> None:
-    rendered = AGENT_LOOP_SYSTEM.format(
+def test_render_agent_system_fills_all_slots() -> None:
+    rendered = render_agent_system(
         role_desc="You are the CEO agent.",
+        agent_directive="You own the launch.",
+        playbook=None,  # falls back to the platform default
         mission="Build something great.",
         goal="Plan the launch.",
         memory="- learning: pricing matters",
@@ -29,7 +36,30 @@ def test_system_prompt_formats_with_all_slots() -> None:
     )
     assert "pricing matters" in rendered
     assert "Plan the launch." in rendered
+    assert "You own the launch." in rendered  # per-agent directive injected
+    assert "standing operating directives" in rendered  # default playbook injected
     assert "{" not in rendered  # all format slots consumed
+
+
+def test_effective_playbook_falls_back_to_default() -> None:
+    assert effective_playbook(None) == DEFAULT_COMPANY_PLAYBOOK
+    assert effective_playbook("   ") == DEFAULT_COMPANY_PLAYBOOK
+    assert effective_playbook("Custom rules.") == "Custom rules."
+
+
+def test_render_uses_custom_playbook_and_omits_empty_directive() -> None:
+    rendered = render_agent_system(
+        role_desc="You are the Growth agent.",
+        agent_directive="   ",  # blank -> no directive block
+        playbook="ALWAYS ship on Fridays.",
+        mission="m",
+        goal="g",
+        memory="x",
+        metrics="y",
+    )
+    assert "ALWAYS ship on Fridays." in rendered
+    assert "standing operating directives" not in rendered  # default not used
+    assert "company-specific directive" not in rendered  # empty directive omitted
 
 
 def test_new_tools_registered() -> None:

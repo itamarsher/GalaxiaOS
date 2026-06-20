@@ -36,7 +36,12 @@ ROLE_DESCRIPTIONS: dict[AgentRole, str] = {
         "When a delegated task FAILS, you are woken to decide on it with `retry_task`: if the "
         "failure looks transient (a flaky provider/network blip), re-run it ('retry'); if it's a "
         "persistent problem that would just fail again, abandon it ('abandon'). You can re-run the "
-        "same task only a few times before it stays failed, so don't keep retrying a persistent failure."
+        "same task only a few times before it stays failed, so don't keep retrying a persistent failure. "
+        "You also own the company's directives. The operating playbook below is the global system "
+        "prompt every agent runs under; as you learn what works, keep it current with "
+        "`get_company_playbook` (read it first) and `update_company_playbook` (roll out an emerging "
+        "directive to the whole fleet at once). To retune a single agent's remit, use "
+        "`set_agent_directive`. Both take effect on the affected agents' next task."
     ),
     AgentRole.growth: "You are the Growth agent. You own customer acquisition and demand.",
     AgentRole.research: "You are the Research agent. You own market and competitive intelligence.",
@@ -79,9 +84,38 @@ ROLE_DESCRIPTIONS: dict[AgentRole, str] = {
     AgentRole.custom: "You are a specialist agent.",
 }
 
+# The default company operating playbook — the global system prompt every agent is
+# initialized with when the company hasn't customized its own (``Company.playbook``).
+# It encodes ABOS best practices as standing directives; the CEO edits the live copy
+# (``update_company_playbook``) as the company learns, and the founder can view/edit it
+# in the UI. Kept concise and complementary to the framing below — not a duplicate.
+DEFAULT_COMPANY_PLAYBOOK = """\
+These are the standing operating directives for this company. They encode how ABOS
+companies are expected to operate; the CEO keeps them current as the company learns.
+
+1. Reality over appearances. Act only through real tools. If a tool reports it is "not
+   supported", NOTHING happened — never record, assume, or report a result that did not
+   occur. Record only measured outcomes (record_metric / record_transaction).
+2. Spend the founder's money like your own. Stay within budget, reserve before you spend,
+   and prefer reusing and reallocating the team you already have before growing headcount.
+3. Build on what the company knows. Recall memory before acting, and write back the
+   decisions, experiments, and learnings worth keeping so the company compounds.
+4. Keep one source of truth. File deliverables, financial records, data-room documents,
+   and brand/messaging guidelines in the company file store and reuse them rather than
+   re-deriving them — so the company stays audit- and due-diligence-ready.
+5. Escalate honestly. Route risky or over-budget actions to the founder; when you lack a
+   capability, request it instead of faking a workaround.
+6. Stay on mission. Judge every initiative against the mission and objectives, and prefer
+   the smallest step that moves a real metric."""
+
+
 AGENT_LOOP_SYSTEM = """You operate inside an Autonomous Business Operating System.
 
 {role_desc}
+{directive}
+── Company operating playbook (standing directives for every agent) ──────────
+{playbook}
+──────────────────────────────────────────────────────────────────────────────
 
 You work toward the company mission within a strict budget enforced by the platform.
 You affect the world ONLY through tools. On each turn, either call one or more tools or
@@ -143,6 +177,61 @@ Current real-world metrics (act on these; do not assume outcomes):
 Company mission: {mission}
 Your current task: {goal}
 """
+
+
+def effective_playbook(raw: str | None) -> str:
+    """The company's live operating playbook, or the platform default when unset.
+
+    A company always has a playbook: a customized one (``Company.playbook``) takes
+    precedence; otherwise every agent gets :data:`DEFAULT_COMPANY_PLAYBOOK`. Shared
+    by the runtime (what agents actually receive) and the API (what the founder
+    sees), so the two never diverge.
+    """
+    text = (raw or "").strip()
+    return text or DEFAULT_COMPANY_PLAYBOOK
+
+
+def agent_directive_block(system_prompt: str | None) -> str:
+    """The per-agent directive block injected after the role description.
+
+    ``Agent.system_prompt`` is the agent's company-specific directive — what it owns,
+    set at generation and editable by the CEO (``set_agent_directive``). Rendered as
+    its own labelled block so the agent treats it as standing instruction; empty when
+    the agent has no custom directive.
+    """
+    directive = (system_prompt or "").strip()
+    if not directive:
+        return ""
+    return f"Your company-specific directive (set by the CEO — follow it):\n{directive}\n"
+
+
+def render_agent_system(
+    *,
+    role_desc: str,
+    agent_directive: str | None,
+    playbook: str | None,
+    mission: str,
+    goal: str,
+    memory: str,
+    metrics: str,
+) -> str:
+    """Compose an agent's full launch system prompt for one task.
+
+    Layers the role behaviour, the agent's own directive, and the company-wide
+    operating playbook on top of the standard ABOS framing — so editing the playbook
+    or a directive immediately changes what every (or one) agent is initialized with
+    on its next run.
+    """
+    return AGENT_LOOP_SYSTEM.format(
+        role_desc=role_desc,
+        directive=agent_directive_block(agent_directive),
+        playbook=effective_playbook(playbook),
+        mission=mission,
+        goal=goal,
+        memory=memory,
+        metrics=metrics,
+    )
+
 
 # Strict JSON instructions for the onboarding generation calls.
 MISSION_TO_PLAN_SYSTEM = """You are a startup strategist. Given a founder's mission, produce a

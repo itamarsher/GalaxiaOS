@@ -53,6 +53,19 @@ class CompanyUpdateRequest(BaseModel):
     email_from: str | None = Field(default=None, max_length=320)
 
 
+class PlaybookOut(BaseModel):
+    """The company's global operating playbook (the system prompt every agent gets)."""
+
+    playbook: str  # the effective text (custom if set, else the platform default)
+    customized: bool  # True once the founder/CEO has overridden the default
+    default: str  # the platform default, so the UI can offer "reset"
+
+
+class PlaybookUpdateRequest(BaseModel):
+    # The full new playbook. Empty string clears the override (reverts to default).
+    playbook: str = Field(max_length=8000)
+
+
 class KeyResultOut(ORMModel):
     id: uuid.UUID
     metric: str
@@ -79,6 +92,11 @@ class AgentOut(ORMModel):
     reports_to_agent_id: uuid.UUID | None
     backend_type: str
     source: str
+    # The agent's launch prompt, surfaced so the founder can see how each agent is
+    # directed: ``system_prompt`` is the agent's company-specific directive (editable
+    # by the CEO); ``role_description`` is the fixed behaviour for its role.
+    system_prompt: str = ""
+    role_description: str = ""
 
 
 class AgentEdgeOut(ORMModel):
