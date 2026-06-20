@@ -110,7 +110,11 @@ class LocalEmbedder(Embedder):
             try:
                 from fastembed import TextEmbedding
 
-                self._model = TextEmbedding(model_name=self._model_name)
+                kwargs = {}
+                cache_dir = (settings.local_embeddings_cache_dir or "").strip()
+                if cache_dir:
+                    kwargs["cache_dir"] = cache_dir
+                self._model = TextEmbedding(model_name=self._model_name, **kwargs)
             except Exception as exc:  # noqa: BLE001 — import/download/load all degrade the same way
                 self._unavailable = True
                 _log.warning(

@@ -131,6 +131,10 @@ class Settings(BaseSettings):
     embeddings_model: str = "text-embedding-3-small"  # openai model
     # Local fastembed model (small + CPU-friendly; 384-dim, zero-padded to 1536).
     local_embeddings_model: str = "BAAI/bge-small-en-v1.5"
+    # Where fastembed caches the model. Set (and pre-warmed) in the Docker image so
+    # the model is baked in at build time and never fetched over the network at
+    # runtime; empty uses fastembed's default cache (fine for local dev).
+    local_embeddings_cache_dir: str = ""
     embeddings_timeout_seconds: float = 10.0
     openai_api_key: str = ""  # platform key for the OpenAI embeddings endpoint
     # Recall blends similarity with recency so stale memories rank lower: a memory's
