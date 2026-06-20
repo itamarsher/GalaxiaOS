@@ -243,6 +243,8 @@ export const api = {
 
   memory: (companyId: string, q?: string) =>
     req<Memory[]>(`/companies/${companyId}/memory${q ? `?q=${encodeURIComponent(q)}` : ""}`),
+  deleteMemory: (companyId: string, entryId: string) =>
+    req<void>(`/companies/${companyId}/memory/${entryId}`, { method: "DELETE" }),
 
   digestLatest: (companyId: string) => req<Digest>(`/companies/${companyId}/digest/latest`),
   generateDigest: (companyId: string) =>

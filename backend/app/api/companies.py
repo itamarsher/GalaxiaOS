@@ -14,7 +14,6 @@ from app.models import (
     Company,
     DecisionRequest,
     Membership,
-    MemoryEntry,
     SiteDomain,
     Task,
 )
@@ -37,6 +36,7 @@ from app.schemas import (
     TaskOut,
     TaskTranscriptOut,
 )
+from app.services import memory as memory_svc
 from app.services import sites as sites_svc
 
 
@@ -257,14 +257,18 @@ async def get_task_transcript(company: CompanyDep, task_id: uuid.UUID, db: DbDep
 
 @router.get("/memory", response_model=list[MemoryOut])
 async def list_memory(company: CompanyDep, db: DbDep, q: str | None = None):
-    stmt = (
-        select(MemoryEntry)
-        .where(MemoryEntry.company_id == company.id)
-        .order_by(MemoryEntry.created_at.desc())
-    )
-    if q:
-        stmt = stmt.where(MemoryEntry.content.ilike(f"%{q}%"))
-    return (await db.scalars(stmt.limit(100))).all()
+    """The company's memory. With a query, ranks by similarity + recency — the same
+    recall the agents use — instead of a keyword match; without one, most recent."""
+    return await memory_svc.query(db, company_id=company.id, text=q, limit=100)
+
+
+@router.delete("/memory/{entry_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_memory(company: CompanyDep, entry_id: uuid.UUID, db: DbDep):
+    """Forget a memory entry (founder curation of the company brain)."""
+    removed = await memory_svc.delete(db, company_id=company.id, entry_id=entry_id)
+    if not removed:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Memory entry not found")
+    await db.commit()
 
 
 async def _set_agent_status(db, company_id, agent_id, new_status):

@@ -116,6 +116,25 @@ class Settings(BaseSettings):
     # Closed-loop runtime
     memory_recall_limit: int = 6  # prior learnings injected into an agent's context
     metrics_recall_limit: int = 8  # recent outcome signals injected into context
+
+    # Company Memory — embeddings + recall ranking.
+    # The embedder turns memory text into the vector used for similarity recall.
+    # "hashing" (default) is the dependency-free lexical embedder (no key, offline).
+    # "openai" is a real semantic model via the OpenAI embeddings REST API
+    # (credential-gated by ABOS_OPENAI_API_KEY); it always reduces to the 1536-dim
+    # pgvector column. Switching providers re-embeds new writes only — backfill
+    # existing rows if you change it on a populated DB.
+    embeddings_provider: str = "hashing"  # hashing | openai
+    embeddings_model: str = "text-embedding-3-small"
+    embeddings_timeout_seconds: float = 10.0
+    openai_api_key: str = ""  # platform key for the OpenAI embeddings endpoint
+    # Recall blends similarity with recency so stale memories rank lower: a memory's
+    # weight halves every ``half_life_days``. Candidates are pulled by pure
+    # similarity (a pool of ``recall_limit * multiplier``, capped) then re-ranked.
+    memory_recency_half_life_days: float = 30.0
+    memory_candidate_multiplier: int = 4
+    memory_candidate_cap: int = 60
+
     # Reputation-driven model selection: bump a struggling agent to a stronger
     # tier when its trust falls below the threshold.
     reputation_model_escalation: bool = True
