@@ -6,6 +6,13 @@ embedding. Two embedders sit behind the :class:`Embedder` Protocol:
 - :class:`HashingEmbedder` (default) — a dependency-free, deterministic
   feature-hashing embedder. It yields lexical (shared-token) cosine similarity,
   needs no API key, and works fully offline; good enough for MVP retrieval.
+- :class:`LocalEmbedder` — a real neural model run locally via ``fastembed``
+  (ONNX/CPU, ``ABOS_EMBEDDINGS_PROVIDER=local``). No per-call cost and no network
+  once the model is cached. ``fastembed`` is an optional dependency (the
+  ``local-embeddings`` extra); if it isn't installed or the model can't load, this
+  degrades to the hashing embedder so memory never breaks. Model output (e.g. a
+  384-dim bge-small vector) is zero-padded to the 1536-dim column, which preserves
+  cosine similarity.
 - :class:`OpenAIEmbedder` — a real semantic model via the OpenAI embeddings REST
   API (``ABOS_EMBEDDINGS_PROVIDER=openai`` + ``ABOS_OPENAI_API_KEY``). Called over
   ``httpx`` (not the ``openai`` SDK, which is fenced to ``app/providers``) and
@@ -20,6 +27,7 @@ why a backfill is needed when changing it on a populated database.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import logging
 import math
@@ -63,6 +71,72 @@ class HashingEmbedder(Embedder):
         if norm == 0:
             return None
         return [v / norm for v in vec]
+
+
+def _to_dim(vec, dim: int = DIM) -> list[float] | None:
+    """Coerce a model vector to exactly ``dim`` floats: zero-pad if shorter,
+    truncate if longer. Zero-padding is cosine-preserving (the extra dims are 0 in
+    both query and stored vectors), so a 384-dim model fits the 1536-dim column."""
+    try:
+        values = [float(x) for x in vec]
+    except (TypeError, ValueError):
+        return None
+    if not values:
+        return None
+    if len(values) >= dim:
+        return values[:dim]
+    return values + [0.0] * (dim - len(values))
+
+
+class LocalEmbedder(Embedder):
+    """Local neural embeddings via fastembed (ONNX/CPU) — no cost, offline once cached.
+
+    fastembed is an optional dependency and the model loads lazily on first use. If
+    it isn't installed or the model can't load/run, every call falls back to the
+    hashing embedder so Company Memory keeps working. The model's native dimension
+    is padded/truncated to the 1536-dim pgvector column by :func:`_to_dim`.
+    """
+
+    dim = DIM
+
+    def __init__(self, model_name: str | None = None) -> None:
+        self._model_name = model_name or settings.local_embeddings_model
+        self._model = None
+        self._unavailable = False
+        self._fallback = HashingEmbedder()
+
+    def _model_or_none(self):
+        if self._model is None and not self._unavailable:
+            try:
+                from fastembed import TextEmbedding
+
+                self._model = TextEmbedding(model_name=self._model_name)
+            except Exception as exc:  # noqa: BLE001 — import/download/load all degrade the same way
+                self._unavailable = True
+                _log.warning(
+                    "local embedder unavailable (%s); falling back to the hashing embedder. "
+                    "Install the 'local-embeddings' extra to enable it.",
+                    exc,
+                )
+        return self._model
+
+    def embed(self, text: str) -> list[float] | None:
+        text = (text or "").strip()
+        if not text:
+            return None
+        model = self._model_or_none()
+        if model is None:
+            return self._fallback.embed(text)
+        try:
+            vec = next(iter(model.embed([text])))
+        except Exception as exc:  # noqa: BLE001 — never let an embed failure break a write/recall
+            _log.warning("local embedding failed (%s); using hashing fallback", exc)
+            return self._fallback.embed(text)
+        return _to_dim(vec)
+
+    async def aembed(self, text: str) -> list[float] | None:
+        # fastembed inference is CPU-bound; run it off the event loop.
+        return await asyncio.to_thread(self.embed, text)
 
 
 class OpenAIEmbedder(Embedder):
@@ -129,6 +203,8 @@ def _build_embedder() -> Embedder:
     provider = (settings.embeddings_provider or "hashing").strip().lower()
     if provider in ("", "hashing", "simulated"):
         return HashingEmbedder()
+    if provider in ("local", "fastembed"):
+        return LocalEmbedder()
     if provider == "openai":
         return OpenAIEmbedder()
     raise ValueError(f"unknown embeddings provider: {provider!r}")

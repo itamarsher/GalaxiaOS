@@ -12,7 +12,14 @@ from types import SimpleNamespace
 import pytest
 
 from app.services import embeddings
-from app.services.embeddings import DIM, HashingEmbedder, OpenAIEmbedder
+from app.services.embeddings import (
+    DIM,
+    HashingEmbedder,
+    LocalEmbedder,
+    OpenAIEmbedder,
+    _build_embedder,
+    _to_dim,
+)
 from app.services.memory import _recency_weight, _rerank
 
 # ─────────────────────────── OpenAI embedder (pure parser) ───────────────────────────
@@ -122,3 +129,62 @@ def test_rerank_respects_limit():
     now = datetime.now(timezone.utc)
     scored = [(_entry(i), 0.1 * i) for i in range(1, 6)]
     assert len(_rerank(scored, now=now, half_life_days=30, limit=3)) == 3
+
+
+# ─────────────────────────── local (fastembed) embedder ───────────────────────────
+
+
+def test_to_dim_pads_short_vectors():
+    out = _to_dim([0.5, 0.25], dim=4)
+    assert out == [0.5, 0.25, 0.0, 0.0]
+
+
+def test_to_dim_truncates_long_vectors():
+    assert _to_dim([1, 2, 3, 4, 5], dim=3) == [1.0, 2.0, 3.0]
+
+
+def test_to_dim_rejects_empty_or_bad():
+    assert _to_dim([]) is None
+    assert _to_dim([object()]) is None
+
+
+def test_local_embedder_falls_back_to_hashing_when_unavailable():
+    emb = LocalEmbedder()
+    emb._unavailable = True  # simulate fastembed missing / model load failure
+    vec = emb.embed("grow the sales pipeline")
+    assert vec is not None and len(vec) == DIM  # hashing fallback, padded to the column
+
+
+def test_local_embedder_uses_model_and_pads(monkeypatch):
+    class _StubModel:
+        def embed(self, texts):
+            yield [0.5] * 384  # a 384-dim model vector
+
+    emb = LocalEmbedder()
+    monkeypatch.setattr(emb, "_model_or_none", lambda: _StubModel())
+    vec = emb.embed("hello")
+    assert len(vec) == DIM
+    assert vec[0] == 0.5 and vec[383] == 0.5 and vec[384] == 0.0  # padded past 384
+
+
+def test_local_embedder_empty_text_is_none():
+    assert LocalEmbedder().embed("") is None
+
+
+@pytest.mark.asyncio
+async def test_local_embedder_aembed_offloads(monkeypatch):
+    emb = LocalEmbedder()
+    monkeypatch.setattr(emb, "_model_or_none", lambda: None)  # -> hashing fallback
+    vec = await emb.aembed("customer acquisition cost")
+    assert vec is not None and len(vec) == DIM
+
+
+def test_build_embedder_dispatches_to_local(monkeypatch):
+    monkeypatch.setattr(embeddings.settings, "embeddings_provider", "local")
+    assert isinstance(_build_embedder(), LocalEmbedder)
+
+
+def test_build_embedder_default_is_local(monkeypatch):
+    # The shipped default selects the local neural embedder.
+    monkeypatch.setattr(embeddings.settings, "embeddings_provider", "local")
+    assert isinstance(_build_embedder(), LocalEmbedder)

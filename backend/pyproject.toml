@@ -24,6 +24,11 @@ dependencies = [
     "python-multipart>=0.0.18",
     # Cloudflare Pages Direct Upload asset hashing (landing-page publishing).
     "blake3>=0.4",
+    # Local neural embeddings for Company Memory (the default embeddings provider).
+    # fastembed is ONNX/CPU (no PyTorch) and runs fully offline once the model is
+    # cached — no per-call cost or network. If it can't load (e.g. a memory-limited
+    # host), the embedder degrades to the dependency-free hashing fallback.
+    "fastembed>=0.4",
 ]
 
 [project.optional-dependencies]

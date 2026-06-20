@@ -119,13 +119,18 @@ class Settings(BaseSettings):
 
     # Company Memory — embeddings + recall ranking.
     # The embedder turns memory text into the vector used for similarity recall.
-    # "hashing" (default) is the dependency-free lexical embedder (no key, offline).
+    # "local" (default) is a real neural model run in-process via fastembed
+    # (ONNX/CPU) — no per-call cost and no network once the model is cached; it
+    # degrades to the hashing embedder if fastembed/the model can't load.
+    # "hashing" is the dependency-free lexical embedder (no model, fully offline).
     # "openai" is a real semantic model via the OpenAI embeddings REST API
-    # (credential-gated by ABOS_OPENAI_API_KEY); it always reduces to the 1536-dim
-    # pgvector column. Switching providers re-embeds new writes only — backfill
-    # existing rows if you change it on a populated DB.
-    embeddings_provider: str = "hashing"  # hashing | openai
-    embeddings_model: str = "text-embedding-3-small"
+    # (credential-gated by ABOS_OPENAI_API_KEY). All reduce to the 1536-dim pgvector
+    # column. Switching providers re-embeds new writes only — backfill existing rows
+    # if you change it on a populated DB.
+    embeddings_provider: str = "local"  # local | hashing | openai
+    embeddings_model: str = "text-embedding-3-small"  # openai model
+    # Local fastembed model (small + CPU-friendly; 384-dim, zero-padded to 1536).
+    local_embeddings_model: str = "BAAI/bge-small-en-v1.5"
     embeddings_timeout_seconds: float = 10.0
     openai_api_key: str = ""  # platform key for the OpenAI embeddings endpoint
     # Recall blends similarity with recency so stale memories rank lower: a memory's
