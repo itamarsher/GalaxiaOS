@@ -11,8 +11,8 @@ Additive and idempotent like the other migrations: the 0001 baseline's
 enabled to match every other tenant table (same policy shape as
 ``0002_row_level_security``).
 
-Revision ID: 0009_external_messages
-Revises: 0008_company_email_from
+Revision ID: 0011_external_messages
+Revises: 0010_company_playbook
 Create Date: 2026-06-21
 """
 
@@ -23,8 +23,8 @@ from alembic import op
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 
-revision = "0009_external_messages"
-down_revision = "0008_company_email_from"
+revision = "0011_external_messages"
+down_revision = "0010_company_playbook"
 branch_labels = None
 depends_on = None
 
