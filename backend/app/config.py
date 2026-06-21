@@ -116,6 +116,34 @@ class Settings(BaseSettings):
     # Closed-loop runtime
     memory_recall_limit: int = 6  # prior learnings injected into an agent's context
     metrics_recall_limit: int = 8  # recent outcome signals injected into context
+
+    # Company Memory — embeddings + recall ranking.
+    # The embedder turns memory text into the vector used for similarity recall.
+    # "local" (default) is a real neural model run in-process via fastembed
+    # (ONNX/CPU) — no per-call cost and no network once the model is cached; it
+    # degrades to the hashing embedder if fastembed/the model can't load.
+    # "hashing" is the dependency-free lexical embedder (no model, fully offline).
+    # "openai" is a real semantic model via the OpenAI embeddings REST API
+    # (credential-gated by ABOS_OPENAI_API_KEY). All reduce to the 1536-dim pgvector
+    # column. Switching providers re-embeds new writes only — backfill existing rows
+    # if you change it on a populated DB.
+    embeddings_provider: str = "local"  # local | hashing | openai
+    embeddings_model: str = "text-embedding-3-small"  # openai model
+    # Local fastembed model (small + CPU-friendly; 384-dim, zero-padded to 1536).
+    local_embeddings_model: str = "BAAI/bge-small-en-v1.5"
+    # Where fastembed caches the model. Set (and pre-warmed) in the Docker image so
+    # the model is baked in at build time and never fetched over the network at
+    # runtime; empty uses fastembed's default cache (fine for local dev).
+    local_embeddings_cache_dir: str = ""
+    embeddings_timeout_seconds: float = 10.0
+    openai_api_key: str = ""  # platform key for the OpenAI embeddings endpoint
+    # Recall blends similarity with recency so stale memories rank lower: a memory's
+    # weight halves every ``half_life_days``. Candidates are pulled by pure
+    # similarity (a pool of ``recall_limit * multiplier``, capped) then re-ranked.
+    memory_recency_half_life_days: float = 30.0
+    memory_candidate_multiplier: int = 4
+    memory_candidate_cap: int = 60
+
     # Reputation-driven model selection: bump a struggling agent to a stronger
     # tier when its trust falls below the threshold.
     reputation_model_escalation: bool = True
@@ -183,6 +211,13 @@ class Settings(BaseSettings):
     # Resend (only used when email_provider == "resend"): a developer-first email
     # API with a generous free tier (3,000/mo, 100/day) and custom-domain support.
     resend_api_key: str = ""
+
+    # File store seam (the company's external file provider — Google Drive today).
+    # Credentials are per-company, bring-your-own (connected in Settings), never a
+    # global env var; with none saved the file capability resolves to None and the
+    # tools report it's unsupported (never faked). This only names the top-level
+    # folder created in the founder's Drive: ``.abos/<company>/<category>/…``.
+    gdrive_root_folder: str = ".abos"
 
     # Issue-tracker seam (the Platform agent files bug/feature issues here);
     # "simulated" is offline and deterministic.

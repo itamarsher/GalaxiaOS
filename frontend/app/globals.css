@@ -346,6 +346,14 @@ a.actrow:hover .goal { color: var(--accent-strong); }
 .btnrow { display: flex; flex-wrap: wrap; gap: 8px; }
 .btnrow button { margin-right: 0; }
 
+/* Read-only display of an agent/company prompt: monospace, wrapped, scrollable. */
+.prompt {
+  white-space: pre-wrap; word-break: break-word;
+  font-family: ui-monospace, monospace; font-size: 13px; line-height: 1.5;
+  background: #0c111c; border: 1px solid var(--border); border-radius: var(--radius-sm);
+  padding: 12px; margin: 6px 0 0; max-height: 320px; overflow: auto; color: var(--text);
+}
+
 /* ── Phone tuning ── */
 @media (max-width: 600px) {
   .wrap { padding: 24px 16px 64px; }

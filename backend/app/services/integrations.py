@@ -18,10 +18,13 @@ import uuid
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.integrations.dns import DnsProvider
+from app.integrations.files import FileProvider
 from app.integrations.sitehost import SiteHost
 from app.services import apikeys
 
 _CLOUDFLARE = "cloudflare"
+#: BYO key slot under which a company's Google Drive OAuth bundle is stored.
+_GOOGLE_DRIVE = "google_drive"
 
 
 async def set_cloudflare(
@@ -95,3 +98,110 @@ async def resolve_dns_provider(
     from app.integrations.cloudflare import CloudflareDns
 
     return CloudflareDns(token=creds[0], account_id=creds[1])
+
+
+# ─────────────────────────── Google Drive (files) ───────────────────────────
+
+
+async def set_google_drive(
+    db: AsyncSession,
+    *,
+    company_id: uuid.UUID,
+    client_id: str,
+    client_secret: str,
+    refresh_token: str,
+    root_folder_id: str | None = None,
+) -> None:
+    """Store the company's Google OAuth bundle (whole JSON envelope-encrypted)."""
+    payload = json.dumps(
+        {
+            "client_id": client_id,
+            "client_secret": client_secret,
+            "refresh_token": refresh_token,
+            "root_folder_id": root_folder_id or "root",
+        }
+    )
+    await apikeys.store_key(db, company_id=company_id, provider=_GOOGLE_DRIVE, plaintext=payload)
+
+
+async def get_google_drive(db: AsyncSession, *, company_id: uuid.UUID) -> dict | None:
+    """Return the company's stored Google Drive OAuth bundle, or ``None`` if unset."""
+    raw = await apikeys.get_plaintext_key(db, company_id=company_id, provider=_GOOGLE_DRIVE)
+    if not raw:
+        return None
+    try:
+        data = json.loads(raw)
+        # Require the three secrets; anything else (root_folder_id) is optional.
+        for field in ("client_id", "client_secret", "refresh_token"):
+            if not data.get(field):
+                return None
+        return data
+    except ValueError:
+        return None
+
+
+async def google_drive_status(db: AsyncSession, *, company_id: uuid.UUID) -> dict:
+    """UI-safe status: whether Drive is configured (never returns the secrets)."""
+    creds = await get_google_drive(db, company_id=company_id)
+    if creds is None:
+        return {"configured": False, "root_folder_id": None}
+    return {"configured": True, "root_folder_id": creds.get("root_folder_id") or "root"}
+
+
+async def clear_google_drive(db: AsyncSession, *, company_id: uuid.UUID) -> bool:
+    """Revoke the company's stored Google Drive credentials, if any."""
+    from sqlalchemy import select
+
+    from app.models import ApiKey
+    from app.models.enums import ApiKeyStatus
+
+    row = await db.scalar(
+        select(ApiKey).where(
+            ApiKey.company_id == company_id,
+            ApiKey.provider == _GOOGLE_DRIVE,
+            ApiKey.status == ApiKeyStatus.active,
+        )
+    )
+    if row is None:
+        return False
+    return await apikeys.revoke_key(db, company_id=company_id, key_id=row.id)
+
+
+async def verify_google_drive(
+    *, client_id: str, client_secret: str, refresh_token: str, root_folder_id: str = "root"
+) -> None:
+    """Prove an OAuth bundle works before it's saved (refresh token + reach root).
+
+    Raises :class:`~app.integrations.files.FileProviderError` if Google rejects the
+    credentials. ``ensure_folder([])`` is the cheapest valid call: it forces a token
+    refresh and returns the store root without creating anything.
+    """
+    from app.integrations.gdrive import GoogleDriveFileProvider
+
+    provider = GoogleDriveFileProvider(
+        client_id=client_id,
+        client_secret=client_secret,
+        refresh_token=refresh_token,
+        root_folder_id=root_folder_id or "root",
+    )
+    await provider.ensure_folder([])
+
+
+async def resolve_file_provider(db: AsyncSession, *, company_id: uuid.UUID) -> FileProvider | None:
+    """The company's file store — enabled only when it has connected Google Drive.
+
+    Bring-your-own, like the site host: with no saved OAuth bundle this returns
+    ``None`` so the file tools report the capability is unsupported rather than
+    pretending a document was filed.
+    """
+    creds = await get_google_drive(db, company_id=company_id)
+    if creds is None:
+        return None
+    from app.integrations.gdrive import GoogleDriveFileProvider
+
+    return GoogleDriveFileProvider(
+        client_id=creds["client_id"],
+        client_secret=creds["client_secret"],
+        refresh_token=creds["refresh_token"],
+        root_folder_id=creds.get("root_folder_id") or "root",
+    )

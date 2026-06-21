@@ -20,7 +20,7 @@ from sqlalchemy import select
 
 from app.config import settings
 from app.db import set_tenant
-from app.models import Agent, DecisionRequest, Mission, Task
+from app.models import Agent, Company, DecisionRequest, Mission, Task
 from app.models.enums import (
     AgentRole,
     DecisionKind,
@@ -31,7 +31,7 @@ from app.models.enums import (
 )
 from app.providers.base import LLMProvider, Message, TextBlock, ToolResultBlock, ToolUseBlock
 from app.runtime.context import RuntimeContext
-from app.runtime.prompts import AGENT_LOOP_SYSTEM, ROLE_DESCRIPTIONS
+from app.runtime.prompts import ROLE_DESCRIPTIONS, render_agent_system
 from app.runtime.tools import TOOL_SPECS, execute_tool
 from app.runtime.tools.base import consume_approval_grant as _consume_approval_grant
 from app.runtime.transcript import dump_messages, load_messages
@@ -98,6 +98,12 @@ class NativeBackend:
                 select(Mission).where(Mission.company_id == task.company_id).limit(1)
             )
             mission_text = mission.generated_summary or mission.raw_text if mission else ""
+            # The company's global operating playbook (best practices + emerging
+            # directives) is injected into every agent's launch prompt, so editing it
+            # updates the whole fleet on their next run.
+            company_playbook = await db.scalar(
+                select(Company.playbook).where(Company.id == task.company_id)
+            )
             resolved = await apikeys.resolve_provider(db, company_id=task.company_id)
 
             # Perceive: recall relevant institutional memory and recent real-world
@@ -123,8 +129,10 @@ class NativeBackend:
             return await self._finish(ctx, task, TaskStatus.failed, {"error": "no API key"})
         provider, api_key = resolved
 
-        system = AGENT_LOOP_SYSTEM.format(
+        system = render_agent_system(
             role_desc=ROLE_DESCRIPTIONS.get(agent.role, ""),
+            agent_directive=agent.system_prompt,
+            playbook=company_playbook,
             mission=mission_text,
             goal=task.goal,
             memory=memory_summary,

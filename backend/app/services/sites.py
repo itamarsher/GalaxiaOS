@@ -151,6 +151,23 @@ async def publish_site(
     site.status = SiteStatus.published
     site.last_error = None
     await db.flush()
+
+    # Best-effort: keep a copy of the published page in the company's Artifacts
+    # folder so every deliverable lands in the external store. Never fails the
+    # publish — no-ops silently when no file provider is connected.
+    from app.models.enums import FileCategory
+    from app.services import files as files_svc
+
+    await files_svc.safe_archive(
+        db,
+        company_id=company_id,
+        category=FileCategory.artifact,
+        name=f"{site.slug}.html",
+        content=site.html or "",
+        mime_type="text/html",
+        description=f"Published landing page: {title}"
+        + (f" ({site.deployment_url})" if site.deployment_url else ""),
+    )
     return site
 
 

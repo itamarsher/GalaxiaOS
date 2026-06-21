@@ -1,9 +1,10 @@
-"""CEO org-management tools: hire, pause/resume, and reallocate team budget.
+"""CEO org-management tools: team, budget, and operating directives.
 
-These let the CEO agent shape its own team within the founder's monthly budget.
-The company budget is a hard ceiling; each agent's ``monthly_budget_cents`` is a
-soft cap reserving a slice of it. The *unallocated pool* — the headroom not yet
-earmarked by an active agent — is what the CEO can hand to a new hire (see
+These let the CEO agent shape its own team within the founder's monthly budget and
+keep the whole fleet aligned to emerging directives. The company budget is a hard
+ceiling; each agent's ``monthly_budget_cents`` is a soft cap reserving a slice of
+it. The *unallocated pool* — the headroom not yet earmarked by an active agent — is
+what the CEO can hand to a new hire (see
 :func:`app.services.budget.allocation_overview`).
 
 - ``hire_agent`` adds a native functional agent reporting to the CEO, drawing
@@ -13,16 +14,21 @@ earmarked by an active agent — is what the CEO can hand to a new hire (see
 - ``resume_agent`` re-activates one, re-claiming its allocation from the pool.
 - ``set_agent_budget`` reallocates an existing agent's monthly cap.
 - ``list_team`` shows the roster and the live budget picture.
+- ``get_company_playbook`` / ``update_company_playbook`` read and edit the global
+  operating playbook injected into every agent's launch prompt — the CEO's lever
+  for rolling out emerging directives to the whole fleet at once.
+- ``set_agent_directive`` updates one agent's company-specific directive (its
+  ``system_prompt``), so the CEO can retune an individual agent as needed.
 
-All five are CEO-only (guarded at the top of each handler), matching the
-"CEO only" convention used by ``submit_plan``.
+All are CEO-only (guarded at the top of each handler), matching the "CEO only"
+convention used by ``submit_plan``.
 """
 
 from __future__ import annotations
 
 from sqlalchemy import select
 
-from app.models import Agent, AgentEdge, DecisionRequest, Task
+from app.models import Agent, AgentEdge, Company, DecisionRequest, Task
 from app.models.enums import (
     AgentBackendType,
     AgentRole,
@@ -35,8 +41,14 @@ from app.models.enums import (
     TaskStatus,
 )
 from app.providers.base import ToolSpec
+from app.runtime.prompts import effective_playbook
 from app.runtime.tools.base import ToolOutcome, consume_approval_grant
 from app.services import budget as budget_svc
+
+#: Cap on the global playbook so a runaway edit can't bloat every agent's prompt.
+_MAX_PLAYBOOK_CHARS = 8000
+#: Cap on a single agent's directive.
+_MAX_DIRECTIVE_CHARS = 4000
 
 # Roles the CEO may hire into (the CEO can't hire another CEO).
 _HIREABLE_ROLES = [r.value for r in AgentRole if r is not AgentRole.ceo]
@@ -134,6 +146,57 @@ SPECS: list[ToolSpec] = [
                 },
             },
             "required": ["monthly_budget_cents"],
+        },
+    ),
+    ToolSpec(
+        name="get_company_playbook",
+        description=(
+            "CEO only. Read the company's current operating playbook — the global "
+            "system prompt every agent is initialized with. Call this before editing "
+            "it so you amend the live directives rather than overwriting from memory."
+        ),
+        input_schema={"type": "object", "properties": {}},
+    ),
+    ToolSpec(
+        name="update_company_playbook",
+        description=(
+            "CEO only. Replace the company's operating playbook — the global system "
+            "prompt injected into EVERY agent's launch prompt. Use this to roll out an "
+            "emerging directive to the whole fleet (it takes effect on each agent's next "
+            "task). Pass the FULL new playbook text (read it first with "
+            "get_company_playbook and edit), not just the delta."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "playbook": {
+                    "type": "string",
+                    "description": "The complete new operating playbook (Markdown/plain text).",
+                },
+            },
+            "required": ["playbook"],
+        },
+    ),
+    ToolSpec(
+        name="set_agent_directive",
+        description=(
+            "CEO only. Set one agent's company-specific directive — the part of its "
+            "launch prompt describing what it owns and how it should operate (by name, "
+            "or by role if unambiguous). Use this to retune a single agent as its remit "
+            "changes; it takes effect on that agent's next task. For directives that "
+            "apply to everyone, edit the playbook instead."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "The agent's name."},
+                "role": {"type": "string", "description": "The agent's role (if name omitted)."},
+                "directive": {
+                    "type": "string",
+                    "description": "The agent's new directive (what it owns and how it operates).",
+                },
+            },
+            "required": ["directive"],
         },
     ),
 ]
@@ -437,10 +500,77 @@ async def _set_agent_budget(db, ctx, *, agent: Agent, task: Task, args: dict) ->
     )
 
 
+async def _get_company_playbook(db, ctx, *, agent: Agent, task: Task, args: dict) -> ToolOutcome:
+    if (refusal := _require_ceo(agent)) is not None:
+        return refusal
+    company = await db.get(Company, task.company_id)
+    raw = company.playbook if company else None
+    text = effective_playbook(raw)
+    origin = "customized" if (raw or "").strip() else "platform default (not yet customized)"
+    return ToolOutcome(observation=f"Company operating playbook ({origin}):\n\n{text}")
+
+
+async def _update_company_playbook(db, ctx, *, agent: Agent, task: Task, args: dict) -> ToolOutcome:
+    if (refusal := _require_ceo(agent)) is not None:
+        return refusal
+    playbook = str(args.get("playbook") or "").strip()
+    if not playbook:
+        return ToolOutcome(
+            observation="The playbook can't be empty. Pass the full new directives text.",
+            is_error=True,
+        )
+    if len(playbook) > _MAX_PLAYBOOK_CHARS:
+        return ToolOutcome(
+            observation=(
+                f"That playbook is too long ({len(playbook)} chars; max {_MAX_PLAYBOOK_CHARS}). "
+                "Keep it to the directives that matter — it's prepended to every agent's prompt."
+            ),
+            is_error=True,
+        )
+    company = await db.get(Company, task.company_id)
+    if company is None:
+        return ToolOutcome(observation="Company not found.", is_error=True)
+    company.playbook = playbook
+    await db.flush()
+    return ToolOutcome(
+        observation=(
+            "Updated the company operating playbook. Every agent picks up the new "
+            "directives on its next task."
+        )
+    )
+
+
+async def _set_agent_directive(db, ctx, *, agent: Agent, task: Task, args: dict) -> ToolOutcome:
+    if (refusal := _require_ceo(agent)) is not None:
+        return refusal
+    directive = str(args.get("directive") or "").strip()
+    if not directive:
+        return ToolOutcome(
+            observation="A directive can't be empty. Describe what the agent owns.",
+            is_error=True,
+        )
+    if len(directive) > _MAX_DIRECTIVE_CHARS:
+        return ToolOutcome(
+            observation=f"That directive is too long (max {_MAX_DIRECTIVE_CHARS} chars).",
+            is_error=True,
+        )
+    target, error = await _resolve_target(db, company_id=task.company_id, args=args)
+    if error is not None:
+        return ToolOutcome(observation=error, is_error=True)
+    target.system_prompt = directive
+    await db.flush()
+    return ToolOutcome(
+        observation=f"Updated {target.name}'s directive. It applies on {target.name}'s next task."
+    )
+
+
 HANDLERS = {
     "list_team": _list_team,
     "hire_agent": _hire_agent,
     "pause_agent": _pause_agent,
     "resume_agent": _resume_agent,
     "set_agent_budget": _set_agent_budget,
+    "get_company_playbook": _get_company_playbook,
+    "update_company_playbook": _update_company_playbook,
+    "set_agent_directive": _set_agent_directive,
 }

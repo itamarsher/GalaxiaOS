@@ -21,6 +21,20 @@ TEST_DB_URL = os.getenv("ABOS_TEST_DATABASE_URL")
 requires_db = pytest.mark.skipif(TEST_DB_URL is None, reason="ABOS_TEST_DATABASE_URL not set")
 
 
+@pytest.fixture(autouse=True)
+def _offline_embedder(monkeypatch):
+    """Keep Company Memory offline in tests.
+
+    The default embeddings provider is ``local`` (a real fastembed model). Pin the
+    embedder to the dependency-free hashing one for the suite so no test downloads
+    or runs a neural model. Tests that exercise a specific embedder override this
+    with their own monkeypatch (applied after this autouse fixture).
+    """
+    from app.services import embeddings
+
+    monkeypatch.setattr(embeddings, "_embedder", embeddings.HashingEmbedder())
+
+
 # Every table except the pgvector-backed one, so the suite runs on a plain
 # Postgres without the `vector` extension installed (CI uses pgvector/pgvector).
 _TABLES = [t for name, t in Base.metadata.tables.items() if name != "memory_entries"]

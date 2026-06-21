@@ -58,11 +58,17 @@ export default function SettingsPage() {
       ))}
 
       <CloudflareCard companyId={id} />
+      <GoogleDriveCard companyId={id} />
 
       {/* Any other stored keys (e.g. a provider added directly via the API).
-          "cloudflare" is managed by its own card above, so hide it here. */}
+          "cloudflare" and "google_drive" are managed by their own cards above. */}
       {list
-        .filter((k) => !SLOTS.some((s) => s.provider === k.provider) && k.provider !== "cloudflare")
+        .filter(
+          (k) =>
+            !SLOTS.some((s) => s.provider === k.provider) &&
+            k.provider !== "cloudflare" &&
+            k.provider !== "google_drive",
+        )
         .map((k) => (
           <OtherKey key={k.id} companyId={id} apiKey={k} onChange={() => keys.reload()} />
         ))}
@@ -134,6 +140,94 @@ function CloudflareCard({ companyId }: { companyId: string }) {
           {configured ? "Update" : "Save"}
         </button>
         {configured && <button className="ghost danger" disabled={busy} onClick={remove}>Remove</button>}
+      </div>
+      {err && <div className="err">{err}</div>}
+    </div>
+  );
+}
+
+// Google Drive is the company's file store: agents file deliverables, financial
+// records, data-room docs, brand guidelines and received files into the founder's
+// own Drive under .abos/<company>/…. Bring-your-own OAuth: paste the client id,
+// secret and a refresh token (the whole bundle is encrypted at rest).
+function GoogleDriveCard({ companyId }: { companyId: string }) {
+  const status = usePoll(() => api.googleDriveStatus(companyId), 0, [companyId]);
+  const configured = status.data?.configured ?? false;
+  const [clientId, setClientId] = useState("");
+  const [clientSecret, setClientSecret] = useState("");
+  const [refreshToken, setRefreshToken] = useState("");
+  const [root, setRoot] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const save = async () => {
+    if (clientId.trim().length < 8 || clientSecret.trim().length < 8 || refreshToken.trim().length < 8) {
+      setErr("Enter the OAuth client id, client secret and a refresh token."); return;
+    }
+    setBusy(true); setErr(null);
+    try {
+      await api.setGoogleDrive(companyId, {
+        client_id: clientId.trim(),
+        client_secret: clientSecret.trim(),
+        refresh_token: refreshToken.trim(),
+        root_folder_id: root.trim() || undefined,
+      });
+      setClientId(""); setClientSecret(""); setRefreshToken(""); setRoot("");
+      status.reload();
+    } catch (e) {
+      setErr(String(e instanceof Error ? e.message : e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const remove = async () => {
+    if (!window.confirm("Disconnect Google Drive? Agents will stop filing documents to your Drive.")) return;
+    setBusy(true); setErr(null);
+    try { await api.clearGoogleDrive(companyId); status.reload(); }
+    catch (e) { setErr(String(e instanceof Error ? e.message : e)); }
+    finally { setBusy(false); }
+  };
+
+  return (
+    <div className="card">
+      <div className="step" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <span>Google Drive (file store)</span>
+        {configured ? <span className="status active">Connected</span> : <span className="status pending">Not set</span>}
+      </div>
+      <p className="muted" style={{ fontSize: 13, margin: "6px 0 0" }}>
+        Your agents file every deliverable, financial record, data-room document, brand
+        guideline and received file into your own Drive under <code>.abos/&lt;company&gt;/…</code> —
+        ready for audits and due diligence. Create an OAuth client (Drive scope) in Google
+        Cloud, authorize it, and paste the client id, secret and refresh token. The bundle is
+        encrypted at rest and verified before saving.
+      </p>
+
+      {configured && status.data?.root_folder_id && (
+        <div className="kv" style={{ marginTop: 10 }}>
+          <span>Root folder</span>
+          <span><code>{status.data.root_folder_id}</code></span>
+        </div>
+      )}
+
+      <label>{configured ? "Replace OAuth client id" : "OAuth client id"}</label>
+      <input type="text" value={clientId} placeholder="…apps.googleusercontent.com"
+        onChange={(e) => setClientId(e.target.value)} />
+      <label>OAuth client secret</label>
+      <input type="password" value={clientSecret} placeholder="GOCSPX-…"
+        onChange={(e) => setClientSecret(e.target.value)} />
+      <label>Refresh token</label>
+      <input type="password" value={refreshToken} placeholder="1//0g…"
+        onChange={(e) => setRefreshToken(e.target.value)} />
+      <label>Root folder id (optional — defaults to your Drive root)</label>
+      <input type="text" value={root} placeholder="root"
+        onChange={(e) => setRoot(e.target.value)}
+        onKeyDown={(e) => e.key === "Enter" && save()} />
+      <div className="btnrow">
+        <button disabled={busy || !clientId.trim() || !clientSecret.trim() || !refreshToken.trim()} onClick={save}>
+          {configured ? "Update" : "Connect"}
+        </button>
+        {configured && <button className="ghost danger" disabled={busy} onClick={remove}>Disconnect</button>}
       </div>
       {err && <div className="err">{err}</div>}
     </div>

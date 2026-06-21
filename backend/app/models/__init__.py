@@ -14,6 +14,7 @@ from app.models.budget import (
 from app.models.comms import ExternalMessage
 from app.models.company import Company
 from app.models.crm import CrmActivity, CrmContact, CrmDeal
+from app.models.file import CompanyFile
 from app.models.founder import FounderDigest
 from app.models.governance import (
     CircuitBreaker,
@@ -37,6 +38,7 @@ __all__ = [
     "CrmContact",
     "CrmDeal",
     "CrmActivity",
+    "CompanyFile",
     "Mission",
     "Objective",
     "KeyResult",

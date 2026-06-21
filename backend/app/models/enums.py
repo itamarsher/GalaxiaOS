@@ -241,3 +241,21 @@ class CrmActivityKind(str, enum.Enum):
     meeting = "meeting"
     task = "task"
     followup = "followup"
+
+
+class FileCategory(str, enum.Enum):
+    """Where a stored file lives in the company's external file store (Drive).
+
+    Each value maps to a top-level folder under ``.abos/<company>/`` (see
+    :data:`app.services.files.CATEGORY_FOLDERS`). The taxonomy is chosen so the
+    store can satisfy a financial audit, a due-diligence data room, and shared
+    brand/knowledge — the goals the file provider exists to serve.
+    """
+
+    artifact = "artifact"  # agent-produced deliverables (copy, docs, designs, plans)
+    financial = "financial"  # invoices, statements, transactions — audit trail
+    data_room = "data_room"  # due-diligence-ready documents
+    brand = "brand"  # shared messaging + design guidelines
+    inbox = "inbox"  # noteworthy files received via external channels
+    communications = "communications"  # outbound comms log (e.g. emails sent)
+    knowledge = "knowledge"  # other knowledge to retain in external storage

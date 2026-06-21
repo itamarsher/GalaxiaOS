@@ -53,6 +53,19 @@ class CompanyUpdateRequest(BaseModel):
     email_from: str | None = Field(default=None, max_length=320)
 
 
+class PlaybookOut(BaseModel):
+    """The company's global operating playbook (the system prompt every agent gets)."""
+
+    playbook: str  # the effective text (custom if set, else the platform default)
+    customized: bool  # True once the founder/CEO has overridden the default
+    default: str  # the platform default, so the UI can offer "reset"
+
+
+class PlaybookUpdateRequest(BaseModel):
+    # The full new playbook. Empty string clears the override (reverts to default).
+    playbook: str = Field(max_length=8000)
+
+
 class KeyResultOut(ORMModel):
     id: uuid.UUID
     metric: str
@@ -79,6 +92,11 @@ class AgentOut(ORMModel):
     reports_to_agent_id: uuid.UUID | None
     backend_type: str
     source: str
+    # The agent's launch prompt, surfaced so the founder can see how each agent is
+    # directed: ``system_prompt`` is the agent's company-specific directive (editable
+    # by the CEO); ``role_description`` is the fixed behaviour for its role.
+    system_prompt: str = ""
+    role_description: str = ""
 
 
 class AgentEdgeOut(ORMModel):
@@ -175,6 +193,38 @@ class CloudflareCredsRequest(BaseModel):
 class CloudflareStatusOut(BaseModel):
     configured: bool
     account_id: str | None = None
+
+
+# ── Integrations (Google Drive file store) ───────────────────────────────────
+class GoogleDriveCredsRequest(BaseModel):
+    """The OAuth bundle a founder pastes to connect their personal Drive.
+
+    All three are required; ``root_folder_id`` is optional and defaults to the
+    Drive root ("root"). The whole bundle is stored envelope-encrypted and never
+    returned.
+    """
+
+    client_id: str = Field(min_length=8)
+    client_secret: str = Field(min_length=8)
+    refresh_token: str = Field(min_length=8)
+    root_folder_id: str | None = None
+
+
+class GoogleDriveStatusOut(BaseModel):
+    configured: bool
+    root_folder_id: str | None = None
+
+
+class CompanyFileOut(ORMModel):
+    id: uuid.UUID
+    category: str
+    name: str
+    description: str | None = None
+    mime_type: str
+    folder_path: str
+    web_url: str | None = None
+    size_bytes: int | None = None
+    created_at: datetime
 
 
 # ── Budget ───────────────────────────────────────────────────────────────────

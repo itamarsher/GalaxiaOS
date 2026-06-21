@@ -14,6 +14,7 @@ const TABS = [
   ["communications", "Comms"],
   ["decisions", "Decisions"],
   ["memory", "Memory"],
+  ["files", "Files"],
   ["marketplace", "Marketplace"],
   ["copilot", "Copilot"],
   ["settings", "Settings"],
