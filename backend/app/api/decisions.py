@@ -22,6 +22,7 @@ from app.schemas import (
 )
 from app.services import budget as budget_svc
 from app.services import copilot, memory
+from app.services import external_messages as ext
 
 # Listing is company-scoped; resolve actions are by decision id (re-checked against membership).
 router = APIRouter(tags=["decisions"])
@@ -296,6 +297,9 @@ async def reject(
     decision.resolved_at = datetime.now(UTC)
     await _apply_note(db, decision, body.note if body else None)
     await _apply_discussion(db, decision, resolution="rejected")
+    # If this gated an outbound message, mark its indexed record rejected so the
+    # communications log shows it was never sent.
+    await ext.mark_decision_resolved(db, decision_id=decision.id, approved=False)
     if decision.task_id:
         task = await db.get(Task, decision.task_id)
         if task is not None and task.status in (

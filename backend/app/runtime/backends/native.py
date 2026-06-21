@@ -25,6 +25,7 @@ from app.models.enums import (
     AgentRole,
     DecisionKind,
     DecisionStatus,
+    ExternalMessageStatus,
     PolicyEffect,
     TaskStatus,
 )
@@ -35,6 +36,7 @@ from app.runtime.tools import TOOL_SPECS, execute_tool
 from app.runtime.tools.base import consume_approval_grant as _consume_approval_grant
 from app.runtime.transcript import dump_messages, load_messages
 from app.services import apikeys, memory, metrics, reputation
+from app.services import external_messages as ext
 from app.services import governance as gov
 from app.services import tasks as task_svc
 from app.services.budget import BudgetExceeded
@@ -224,16 +226,32 @@ class NativeBackend:
                 await db.commit()
 
     async def _handle_call(self, ctx: RuntimeContext, agent: Agent, task: Task, call) -> dict:
+        is_external = ext.is_external_comm(call.name)
         async with ctx.session_factory() as db:
             await set_tenant(db, task.company_id)
             action = {
                 "tool": call.name,
                 "agent_role": agent.role.value,
                 "amount_cents": _COST_HINTS.get(call.name, call.arguments.get("amount_cents")),
+                # Lets a single policy gate every outbound communication channel.
+                "is_external": is_external,
             }
             effect = await gov.evaluate(db, company_id=task.company_id, action=action)
 
             if effect is PolicyEffect.deny:
+                # Index the blocked attempt so the founder can see what the agent
+                # tried to send (and which policy stopped it).
+                if is_external:
+                    await ext.record(
+                        db,
+                        company_id=task.company_id,
+                        agent_id=agent.id,
+                        task_id=task.id,
+                        tool=call.name,
+                        args=call.arguments,
+                        status=ExternalMessageStatus.blocked,
+                        detail="Denied by policy.",
+                    )
                 await db.commit()
                 return {
                     "terminal": False,
@@ -247,17 +265,35 @@ class NativeBackend:
                 # No standing approval for this action — park the task and ask the
                 # founder. (If a grant existed, it was just consumed and we fall
                 # through to execute, so an approved action isn't re-escalated.)
-                db.add(
-                    DecisionRequest(
+                # Outbound messages get a dedicated kind + a readable summary so the
+                # founder can weigh (and discuss) the actual content, and the parked
+                # message is indexed and linked to its decision.
+                decision = DecisionRequest(
+                    company_id=task.company_id,
+                    agent_id=agent.id,
+                    task_id=task.id,
+                    kind=DecisionKind.external_comm if is_external else DecisionKind.spend_approval,
+                    summary=(
+                        ext.summarize(call.name, call.arguments)
+                        if is_external
+                        else f"Approve {call.name}({call.arguments})"
+                    ),
+                    payload={"tool": call.name, "args": call.arguments},
+                    status=DecisionStatus.pending,
+                )
+                db.add(decision)
+                if is_external:
+                    await db.flush()
+                    await ext.record(
+                        db,
                         company_id=task.company_id,
                         agent_id=agent.id,
                         task_id=task.id,
-                        kind=DecisionKind.spend_approval,
-                        summary=f"Approve {call.name}({call.arguments})",
-                        payload={"tool": call.name, "args": call.arguments},
-                        status=DecisionStatus.pending,
+                        tool=call.name,
+                        args=call.arguments,
+                        status=ExternalMessageStatus.pending_approval,
+                        decision_id=decision.id,
                     )
-                )
                 task_row = await db.get(Task, task.id)
                 task_row.status = TaskStatus.waiting_approval
                 await db.commit()
@@ -309,6 +345,21 @@ class NativeBackend:
                     "terminal": True,
                     "result": {"status": "waiting_approval", "tool": call.name},
                 }
+
+            # Index the outbound communication's outcome. On an approved resume this
+            # flips the parked ``pending_approval`` row to its terminal state; on the
+            # unguarded path it inserts a fresh ``sent``/``failed`` record.
+            if is_external:
+                await ext.finalize(
+                    db,
+                    company_id=task.company_id,
+                    agent_id=agent.id,
+                    task_id=task.id,
+                    tool=call.name,
+                    args=call.arguments,
+                    sent=not outcome.is_error,
+                    detail=outcome.observation,
+                )
             await db.commit()
 
         if outcome.stop:

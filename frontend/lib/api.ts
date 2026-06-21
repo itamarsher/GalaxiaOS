@@ -105,6 +105,12 @@ export interface AgentListing {
   id: string; name: string; role: string; description: string; provider: string; price_cents: number;
   trust: number | null; accuracy: number | null; roi: number | null; reliability: number | null;
 }
+export interface ExternalMessage {
+  id: string; agent_id: string | null; agent_name: string | null; agent_role: string | null;
+  task_id: string | null; decision_id: string | null;
+  tool: string; channel: string; recipient: string | null; subject: string | null;
+  body: string | null; status: string; detail: string | null; created_at: string;
+}
 
 // ── API ──────────────────────────────────────────────────────────────────────
 export const api = {
@@ -241,6 +247,18 @@ export const api = {
       body: JSON.stringify({ message }),
     }),
 
+  externalMessages: (companyId: string, status?: string) =>
+    req<ExternalMessage[]>(
+      `/companies/${companyId}/external-messages${status ? `?status=${status}` : ""}`
+    ),
+  externalApproval: (companyId: string) =>
+    req<{ enabled: boolean }>(`/companies/${companyId}/settings/external-comms-approval`),
+  setExternalApproval: (companyId: string, enabled: boolean) =>
+    req<{ enabled: boolean }>(`/companies/${companyId}/settings/external-comms-approval`, {
+      method: "PUT",
+      body: JSON.stringify({ enabled }),
+    }),
+
   memory: (companyId: string, q?: string) =>
     req<Memory[]>(`/companies/${companyId}/memory${q ? `?q=${encodeURIComponent(q)}` : ""}`),
   deleteMemory: (companyId: string, entryId: string) =>
@@ -299,4 +317,5 @@ export const decisionKindLabel = (kind: string): string =>
     plan_approval: "Plan approval",
     hire_approval: "Hire request",
     user_action: "Action requested",
+    external_comm: "External message",
   }[kind] ?? kind.replace(/_/g, " "));

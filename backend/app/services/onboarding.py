@@ -837,6 +837,10 @@ async def launch(db: AsyncSession, *, company: Company) -> uuid.UUID | None:
                 priority=spec["priority"],
             )
         )
+    # Seed the "every external communication needs founder approval" guardrail
+    # disabled, so it's visible and one toggle away (Communications settings) for
+    # founders who want to vet all outbound messaging during early cycles.
+    await gov.set_external_comms_approval(db, company_id=company.id, enabled=False)
 
     company.status = CompanyStatus.active
     task_id = await orchestrator.create_launch_run(db, company.id)

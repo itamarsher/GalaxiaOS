@@ -11,6 +11,7 @@ from app.models.budget import (
     RunwaySnapshot,
     SpendEntry,
 )
+from app.models.comms import ExternalMessage
 from app.models.company import Company
 from app.models.crm import CrmActivity, CrmContact, CrmDeal
 from app.models.file import CompanyFile
@@ -62,4 +63,5 @@ __all__ = [
     "FounderDigest",
     "Site",
     "SiteDomain",
+    "ExternalMessage",
 ]
