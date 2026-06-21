@@ -11,6 +11,7 @@ const TABS = [
   ["budget", "Budget"],
   ["tasks", "Tasks"],
   ["governance", "Governance"],
+  ["communications", "Comms"],
   ["decisions", "Decisions"],
   ["memory", "Memory"],
   ["marketplace", "Marketplace"],

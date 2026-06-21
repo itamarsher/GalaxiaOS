@@ -31,6 +31,11 @@ See the full design in the plan referenced from the project history.
   chokepoint; per-category/per-agent rollups; runway forecasting; ROI-based pausing.
 - **Live runtime**: native agent loop, CEO-as-planner orchestration, circuit breakers,
   declarative policy engine, founder decision inbox.
+- **External-comms index & approval gate**: every outbound message the fleet sends
+  (email, social post, published page, ad, notification) is indexed at the agent
+  loop's tool chokepoint into one auditable log. A toggleable governance policy
+  (`is_external` rule) can require founder sign-off on *every* external message —
+  it lands in the decision inbox, discussable with full context, before it goes out.
 - **Governance & reputation**: per-agent trust/accuracy/ROI/reliability updated on task
   completion (also the future marketplace trust signal).
 - **Company Memory**: pgvector-backed write/retrieve behind a swappable embedding seam.

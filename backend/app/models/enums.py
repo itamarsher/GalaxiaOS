@@ -133,6 +133,22 @@ class DecisionKind(str, enum.Enum):
     plan_approval = "plan_approval"
     hire_approval = "hire_approval"
     user_action = "user_action"
+    external_comm = "external_comm"  # an outbound external message awaiting sign-off
+
+
+class ExternalMessageStatus(str, enum.Enum):
+    """Lifecycle of an indexed outbound external communication.
+
+    Every message an agent attempts to send outside the company is recorded with
+    one of these states, so the founder can later audit (and, under the approval
+    policy, gate) what the fleet says to the outside world.
+    """
+
+    pending_approval = "pending_approval"  # gated by policy; awaiting founder sign-off
+    sent = "sent"  # delivered to the provider
+    failed = "failed"  # attempted but the provider/tool errored
+    blocked = "blocked"  # denied by policy (never attempted)
+    rejected = "rejected"  # founder rejected the approval request
 
 
 class DecisionStatus(str, enum.Enum):

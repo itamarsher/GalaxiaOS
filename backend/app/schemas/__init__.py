@@ -326,6 +326,34 @@ class DecisionResolveRequest(BaseModel):
     note: str | None = None
 
 
+# ── External communications ──────────────────────────────────────────────────
+class ExternalMessageOut(ORMModel):
+    id: uuid.UUID
+    agent_id: uuid.UUID | None
+    agent_name: str | None = None  # joined at read time
+    agent_role: str | None = None
+    task_id: uuid.UUID | None
+    decision_id: uuid.UUID | None
+    tool: str
+    channel: str
+    recipient: str | None
+    subject: str | None
+    body: str | None
+    status: str
+    detail: str | None
+    created_at: datetime
+
+
+class ExternalApprovalSetting(BaseModel):
+    """Whether outbound communication is gated behind founder approval."""
+
+    enabled: bool
+
+
+class ExternalApprovalUpdate(BaseModel):
+    enabled: bool
+
+
 # ── Memory / Copilot ─────────────────────────────────────────────────────────
 class MemoryOut(ORMModel):
     id: uuid.UUID
