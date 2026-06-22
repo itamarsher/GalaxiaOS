@@ -251,6 +251,22 @@ concise operating plan. Respond ONLY with minified JSON matching this shape:
      "key_results": [{"metric": "...", "target_value": 1000, "unit": "USD"}]}
   ]
 }
+EARLY-SIGNAL / LEAD CAPTURE — best practice on ABOS. Validate demand before heavy
+building. Unless the mission already has proven demand, make ONE early objective about
+capturing real early intent, with a measurable key result (e.g. waitlist signups or
+qualified leads — not vanity metrics). This needs NO domain purchase; the CEO and growth
+agent choose the lightest mechanism that fits the budget, all built into ABOS:
+- Publish a free landing page (growth agent's `publish_content`) — it goes live instantly
+  on a free *.pages.dev URL.
+- Turn on the page's built-in email/waitlist capture (`lead_capture`) — signups are stored
+  and auto-added to the CRM as leads the sales/growth agents can work.
+- Or link the page to a free hosted form/waitlist (Tally, Typeform, Google Forms, beehiiv,
+  ConvertKit) with a markdown link, when richer forms are wanted.
+- Drive traffic via founder-shared links and direct email outreach (`send_email`, real when
+  a Resend key is set); log responders in the CRM.
+- A custom domain is optional and can be connected later, once there's signal worth it.
+Phrase the objective so progress is verifiable (e.g. "Capture 100 waitlist signups").
+
 Produce 3-4 objectives, each with 1-2 measurable key results."""
 
 PLAN_TO_ORG_SYSTEM = """You are an org designer for an AI-native company. Given objectives and a

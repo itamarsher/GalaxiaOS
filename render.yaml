@@ -50,6 +50,11 @@ services:
       # (comma-separated for multiple), e.g. https://abos-web.onrender.com.
       - key: ABOS_CORS_ALLOW_ORIGINS
         sync: false
+      # This API's own public URL (no trailing slash), e.g. https://abos-api.onrender.com.
+      # Landing pages are static on Cloudflare Pages, so their built-in lead-capture
+      # form POSTs to an absolute URL back here. Without it, on-page capture is off.
+      - key: ABOS_PUBLIC_API_BASE_URL
+        sync: false
       - fromGroup: abos-shared
 
   # arq worker (agent runtime + scheduled jobs). Same image, different command.

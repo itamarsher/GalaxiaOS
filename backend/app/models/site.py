@@ -49,6 +49,31 @@ class Site(Base, PKMixin, TenantMixin, TimestampMixin):
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
+class SiteLead(Base, PKMixin, TenantMixin, TimestampMixin):
+    """An early-signal lead captured by a published landing page's signup form.
+
+    The generated page is static and hosted off-platform (Cloudflare Pages), so its
+    capture form POSTs to a public, unauthenticated API endpoint which writes a row
+    here (the durable system of record for raw signups) and also funnels the person
+    into the CRM as a contact so the sales/growth agents can act on them. Tenant- and
+    site-scoped like everything else.
+    """
+
+    __tablename__ = "site_leads"
+
+    # The page that captured the lead (SET NULL so deleting a draft/site doesn't
+    # erase the proof a real person signed up).
+    site_id: Mapped[uuid.UUID | None] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("sites.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    email: Mapped[str] = mapped_column(String(320), nullable=False, index=True)
+    name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # Optional free-text the visitor left (e.g. "what would you want first?").
+    message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Where the signal came from, e.g. "landing_page:my-startup".
+    source: Mapped[str | None] = mapped_column(String(255), nullable=True)
+
+
 class SiteDomain(Base, PKMixin, TenantMixin, TimestampMixin):
     __tablename__ = "site_domains"
 

@@ -229,6 +229,14 @@ class Settings(BaseSettings):
     investor_review_enabled: bool = True
     investor_model: str = ""  # empty -> provider's planner-tier default
 
+    # Public URL of THIS API as seen from the open internet (no trailing slash),
+    # e.g. https://abos-api.onrender.com. Landing pages are static and hosted on a
+    # third-party origin (Cloudflare Pages, *.pages.dev), so their built-in
+    # email/waitlist capture form must POST to an absolute URL back here. When
+    # empty, native on-page lead capture is disabled (the page still publishes; the
+    # growth agent is told to link to a hosted form instead).
+    public_api_base_url: str = ""
+
     # CORS: browser origins allowed to call the API. Comma-separated in the
     # environment, e.g.
     #   ABOS_CORS_ALLOW_ORIGINS=https://abos-web.onrender.com,http://localhost:3000

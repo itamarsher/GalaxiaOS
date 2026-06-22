@@ -31,6 +31,7 @@ from app.schemas import (
     PlaybookOut,
     PlaybookUpdateRequest,
     SiteDomainOut,
+    SiteLeadOut,
     SiteOut,
     TaskDetailOut,
     TaskOut,
@@ -175,6 +176,7 @@ async def list_sites(company: CompanyDep, db: DbDep):
     for d in domains:
         if d.site_id is not None:
             by_site.setdefault(d.site_id, []).append(SiteDomainOut.model_validate(d))
+    counts = await sites_svc.lead_counts(db, company_id=company.id)
     return [
         SiteOut(
             id=s.id,
@@ -184,9 +186,24 @@ async def list_sites(company: CompanyDep, db: DbDep):
             deployment_url=s.deployment_url,
             created_at=s.created_at,
             domains=by_site.get(s.id, []),
+            lead_count=counts.get(s.id, 0),
         )
         for s in sites
     ]
+
+
+@router.get("/sites/leads", response_model=list[SiteLeadOut])
+async def list_all_leads(company: CompanyDep, db: DbDep):
+    """Every early-signal lead captured across the company's landing pages."""
+    leads = await sites_svc.list_leads(db, company_id=company.id)
+    return [SiteLeadOut.model_validate(lead) for lead in leads]
+
+
+@router.get("/sites/{site_id}/leads", response_model=list[SiteLeadOut])
+async def list_site_leads(company: CompanyDep, db: DbDep, site_id: uuid.UUID):
+    """Early-signal leads captured by one landing page."""
+    leads = await sites_svc.list_leads(db, company_id=company.id, site_id=site_id)
+    return [SiteLeadOut.model_validate(lead) for lead in leads]
 
 
 @router.get("/tasks", response_model=list[TaskOut])

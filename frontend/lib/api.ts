@@ -100,6 +100,11 @@ export interface SiteDomain { id: string; domain: string; status: string }
 export interface Site {
   id: string; slug: string; title: string; status: string;
   deployment_url: string | null; created_at: string; domains: SiteDomain[];
+  lead_count: number;
+}
+export interface SiteLead {
+  id: string; site_id: string | null; email: string;
+  name: string | null; message: string | null; source: string | null; created_at: string;
 }
 export interface AgentListing {
   id: string; name: string; role: string; description: string; provider: string; price_cents: number;
@@ -220,6 +225,12 @@ export const api = {
     req<Runway>(`/companies/${companyId}/runway/recompute`, { method: "POST" }),
 
   sites: (companyId: string) => req<Site[]>(`/companies/${companyId}/sites`),
+  siteLeads: (companyId: string, siteId?: string) =>
+    req<SiteLead[]>(
+      siteId
+        ? `/companies/${companyId}/sites/${siteId}/leads`
+        : `/companies/${companyId}/sites/leads`,
+    ),
 
   tasks: (companyId: string) => req<Task[]>(`/companies/${companyId}/tasks`),
   task: (companyId: string, taskId: string) =>

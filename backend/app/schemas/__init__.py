@@ -147,6 +147,18 @@ class SiteOut(ORMModel):
     domains: list[SiteDomainOut] = []
     cost_estimate_cents: int | None = None
     investment_reviews: list[InvestmentReviewOut] = Field(default_factory=list)
+    # Early-signal leads captured by this page's built-in form.
+    lead_count: int = 0
+
+
+class SiteLeadOut(ORMModel):
+    id: uuid.UUID
+    site_id: uuid.UUID | None = None
+    email: str
+    name: str | None = None
+    message: str | None = None
+    source: str | None = None
+    created_at: datetime
 
 
 class GenerationEvent(BaseModel):
