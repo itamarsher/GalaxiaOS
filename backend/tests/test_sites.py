@@ -60,6 +60,33 @@ def test_render_page_html_escapes_and_structures():
     assert "<strong>launch</strong>" in html
 
 
+def test_render_page_html_renders_safe_links_only():
+    html = sites_svc.render_page_html("t", "Sign up at [our form](https://tally.so/r/x).")
+    assert '<a href="https://tally.so/r/x" target="_blank" rel="noopener noreferrer">our form</a>' in html
+    # Non-http(s) schemes must never become a link (no javascript:/data: hrefs).
+    assert "<a " not in sites_svc.render_page_html("t", "[x](javascript:alert(1))")
+
+
+def test_render_page_html_capture_form_is_opt_in():
+    plain = sites_svc.render_page_html("t", "b")
+    assert "<form" not in plain  # the form element is only emitted with an action
+    action = "https://api.example.com/p/sites/abc/subscribe"
+    form = sites_svc.render_page_html("t", "b", form_action=action, cta_headline="Join", cta_button="Go")
+    assert '<form class="abos-capture"' in form
+    assert action in form
+    assert 'name="email"' in form
+    assert 'name="website"' in form  # spam honeypot
+    assert ">Join</h3>" in form and ">Go</button>" in form
+
+
+def test_lead_capture_action_requires_public_base_url(monkeypatch):
+    sid = uuid.uuid4()
+    monkeypatch.setattr(sites_svc.settings, "public_api_base_url", "")
+    assert sites_svc.lead_capture_action(sid) is None
+    monkeypatch.setattr(sites_svc.settings, "public_api_base_url", "https://api.example.com/")
+    assert sites_svc.lead_capture_action(sid) == f"https://api.example.com/p/sites/{sid}/subscribe"
+
+
 # ── tool guards (no provider wired) ─────────────────────────────────────────────
 
 
@@ -205,3 +232,145 @@ async def test_reconciler_advances_after_founder_delegation(
         # And the row is no longer in the reconciler's pending set.
         pending = await sites_svc.pending_connections(db, company_id=company_with_budget)
         assert all(p.id != sd.id for p in pending)
+
+
+# ── lead capture (DB) ─────────────────────────────────────────────────────────
+
+
+class _PublishHost:
+    """A site host that 'publishes' to a deterministic fake URL."""
+
+    async def publish(self, *, slug, title, html):
+        from app.integrations.sitehost import HostedSite
+
+        return HostedSite(
+            url=f"https://abos-{slug}.pages.dev",
+            provider="cloudflare",
+            project=f"abos-{slug}",
+            deployment_id="dep-1",
+        )
+
+
+@requires_db
+async def test_publish_with_lead_capture_embeds_form(
+    session_factory, company_with_budget, monkeypatch
+):
+    monkeypatch.setattr(sites_svc.settings, "public_api_base_url", "https://api.example.com")
+    async with session_factory() as db:
+        site = await sites_svc.publish_site(
+            db, _PublishHost(), company_id=company_with_budget,
+            title="Launch", body="Coming soon.", lead_capture=True,
+        )
+        await db.commit()
+        assert site.status == SiteStatus.published
+        # The deployed HTML carries a form posting back to this site's public sink.
+        assert f"/p/sites/{site.id}/subscribe" in site.html
+        assert 'class="abos-capture"' in site.html
+
+
+@requires_db
+async def test_capture_lead_persists_and_funnels_to_crm(
+    session_factory, company_with_budget
+):
+    from app.services import crm as crm_svc
+
+    async with session_factory() as db:
+        site = await _make_site(db, company_with_budget)
+        await db.commit()
+
+    async with session_factory() as db:
+        site = await db.get(Site, site.id)
+        lead = await sites_svc.capture_lead(
+            db, site=site, email="  Founder@Example.com ", name="Ann", message="excited"
+        )
+        await db.commit()
+        assert lead.email == "Founder@Example.com"
+        assert lead.source == f"landing_page:{site.slug}"
+
+        # Stored as a durable lead…
+        leads = await sites_svc.list_leads(db, company_id=company_with_budget)
+        assert [le.email for le in leads] == ["Founder@Example.com"]
+        counts = await sites_svc.lead_counts(db, company_id=company_with_budget)
+        assert counts.get(site.id) == 1
+
+        # …and funnelled into the CRM as a workable contact.
+        contacts = await crm_svc.find_contacts(db, company_id=company_with_budget)
+        assert any(c.email == "Founder@Example.com" and c.source == lead.source for c in contacts)
+
+
+@requires_db
+async def test_public_subscribe_endpoint_captures_and_filters(
+    session_factory, company_with_budget
+):
+    """The visitor-facing path: a static page POSTs the form back to /p/…/subscribe."""
+    import os
+
+    from fastapi.testclient import TestClient
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+    from app import main
+    from app.db import get_db
+
+    async with session_factory() as db:
+        site = await _make_site(db, company_with_budget)
+        await db.commit()
+        site_id = site.id
+
+    async def _override_db():
+        # TestClient runs the app in its own event loop, so the session must use
+        # an engine created *inside* that loop (the fixture's engine is bound to
+        # the test's loop — asyncpg connections can't cross loops).
+        engine = create_async_engine(os.environ["ABOS_TEST_DATABASE_URL"], future=True)
+        try:
+            async with async_sessionmaker(engine, expire_on_commit=False)() as db:
+                yield db
+        finally:
+            await engine.dispose()
+
+    app = main.create_app()
+    app.dependency_overrides[get_db] = _override_db
+    with TestClient(app) as client:
+        # Unknown page -> 404.
+        assert client.post(f"/p/sites/{uuid.uuid4()}/subscribe", data={"email": "a@b.co"}).status_code == 404
+
+        # Honeypot filled -> accepted (200) but stored nothing.
+        r = client.post(
+            f"/p/sites/{site_id}/subscribe",
+            data={"email": "bot@spam.co", "website": "http://spam"},
+        )
+        assert r.status_code == 200
+
+        # Invalid email -> 400, nothing stored.
+        assert client.post(f"/p/sites/{site_id}/subscribe", data={"email": "nope"}).status_code == 400
+
+        # A real signup -> 200 and a confirmation page.
+        r = client.post(f"/p/sites/{site_id}/subscribe", data={"email": "real@example.com", "name": "Ann"})
+        assert r.status_code == 200
+        assert "on the list" in r.text.lower()
+
+    # Exactly one lead was stored despite the bot/invalid attempts.
+    async with session_factory() as db:
+        leads = await sites_svc.list_leads(db, company_id=company_with_budget)
+        assert [le.email for le in leads] == ["real@example.com"]
+
+
+@requires_db
+async def test_capture_lead_dedupes_repeat_signups_in_crm(
+    session_factory, company_with_budget
+):
+    from app.services import crm as crm_svc
+
+    async with session_factory() as db:
+        site = await _make_site(db, company_with_budget)
+        await db.commit()
+
+    async with session_factory() as db:
+        site = await db.get(Site, site.id)
+        await sites_svc.capture_lead(db, site=site, email="dup@example.com")
+        await sites_svc.capture_lead(db, site=site, email="dup@example.com")
+        await db.commit()
+        # Two raw signals are both recorded…
+        assert len(await sites_svc.list_leads(db, company_id=company_with_budget)) == 2
+        # …but the CRM keeps a single contact (upsert by email).
+        contacts = await crm_svc.find_contacts(db, company_id=company_with_budget, query="dup@example.com")
+        assert len(contacts) == 1

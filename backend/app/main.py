@@ -28,6 +28,7 @@ from app.api import (
     marketplace,
     metrics,
     onboarding,
+    public,
 )
 from app.config import settings
 from app.db import SessionLocal
@@ -99,6 +100,7 @@ def create_app() -> FastAPI:
     )
 
     app.include_router(auth.router)
+    app.include_router(public.router)
     app.include_router(onboarding.router)
     app.include_router(apikeys.router)
     app.include_router(integrations.router)

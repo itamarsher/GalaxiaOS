@@ -33,7 +33,13 @@ SPECS: list[ToolSpec] = [
         name="publish_content",
         description=(
             "Publish a piece of marketing content (blog post, landing page, social "
-            "post, or email) and return its published URL."
+            "post, or email) and return its published URL. The page goes live "
+            "immediately on a free *.pages.dev URL — no domain purchase needed. The "
+            "body supports markdown links ([text](https://…)), so you can link to a "
+            "hosted waitlist/form (e.g. Tally, Typeform, Google Forms) for early "
+            "signal. For a landing_page you can instead set lead_capture=true to add "
+            "a built-in email/waitlist form to the page itself; submissions are "
+            "stored and added to the CRM as leads automatically."
         ),
         input_schema={
             "type": "object",
@@ -44,6 +50,21 @@ SPECS: list[ToolSpec] = [
                 },
                 "title": {"type": "string"},
                 "body": {"type": "string"},
+                "lead_capture": {
+                    "type": "boolean",
+                    "description": (
+                        "landing_page only: add a built-in email capture / waitlist "
+                        "form to the page. Captured emails become CRM leads."
+                    ),
+                },
+                "cta_headline": {
+                    "type": "string",
+                    "description": "Heading above the capture form, e.g. 'Join the waitlist'.",
+                },
+                "cta_button": {
+                    "type": "string",
+                    "description": "Capture form button label, e.g. 'Notify me'.",
+                },
             },
             "required": ["channel", "title", "body"],
         },
@@ -124,15 +145,41 @@ async def _publish_content(db, ctx, *, agent: Agent, task: Task, args: dict) -> 
 
     title = str(args["title"]).strip()
     body = str(args["body"])
+    # Lead capture is a landing-page-only affordance.
+    lead_capture = bool(args.get("lead_capture")) and channel == "landing_page"
+    cta_headline = (str(args.get("cta_headline")).strip() or None) if args.get("cta_headline") else None
+    cta_button = (str(args.get("cta_button")).strip() or None) if args.get("cta_button") else None
     try:
         site = await sites_svc.publish_site(
-            db, host, company_id=task.company_id, title=title, body=body
+            db,
+            host,
+            company_id=task.company_id,
+            title=title,
+            body=body,
+            lead_capture=lead_capture,
+            cta_headline=cta_headline,
+            cta_button=cta_button,
         )
     except SiteHostError as exc:
         return ToolOutcome(observation=f"publish failed: {exc}", is_error=True)
+
+    note = ""
+    if lead_capture:
+        if sites_svc.lead_capture_action(site.id):
+            note = (
+                " It has a built-in email/waitlist form — signups are captured as "
+                "CRM leads (check the CRM with crm_find_contacts)."
+            )
+        else:
+            # No public API base URL configured, so the on-page form can't reach us.
+            note = (
+                " NOTE: built-in capture is unavailable (no public API URL configured), "
+                "so no form was added — instead, link the page to a hosted form/waitlist "
+                "(e.g. Tally or Google Forms) by re-publishing with a markdown link."
+            )
     return ToolOutcome(
         observation=(
-            f"published '{title}' at {site.deployment_url} (slug {site.slug}). "
+            f"published '{title}' at {site.deployment_url} (slug {site.slug}).{note} "
             "Use connect_domain to point a bought domain at it."
         )
     )
