@@ -127,6 +127,7 @@ class PreviewOut(BaseModel):
     objectives: list[ObjectiveOut]
     org: OrgChartOut
     cost_estimate_cents: int | None = None
+    investment_reviews: list[InvestmentReviewOut] = Field(default_factory=list)
 
 
 # ── Sites & connected domains ────────────────────────────────────────────────

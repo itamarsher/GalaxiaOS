@@ -300,7 +300,7 @@ export default function Home() {
             </div>
           </div>
 
-          {preview.investment_reviews.length > 0 && (
+          {(preview.investment_reviews?.length ?? 0) > 0 && (
             <div className="card">
               <div className="step">Investor review · Three takes on your venture</div>
               <p className="muted">
