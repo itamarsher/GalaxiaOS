@@ -108,6 +108,7 @@ class PreviewOut(BaseModel):
     company: CompanyOut
     objectives: list[ObjectiveOut]
     org: OrgChartOut
+    cost_estimate_cents: int | None = None
 
 
 # ── Sites & connected domains ────────────────────────────────────────────────
