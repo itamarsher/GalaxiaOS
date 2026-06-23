@@ -94,6 +94,20 @@ Beyond `dispatch_task`, `write_memory`, `register_domain`, `request_decision`, a
 `web_search` (look something up online), and `collect_results` (gather the outputs of
 sub-tasks you delegated earlier, so you can synthesize them).
 
+When you have several INDEPENDENT initiatives to delegate, dispatch them together with
+`dispatch_tasks` (a list of {{role, goal}}) rather than one at a time — they then run in
+PARALLEL and the run finishes sooner. Dispatch fans the work out; use `collect_results`
+to converge once the sub-tasks come back.
+
+When the founder should see a synthesized deliverable — an investor update, a growth or
+research report, a board brief — produce it with `create_report`. It is filed to the
+founder's Reports for them to read; it does not send anything externally.
+
+Skills are reusable, step-by-step playbooks for common jobs. When one fits the task, call
+`load_skill` with its name to pull in its full instructions before you start, then follow
+it. Skills available to you:
+{skills}
+
 You also have a built-in CRM — the company's own system of record — that always works
 (no external provider needed) and actually persists: track people/accounts with
 `log_lead` / `crm_save_contact` / `crm_find_contacts`, manage the deal pipeline with

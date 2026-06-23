@@ -177,6 +177,47 @@ class CloudflareStatusOut(BaseModel):
     account_id: str | None = None
 
 
+# ── MCP servers (founder-pluggable tools) ────────────────────────────────────
+class McpServerCreateRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=64, description="Short slug, e.g. 'acme-crm'.")
+    label: str | None = Field(default=None, max_length=255)
+    url: str = Field(min_length=4, max_length=1024)
+    transport: str = "http"
+    auth_token: str | None = Field(default=None, description="Optional bearer token; encrypted at rest.")
+
+
+class McpServerOut(BaseModel):
+    id: uuid.UUID
+    name: str
+    label: str
+    url: str
+    transport: str
+    enabled: bool
+    has_auth: bool
+    tool_count: int
+    tools: list[str] = Field(default_factory=list)
+    last_error: str | None = None
+
+
+# ── Artifacts (founder-facing reports) ────────────────────────────────────────
+class ArtifactListOut(ORMModel):
+    id: uuid.UUID
+    kind: str
+    title: str
+    source_task_id: uuid.UUID | None = None
+    source_agent_id: uuid.UUID | None = None
+    created_at: datetime
+
+
+class ArtifactOut(ArtifactListOut):
+    body_md: str
+
+
+class ArtifactGenerateRequest(BaseModel):
+    kind: str = "custom"
+    instructions: str | None = None
+
+
 # ── Budget ───────────────────────────────────────────────────────────────────
 class BudgetOut(ORMModel):
     id: uuid.UUID

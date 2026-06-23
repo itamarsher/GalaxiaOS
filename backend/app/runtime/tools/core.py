@@ -91,6 +91,34 @@ SPECS: list[ToolSpec] = [
         },
     ),
     ToolSpec(
+        name="dispatch_tasks",
+        description=(
+            "Delegate SEVERAL sub-tasks at once — they run in PARALLEL. Prefer this "
+            "over multiple separate dispatch_task calls whenever the initiatives are "
+            "independent: the run finishes sooner. Use collect_results to converge."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "tasks": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "role": {
+                                "type": "string",
+                                "enum": ["growth", "research", "product", "finance", "governance", "auditor", "data"],
+                            },
+                            "goal": {"type": "string", "description": "What that agent should accomplish."},
+                        },
+                        "required": ["role", "goal"],
+                    },
+                }
+            },
+            "required": ["tasks"],
+        },
+    ),
+    ToolSpec(
         name="write_memory",
         description="Record an institutional learning, decision, experiment, or result.",
         input_schema={
@@ -295,6 +323,41 @@ async def _dispatch_task(db, ctx, *, agent: Agent, task: Task, args: dict) -> To
         )
     await _spawn_child(db, ctx, task, agent, args["role"], args["goal"])
     return ToolOutcome(observation=f"dispatched {args['role']}: {args['goal'][:80]}")
+
+
+async def _dispatch_tasks(db, ctx, *, agent: Agent, task: Task, args: dict) -> ToolOutcome:
+    """Fan out several sub-tasks at once; each is enqueued and runs in parallel."""
+    if (task.input or {}).get("requires_plan_approval") and not await _plan_is_approved(
+        db, task.id
+    ):
+        return ToolOutcome(
+            observation=(
+                "Hold on — the founder hasn't approved the plan yet. Call `submit_plan` "
+                "and wait for approval before dispatching any work."
+            ),
+            is_error=True,
+        )
+    entries = args.get("tasks")
+    if not isinstance(entries, list) or not entries:
+        return ToolOutcome(
+            observation="dispatch_tasks needs a non-empty 'tasks' list of {role, goal}.",
+            is_error=True,
+        )
+    dispatched: list[str] = []
+    for entry in entries:
+        if not isinstance(entry, dict) or "role" not in entry or "goal" not in entry:
+            continue
+        await _spawn_child(db, ctx, task, agent, entry["role"], entry["goal"])
+        dispatched.append(f"{entry['role']}: {str(entry['goal'])[:60]}")
+    if not dispatched:
+        return ToolOutcome(
+            observation="No valid {role, goal} entries in 'tasks'; nothing dispatched.",
+            is_error=True,
+        )
+    body = "\n".join(f"- {d}" for d in dispatched)
+    return ToolOutcome(
+        observation=f"dispatched {len(dispatched)} sub-tasks in parallel:\n{body}"
+    )
 
 
 async def _submit_plan(db, ctx, *, agent: Agent, task: Task, args: dict) -> ToolOutcome:
@@ -620,22 +683,43 @@ async def _web_search(db, ctx, *, agent: Agent, task: Task, args: dict) -> ToolO
     return ToolOutcome(observation=observation[:2000])
 
 
+#: Sub-task statuses that mean the child is still working (not yet collectible).
+_IN_FLIGHT = (
+    TaskStatus.queued,
+    TaskStatus.running,
+    TaskStatus.waiting_approval,
+    TaskStatus.auditing,
+)
+
+
 async def _collect_results(db, ctx, *, agent: Agent, task: Task, args: dict) -> ToolOutcome:
     rows = (
         await db.scalars(
             select(Task)
-            .where(Task.parent_task_id == task.id, Task.status == TaskStatus.done)
+            .where(Task.parent_task_id == task.id)
             .order_by(Task.created_at.asc())
         )
     ).all()
     if not rows:
-        return ToolOutcome(observation="No dispatched sub-tasks have finished yet.")
-    lines = []
-    for child in rows:
-        summary = (child.output or {}).get("summary", "") if child.output else ""
-        lines.append(f"- {child.goal[:80]}: {summary[:300] or '(no summary)'}")
-    observation = "Completed sub-task results:\n" + "\n".join(lines)
-    return ToolOutcome(observation=observation[:2000])
+        return ToolOutcome(observation="You have not dispatched any sub-tasks.")
+    done = [c for c in rows if c.status is TaskStatus.done]
+    pending = [c for c in rows if c.status in _IN_FLIGHT]
+    failed = [c for c in rows if c.status in (TaskStatus.failed, TaskStatus.blocked)]
+    lines: list[str] = []
+    if done:
+        lines.append("Completed sub-task results:")
+        for child in done:
+            summary = (child.output or {}).get("summary", "") if child.output else ""
+            lines.append(f"- {child.goal[:80]}: {summary[:300] or '(no summary)'}")
+    if failed:
+        lines.append(f"Failed/blocked sub-tasks ({len(failed)}): " + ", ".join(c.goal[:50] for c in failed))
+    if pending:
+        # Tell the parent to wait rather than synthesize half the picture.
+        lines.append(
+            f"Still running ({len(pending)}): " + ", ".join(c.goal[:50] for c in pending)
+            + ". Check back before synthesizing — these have not reported yet."
+        )
+    return ToolOutcome(observation="\n".join(lines)[:2000])
 
 
 async def _request_decision(db, ctx, *, agent: Agent, task: Task, args: dict) -> ToolOutcome:
@@ -707,6 +791,7 @@ async def _report_result(db, ctx, *, agent: Agent, task: Task, args: dict) -> To
 
 HANDLERS = {
     "dispatch_task": _dispatch_task,
+    "dispatch_tasks": _dispatch_tasks,
     "submit_plan": _submit_plan,
     "request_budget": _request_budget,
     "write_memory": _write_memory,

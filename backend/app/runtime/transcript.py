@@ -80,6 +80,84 @@ def load_messages(data: list[dict[str, Any]] | None) -> list[Message]:
     return messages
 
 
+#: Placeholder result injected for a tool call that was interrupted before its
+#: result was recorded — see :func:`sanitize_messages`.
+_INTERRUPTED_RESULT = (
+    "(interrupted: this tool call did not complete and no result was recorded. "
+    "Treat it as failed — retry it or take a different step.)"
+)
+
+
+def _tool_use_ids(message: Message) -> list[str]:
+    if isinstance(message.content, list):
+        return [b.id for b in message.content if isinstance(b, ToolUseBlock)]
+    return []
+
+
+def _tool_result_ids(message: Message | None) -> set[str]:
+    if message is None or not isinstance(message.content, list):
+        return set()
+    return {b.tool_use_id for b in message.content if isinstance(b, ToolResultBlock)}
+
+
+def sanitize_messages(messages: list[Message]) -> list[Message]:
+    """Repair a resumed transcript so every ``tool_use`` has a matching ``tool_result``.
+
+    The native loop only checkpoints at clean step boundaries, so a transcript is
+    *normally* a valid resume point. But a provider can still interrupt a tool-call
+    loop — a reasoning model that stops mid-stream, or a crash between executing a
+    tool and persisting its result — leaving an assistant ``tool_use`` block with no
+    answering ``tool_result``. Replaying that history makes the next provider call
+    fail hard ("tool_use ids were found without tool_result blocks").
+
+    This walks the turns and, for any dangling ``tool_use``, injects a placeholder
+    error ``tool_result`` (DeerFlow does the same on resume): either appended to the
+    following user turn when one exists, or as a synthesized user turn when the
+    assistant's tool call was the very last thing recorded. The returned list is a
+    valid, resumable conversation. Pure (no I/O), so it is unit-testable.
+    """
+    if not messages:
+        return messages
+    repaired: list[Message] = []
+    i, n = 0, len(messages)
+    while i < n:
+        msg = messages[i]
+        repaired.append(msg)
+        use_ids = _tool_use_ids(msg)
+        if msg.role == "assistant" and use_ids:
+            nxt = messages[i + 1] if i + 1 < n else None
+            is_result_turn = (
+                nxt is not None
+                and nxt.role == "user"
+                and isinstance(nxt.content, list)
+                and any(isinstance(b, ToolResultBlock) for b in nxt.content)
+            )
+            if is_result_turn:
+                missing = [uid for uid in use_ids if uid not in _tool_result_ids(nxt)]
+                if missing:
+                    nxt.content.extend(  # type: ignore[union-attr]
+                        ToolResultBlock(tool_use_id=uid, content=_INTERRUPTED_RESULT, is_error=True)
+                        for uid in missing
+                    )
+                repaired.append(nxt)
+                i += 2
+                continue
+            # No answering result turn at all — synthesize one for every call.
+            repaired.append(
+                Message(
+                    role="user",
+                    content=[
+                        ToolResultBlock(tool_use_id=uid, content=_INTERRUPTED_RESULT, is_error=True)
+                        for uid in use_ids
+                    ],
+                )
+            )
+            i += 1
+            continue
+        i += 1
+    return repaired
+
+
 def _clip(text: str, limit: int = 240) -> str:
     text = text.strip()
     return text if len(text) <= limit else text[: limit - 1] + "…"

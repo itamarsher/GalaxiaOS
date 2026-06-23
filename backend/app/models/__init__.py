@@ -3,6 +3,7 @@
 from app.models.agent import Agent, AgentEdge
 from app.models.agent_listing import AgentListing
 from app.models.apikey import ApiKey
+from app.models.artifact import Artifact
 from app.models.base import Base
 from app.models.budget import (
     Budget,
@@ -21,6 +22,7 @@ from app.models.governance import (
     ReputationScore,
 )
 from app.models.investment import InvestmentReview
+from app.models.mcp import McpServer
 from app.models.memory import MemoryEntry
 from app.models.metrics import MetricSignal
 from app.models.mission import KeyResult, Mission, Objective
@@ -33,6 +35,8 @@ __all__ = [
     "User",
     "Membership",
     "Company",
+    "Artifact",
+    "McpServer",
     "CrmContact",
     "CrmDeal",
     "CrmActivity",

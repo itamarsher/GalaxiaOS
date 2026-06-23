@@ -26,10 +26,20 @@ def test_system_prompt_formats_with_all_slots() -> None:
         goal="Plan the launch.",
         memory="- learning: pricing matters",
         metrics="No real-world metrics yet.",
+        skills="- cold-email-outreach: run a campaign",
     )
     assert "pricing matters" in rendered
     assert "Plan the launch." in rendered
-    assert "{" not in rendered  # all format slots consumed
+    assert "cold-email-outreach" in rendered
+    # All named format slots are consumed (a literal "{role, goal}" example may remain).
+    for slot in ("{role_desc}", "{mission}", "{goal}", "{memory}", "{metrics}", "{skills}"):
+        assert slot not in rendered
+
+
+def test_parallel_and_report_tools_registered() -> None:
+    names = {spec.name for spec in TOOL_SPECS}
+    for expected in {"dispatch_tasks", "create_report", "load_skill"}:
+        assert expected in names
 
 
 def test_new_tools_registered() -> None:

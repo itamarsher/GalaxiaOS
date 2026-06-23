@@ -10,6 +10,7 @@ const TABS = [
   ["org", "Org"],
   ["budget", "Budget"],
   ["tasks", "Tasks"],
+  ["reports", "Reports"],
   ["governance", "Governance"],
   ["decisions", "Decisions"],
   ["memory", "Memory"],

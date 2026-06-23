@@ -86,6 +86,25 @@ class Settings(BaseSettings):
     # finishes, so the table holds only live tasks' working memory.
     persist_task_transcript: bool = True
 
+    # Context compaction: a long autonomous task accumulates many turns, which
+    # both inflates the per-step token cost and eventually overruns the model's
+    # context window. When the in-loop conversation grows past
+    # ``compaction_trigger_messages`` turns, the older turns are summarized into a
+    # single compact recap (keeping the most recent ``compaction_keep_recent``
+    # turns verbatim) so the loop can keep going cheaply. Disable to keep the full
+    # raw history every step.
+    context_compaction_enabled: bool = True
+    compaction_trigger_messages: int = 24
+    compaction_keep_recent_messages: int = 8
+
+    # MCP (Model Context Protocol): founders can connect their own tool servers
+    # (their CRM, analytics, internal APIs) so agents gain real tools without any
+    # ABOS code change. MCP tools are screened by governance and never faked: a
+    # server that is unreachable surfaces an honest error rather than a stub.
+    mcp_enabled: bool = True
+    mcp_timeout_seconds: float = 20.0
+    mcp_max_tools_per_server: int = 40
+
     # Model defaults per role tier (overridable per-agent via Agent.model_pref)
     model_cheap: str = Field(default="claude-haiku-4-5")
     model_planner: str = Field(default="claude-sonnet-4-6")

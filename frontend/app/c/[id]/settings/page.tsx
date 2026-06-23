@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
-import { api, type ApiKey, type Company } from "@/lib/api";
+import { api, type ApiKey, type Company, type McpServer } from "@/lib/api";
 import { usePoll } from "@/lib/useApi";
 
 // The two keys ABOS understands today: the BYOK LLM provider key (required to
@@ -58,6 +58,8 @@ export default function SettingsPage() {
       ))}
 
       <CloudflareCard companyId={id} />
+
+      <McpServersCard companyId={id} />
 
       {/* Any other stored keys (e.g. a provider added directly via the API).
           "cloudflare" is managed by its own card above, so hide it here. */}
@@ -134,6 +136,95 @@ function CloudflareCard({ companyId }: { companyId: string }) {
           {configured ? "Update" : "Save"}
         </button>
         {configured && <button className="ghost danger" disabled={busy} onClick={remove}>Remove</button>}
+      </div>
+      {err && <div className="err">{err}</div>}
+    </div>
+  );
+}
+
+// MCP (Model Context Protocol) servers let agents use the founder's own tools
+// (their CRM, analytics, internal APIs) with no ABOS code change. Adding one
+// probes it immediately so a bad URL/token shows up right away.
+function McpServersCard({ companyId }: { companyId: string }) {
+  const servers = usePoll(() => api.mcpServers(companyId), 0, [companyId]);
+  const [name, setName] = useState("");
+  const [url, setUrl] = useState("");
+  const [auth, setAuth] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const list = servers.data ?? [];
+
+  const add = async () => {
+    if (name.trim().length < 1 || url.trim().length < 4) {
+      setErr("Enter a name and a server URL."); return;
+    }
+    setBusy(true); setErr(null);
+    try {
+      await api.addMcpServer(companyId, {
+        name: name.trim(),
+        url: url.trim(),
+        auth_token: auth.trim() || undefined,
+      });
+      setName(""); setUrl(""); setAuth("");
+      servers.reload();
+    } catch (e) {
+      setErr(String(e instanceof Error ? e.message : e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const refresh = async (s: McpServer) => {
+    setBusy(true); setErr(null);
+    try { await api.refreshMcpServer(companyId, s.id); servers.reload(); }
+    catch (e) { setErr(String(e instanceof Error ? e.message : e)); }
+    finally { setBusy(false); }
+  };
+
+  const remove = async (s: McpServer) => {
+    if (!window.confirm(`Disconnect "${s.label}"? Agents will lose its ${s.tool_count} tool(s).`)) return;
+    setBusy(true); setErr(null);
+    try { await api.deleteMcpServer(companyId, s.id); servers.reload(); }
+    catch (e) { setErr(String(e instanceof Error ? e.message : e)); }
+    finally { setBusy(false); }
+  };
+
+  return (
+    <div className="card">
+      <div className="step">Connected tools (MCP servers)</div>
+      <p className="muted" style={{ fontSize: 13, margin: "6px 0 0" }}>
+        Connect your own MCP servers (CRM, analytics, internal APIs) to give agents real tools.
+        The optional bearer token is encrypted at rest. Tools are governed like any external action.
+      </p>
+
+      {list.map((s) => (
+        <div key={s.id} className="kv" style={{ marginTop: 10, alignItems: "flex-start" }}>
+          <span>
+            <code>{s.name}</code>
+            <span className="muted" style={{ fontSize: 12, display: "block" }}>{s.url}</span>
+            {s.last_error
+              ? <span className="err" style={{ fontSize: 12 }}>{s.last_error}</span>
+              : <span className="muted" style={{ fontSize: 12 }}>{s.tool_count} tool(s){s.tools.length ? `: ${s.tools.join(", ")}` : ""}</span>}
+          </span>
+          <span style={{ display: "flex", gap: 6 }}>
+            <button className="ghost" style={{ marginTop: 0 }} disabled={busy} onClick={() => refresh(s)}>Refresh</button>
+            <button className="ghost danger" style={{ marginTop: 0 }} disabled={busy} onClick={() => remove(s)}>Remove</button>
+          </span>
+        </div>
+      ))}
+
+      <label>Name</label>
+      <input value={name} placeholder="acme-crm" onChange={(e) => setName(e.target.value)} />
+      <label>Server URL</label>
+      <input value={url} placeholder="https://mcp.example.com/mcp" onChange={(e) => setUrl(e.target.value)} />
+      <label>Bearer token (optional)</label>
+      <input type="password" value={auth} placeholder="token…"
+        onChange={(e) => setAuth(e.target.value)}
+        onKeyDown={(e) => e.key === "Enter" && add()} />
+      <div className="btnrow">
+        <button disabled={busy || !name.trim() || !url.trim()} onClick={add}>
+          {busy ? "Connecting…" : "Connect"}
+        </button>
       </div>
       {err && <div className="err">{err}</div>}
     </div>
