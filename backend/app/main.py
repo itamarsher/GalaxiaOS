@@ -14,6 +14,7 @@ from sqlalchemy import text
 
 from app.api import (
     apikeys,
+    artifacts,
     auth,
     budget,
     comms,
@@ -26,6 +27,7 @@ from app.api import (
     governance,
     integrations,
     marketplace,
+    mcp,
     metrics,
     onboarding,
     public,
@@ -105,6 +107,8 @@ def create_app() -> FastAPI:
     app.include_router(apikeys.router)
     app.include_router(integrations.router)
     app.include_router(files.router)
+    app.include_router(mcp.router)
+    app.include_router(artifacts.router)
     app.include_router(companies.router)
     app.include_router(companies.mine_router)
     app.include_router(budget.router)

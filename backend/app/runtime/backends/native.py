@@ -30,14 +30,17 @@ from app.models.enums import (
     TaskStatus,
 )
 from app.providers.base import LLMProvider, Message, TextBlock, ToolResultBlock, ToolUseBlock
+from app.runtime import skills as skills_lib
 from app.runtime.context import RuntimeContext
 from app.runtime.prompts import ROLE_DESCRIPTIONS, render_agent_system
 from app.runtime.tools import TOOL_SPECS, execute_tool
+from app.runtime.tools.base import ToolOutcome
 from app.runtime.tools.base import consume_approval_grant as _consume_approval_grant
-from app.runtime.transcript import dump_messages, load_messages
+from app.runtime.transcript import dump_messages, load_messages, sanitize_messages, transcript_lines
 from app.services import apikeys, memory, metrics, reputation
 from app.services import external_messages as ext
 from app.services import governance as gov
+from app.services import mcp as mcp_svc
 from app.services import tasks as task_svc
 from app.services.budget import BudgetExceeded
 
@@ -125,6 +128,13 @@ class NativeBackend:
                 db, company_id=task.company_id, agent_id=agent.id
             )
             trust = rep.trust
+
+            # Connected MCP servers contribute extra, company-specific tools. Built
+            # per-run (they are per-company and may change between runs); routing
+            # maps each prefixed tool name back to (server_id, remote_tool_name).
+            mcp_specs, mcp_routing = await mcp_svc.tool_specs_for_company(
+                db, company_id=task.company_id
+            )
         if resolved is None:
             return await self._finish(ctx, task, TaskStatus.failed, {"error": "no API key"})
         provider, api_key = resolved
@@ -137,12 +147,15 @@ class NativeBackend:
             goal=task.goal,
             memory=memory_summary,
             metrics=metrics_summary,
+            skills=skills_lib.index_for_role(agent.role.value),
         )
+        tools = list(TOOL_SPECS) + mcp_specs
         messages = self._resume_or_seed(task)
         await self._inject_audit_feedback(ctx, task, messages)
         model = _model_for(agent, provider, trust)
 
         for _ in range(settings.max_steps_per_task):
+            messages = await self._maybe_compact(ctx, task, provider, api_key, model, messages)
             resp = await ctx.cost_meter.run_llm(
                 provider,
                 api_key=api_key,
@@ -152,7 +165,7 @@ class NativeBackend:
                 model=model,
                 system=system,
                 messages=messages,
-                tools=TOOL_SPECS,
+                tools=tools,
                 max_tokens=2048,
             )
 
@@ -163,7 +176,7 @@ class NativeBackend:
 
             results: list[ToolResultBlock] = []
             for call in resp.tool_calls:
-                verdict = await self._handle_call(ctx, agent, task, call)
+                verdict = await self._handle_call(ctx, agent, task, call, mcp_routing)
                 if verdict["terminal"]:
                     return verdict["result"]
                 results.append(
@@ -202,10 +215,86 @@ class NativeBackend:
         work already paid for.
         """
         if settings.persist_task_transcript and task.transcript:
-            resumed = load_messages(task.transcript)
+            # Repair any tool_use left dangling by an interrupted step before
+            # replaying, so the first resumed provider call can't fail on a
+            # malformed history (see ``sanitize_messages``).
+            resumed = sanitize_messages(load_messages(task.transcript))
             if resumed:
                 return resumed
         return [Message(role="user", content=f"Begin: {task.goal}")]
+
+    @staticmethod
+    def _safe_compaction_split(messages: list[Message], keep: int) -> int:
+        """Index at which to cut history for compaction, or 0 to not compact.
+
+        The tail (kept verbatim) must begin with an *assistant* turn so the
+        synthesized recap — a single ``user`` turn — alternates correctly, and so
+        the cut never lands between an assistant ``tool_use`` and its ``tool_result``
+        (those results live in the tail with their call). Searches from the desired
+        keep boundary backward for the nearest assistant turn.
+        """
+        n = len(messages)
+        target = max(1, n - keep)
+        for idx in range(target, 0, -1):
+            if messages[idx].role == "assistant":
+                return idx
+        return 0
+
+    async def _maybe_compact(
+        self,
+        ctx: RuntimeContext,
+        task: Task,
+        provider: LLMProvider,
+        api_key: str,
+        model: str,
+        messages: list[Message],
+    ) -> list[Message]:
+        """Summarize older turns into one recap when the conversation grows long.
+
+        Keeps long autonomous runs inside the context window and cheaper per step:
+        once the loop exceeds ``compaction_trigger_messages`` turns we replace the
+        older prefix with a compact ``user`` recap and keep the most recent turns
+        verbatim. No-op (returns ``messages`` unchanged) when disabled, short, or
+        when no safe split exists.
+        """
+        if not settings.context_compaction_enabled:
+            return messages
+        if len(messages) <= settings.compaction_trigger_messages:
+            return messages
+        split = self._safe_compaction_split(messages, settings.compaction_keep_recent_messages)
+        if split <= 1:
+            return messages
+        head, tail = messages[:split], messages[split:]
+        blob = "\n".join(transcript_lines(dump_messages(head), limit=0))
+        if not blob.strip():
+            return messages
+        resp = await ctx.cost_meter.run_llm(
+            provider,
+            api_key=api_key,
+            company_id=task.company_id,
+            agent_id=task.agent_id,
+            task_id=task.id,
+            model=provider.default_models.get("cheap", model),
+            system=(
+                "You compact an AI agent's working log. Summarize the earlier part of "
+                "this task session into a dense recap the agent can rely on to continue: "
+                "preserve decisions made, tools used and their key results, facts learned, "
+                "open threads, and anything still in progress. Be specific and terse; omit "
+                "chit-chat. Output plain text, no preamble."
+            ),
+            messages=[Message(role="user", content=blob)],
+            max_tokens=700,
+        )
+        recap = Message(
+            role="user",
+            content=(
+                "Recap of earlier work on this task (older turns were compacted to save "
+                "context — treat this as established background):\n" + resp.text
+            ),
+        )
+        compacted = [recap, *tail]
+        await self._save_transcript(ctx, task, compacted)
+        return compacted
 
     async def _save_transcript(
         self, ctx: RuntimeContext, task: Task, messages: list[Message]
@@ -225,16 +314,20 @@ class NativeBackend:
                 row.transcript = dump_messages(messages)
                 await db.commit()
 
-    async def _handle_call(self, ctx: RuntimeContext, agent: Agent, task: Task, call) -> dict:
+    async def _handle_call(
+        self, ctx: RuntimeContext, agent: Agent, task: Task, call, mcp_routing: dict | None = None
+    ) -> dict:
         is_external = ext.is_external_comm(call.name)
+        is_mcp = bool(mcp_routing) and call.name in mcp_routing
         async with ctx.session_factory() as db:
             await set_tenant(db, task.company_id)
             action = {
                 "tool": call.name,
                 "agent_role": agent.role.value,
                 "amount_cents": _COST_HINTS.get(call.name, call.arguments.get("amount_cents")),
-                # Lets a single policy gate every outbound communication channel.
-                "is_external": is_external,
+                # External comms and MCP tools both reach outside ABOS, so a single
+                # external-sharing policy can gate either.
+                "is_external": is_external or is_mcp,
             }
             effect = await gov.evaluate(db, company_id=task.company_id, action=action)
 
@@ -303,9 +396,12 @@ class NativeBackend:
                 }
 
             try:
-                outcome = await execute_tool(
-                    db, ctx, agent=agent, task=task, name=call.name, args=call.arguments
-                )
+                if is_mcp:
+                    outcome = await self._call_mcp(db, task, call, mcp_routing)
+                else:
+                    outcome = await execute_tool(
+                        db, ctx, agent=agent, task=task, name=call.name, args=call.arguments
+                    )
             except BudgetExceeded as exc:
                 # The action would blow the budget. Rather than fail the task
                 # outright (the old behaviour: "error": "BudgetExceeded"), treat
@@ -376,6 +472,28 @@ class NativeBackend:
             "observation": outcome.observation,
             "is_error": outcome.is_error,
         }
+
+    async def _call_mcp(self, db, task: Task, call, mcp_routing: dict) -> ToolOutcome:
+        """Invoke a connected MCP server's tool, honestly surfacing any failure.
+
+        Consistent with the rest of the platform: an unreachable or erroring server
+        returns a tool error the agent must deal with — never a fabricated success.
+        """
+        route = mcp_routing[call.name]
+        try:
+            text = await mcp_svc.call_tool(
+                db,
+                company_id=task.company_id,
+                server_id=route["server_id"],
+                remote_tool=route["remote_tool"],
+                arguments=call.arguments,
+            )
+        except mcp_svc.McpError as exc:
+            return ToolOutcome(
+                observation=f"MCP tool {call.name} failed: {exc}. NOTHING happened — do not assume a result.",
+                is_error=True,
+            )
+        return ToolOutcome(observation=text[:4000])
 
     async def _finish_or_audit(
         self, ctx: RuntimeContext, agent: Agent, task: Task, output: dict

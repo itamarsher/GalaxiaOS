@@ -116,6 +116,15 @@ export interface ExternalMessage {
   tool: string; channel: string; recipient: string | null; subject: string | null;
   body: string | null; status: string; detail: string | null; created_at: string;
 }
+export interface McpServer {
+  id: string; name: string; label: string; url: string; transport: string;
+  enabled: boolean; has_auth: boolean; tool_count: number; tools: string[]; last_error: string | null;
+}
+export interface ArtifactSummary {
+  id: string; kind: string; title: string;
+  source_task_id: string | null; source_agent_id: string | null; created_at: string;
+}
+export interface Artifact extends ArtifactSummary { body_md: string }
 
 // ── API ──────────────────────────────────────────────────────────────────────
 export const api = {
@@ -297,6 +306,30 @@ export const api = {
     req<Agent>(`/companies/${companyId}/marketplace/hire`, {
       method: "POST",
       body: JSON.stringify({ listing_id: listingId }),
+    }),
+
+  // MCP servers — founder-pluggable tool servers.
+  mcpServers: (companyId: string) => req<McpServer[]>(`/companies/${companyId}/mcp/servers`),
+  addMcpServer: (
+    companyId: string,
+    body: { name: string; label?: string; url: string; transport?: string; auth_token?: string },
+  ) =>
+    req<McpServer>(`/companies/${companyId}/mcp/servers`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  refreshMcpServer: (companyId: string, serverId: string) =>
+    req<McpServer>(`/companies/${companyId}/mcp/servers/${serverId}/refresh`, { method: "POST" }),
+  deleteMcpServer: (companyId: string, serverId: string) =>
+    req<void>(`/companies/${companyId}/mcp/servers/${serverId}`, { method: "DELETE" }),
+
+  // Founder-facing reports (artifacts).
+  reports: (companyId: string) => req<ArtifactSummary[]>(`/companies/${companyId}/reports`),
+  report: (companyId: string, id: string) => req<Artifact>(`/companies/${companyId}/reports/${id}`),
+  generateReport: (companyId: string, kind: string, instructions?: string) =>
+    req<Artifact>(`/companies/${companyId}/reports/generate`, {
+      method: "POST",
+      body: JSON.stringify({ kind, instructions: instructions ?? null }),
     }),
 };
 
