@@ -45,6 +45,16 @@ def _escape_query_value(value: str) -> str:
     return value.replace("\\", "\\\\").replace("'", "\\'")
 
 
+def _json(resp: httpx.Response) -> dict:
+    """Best-effort JSON body of a response (``{}`` when empty or unparseable)."""
+    if not resp.content:
+        return {}
+    try:
+        return resp.json()
+    except ValueError:
+        return {}
+
+
 class GoogleDriveFileProvider:
     """Real Google Drive file store (credential-gated, OAuth refresh-token)."""
 
@@ -153,17 +163,30 @@ class GoogleDriveFileProvider:
         )
         return f"multipart/related; boundary={boundary}", body
 
-    async def _get_json(self, client: httpx.AsyncClient, url: str, **kwargs) -> dict:
+    async def _send(
+        self,
+        client: httpx.AsyncClient,
+        method: str,
+        url: str,
+        *,
+        action: str,
+        extra_headers: dict[str, str] | None = None,
+        **kwargs: Any,
+    ) -> httpx.Response:
+        """Issue an authenticated Drive request, raising :class:`FileProviderError`
+        on a transport failure or a 4xx/5xx (surfacing Google's error message)."""
+        headers = await self._headers()
+        if extra_headers:
+            headers = {**headers, **extra_headers}
         try:
-            resp = await client.get(url, headers=await self._headers(), **kwargs)
-            data = resp.json() if resp.content else {}
+            resp = await client.request(method, url, headers=headers, **kwargs)
         except httpx.HTTPError as exc:
-            raise FileProviderError(f"Drive request failed: {exc}") from exc
-        except ValueError as exc:
-            raise FileProviderError(f"Drive returned non-JSON: {exc}") from exc
+            raise FileProviderError(f"Drive {action} failed: {exc}") from exc
         if resp.status_code >= 400:
-            raise FileProviderError(f"Drive error {resp.status_code}: {self._err(data)}")
-        return data
+            raise FileProviderError(
+                f"Drive {action} error {resp.status_code}: {self._err(_json(resp))}"
+            )
+        return resp
 
     @staticmethod
     def _err(body: dict) -> str:
@@ -175,9 +198,11 @@ class GoogleDriveFileProvider:
     async def _find_child(
         self, client: httpx.AsyncClient, parent_id: str, name: str, *, folder: bool | None = None
     ) -> dict | None:
-        data = await self._get_json(
+        resp = await self._send(
             client,
+            "GET",
             _DRIVE_API,
+            action="list",
             params={
                 "q": self._child_query(parent_id, name, folder=folder),
                 "fields": f"files({_FILE_FIELDS})",
@@ -185,23 +210,20 @@ class GoogleDriveFileProvider:
                 "pageSize": 1,
             },
         )
-        files = data.get("files") or []
+        files = _json(resp).get("files") or []
         return files[0] if files else None
 
     async def _create_folder(self, client: httpx.AsyncClient, parent_id: str, name: str) -> dict:
-        try:
-            resp = await client.post(
-                _DRIVE_API,
-                headers={**await self._headers(), "Content-Type": "application/json"},
-                params={"fields": _FILE_FIELDS},
-                json={"name": name, "mimeType": _FOLDER_MIME, "parents": [parent_id]},
-            )
-            data = resp.json() if resp.content else {}
-        except httpx.HTTPError as exc:
-            raise FileProviderError(f"Drive create-folder failed: {exc}") from exc
-        if resp.status_code >= 400:
-            raise FileProviderError(f"Drive create-folder error: {self._err(data)}")
-        return data
+        resp = await self._send(
+            client,
+            "POST",
+            _DRIVE_API,
+            action="create-folder",
+            extra_headers={"Content-Type": "application/json"},
+            params={"fields": _FILE_FIELDS},
+            json={"name": name, "mimeType": _FOLDER_MIME, "parents": [parent_id]},
+        )
+        return _json(resp)
 
     # ─────────────────────────── FileProvider ───────────────────────────
 
@@ -222,38 +244,40 @@ class GoogleDriveFileProvider:
     ) -> StoredFile:
         async with httpx.AsyncClient(timeout=self._timeout) as client:
             existing = await self._find_child(client, folder_id, name, folder=False)
-            try:
-                if existing:
-                    # Replace the media of the existing file so the doc updates in
-                    # place (one durable id per named document).
-                    resp = await client.patch(
-                        f"{_DRIVE_UPLOAD}/{existing['id']}",
-                        headers={**await self._headers(), "Content-Type": mime_type},
-                        params={"uploadType": "media", "fields": _FILE_FIELDS},
-                        content=content,
-                    )
-                else:
-                    ctype, body = self._multipart_related(
-                        {"name": name, "parents": [folder_id]}, content, mime_type
-                    )
-                    resp = await client.post(
-                        _DRIVE_UPLOAD,
-                        headers={**await self._headers(), "Content-Type": ctype},
-                        params={"uploadType": "multipart", "fields": _FILE_FIELDS},
-                        content=body,
-                    )
-                data = resp.json() if resp.content else {}
-            except httpx.HTTPError as exc:
-                raise FileProviderError(f"Drive upload failed: {exc}") from exc
-            if resp.status_code >= 400:
-                raise FileProviderError(f"Drive upload error: {self._err(data)}")
-        return self._parse_file(data)
+            if existing:
+                # Replace the media of the existing file so the doc updates in
+                # place (one durable id per named document).
+                resp = await self._send(
+                    client,
+                    "PATCH",
+                    f"{_DRIVE_UPLOAD}/{existing['id']}",
+                    action="upload",
+                    extra_headers={"Content-Type": mime_type},
+                    params={"uploadType": "media", "fields": _FILE_FIELDS},
+                    content=content,
+                )
+            else:
+                ctype, body = self._multipart_related(
+                    {"name": name, "parents": [folder_id]}, content, mime_type
+                )
+                resp = await self._send(
+                    client,
+                    "POST",
+                    _DRIVE_UPLOAD,
+                    action="upload",
+                    extra_headers={"Content-Type": ctype},
+                    params={"uploadType": "multipart", "fields": _FILE_FIELDS},
+                    content=body,
+                )
+        return self._parse_file(_json(resp))
 
     async def list_folder(self, folder_id: str) -> list[StoredFile]:
         async with httpx.AsyncClient(timeout=self._timeout) as client:
-            data = await self._get_json(
+            resp = await self._send(
                 client,
+                "GET",
                 _DRIVE_API,
+                action="list",
                 params={
                     "q": (
                         f"'{_escape_query_value(folder_id)}' in parents "
@@ -265,19 +289,15 @@ class GoogleDriveFileProvider:
                     "orderBy": "name",
                 },
             )
-        return [self._parse_file(f) for f in (data.get("files") or [])]
+        return [self._parse_file(f) for f in (_json(resp).get("files") or [])]
 
     async def download_file(self, file_id: str) -> bytes:
         async with httpx.AsyncClient(timeout=self._timeout) as client:
-            try:
-                resp = await client.get(
-                    f"{_DRIVE_API}/{file_id}",
-                    headers=await self._headers(),
-                    params={"alt": "media"},
-                )
-            except httpx.HTTPError as exc:
-                raise FileProviderError(f"Drive download failed: {exc}") from exc
-            if resp.status_code >= 400:
-                detail = resp.json() if resp.content else {}
-                raise FileProviderError(f"Drive download error: {self._err(detail)}")
+            resp = await self._send(
+                client,
+                "GET",
+                f"{_DRIVE_API}/{file_id}",
+                action="download",
+                params={"alt": "media"},
+            )
             return resp.content
