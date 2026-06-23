@@ -22,7 +22,7 @@ def normalize_db_url(url: str) -> str:
     """
     for prefix in ("postgres://", "postgresql://"):
         if url.startswith(prefix):
-            url = "postgresql+asyncpg://" + url[len(prefix):]
+            url = "postgresql+asyncpg://" + url[len(prefix) :]
             break
 
     parts = _url.urlsplit(url)
@@ -257,6 +257,20 @@ class Settings(BaseSettings):
     # link to a hosted form instead).
     public_api_base_url: str = "https://abos-api.onrender.com"
 
+    # Google Drive one-click connect (OAuth authorization-code flow). The
+    # deployment registers ONE Google Cloud OAuth client (Drive scope) and sets
+    # these; founders then connect their own Drive with a single button — no
+    # per-company Cloud Console setup. The redirect URI to register on the client
+    # is "<public_api_base_url>/integrations/google-drive/callback". When either is
+    # unset the Connect button is hidden and Drive cannot be connected (the file
+    # tools report the capability unsupported, exactly as before).
+    google_oauth_client_id: str = ""
+    google_oauth_client_secret: str = ""
+    # Where to send the founder's browser once the OAuth callback finishes — the
+    # web app, so we can land them back on the company's Settings page. Defaults to
+    # the hosted web app; override per environment (no trailing slash).
+    web_base_url: str = "https://abos-web.onrender.com"
+
     # CORS: browser origins allowed to call the API. Comma-separated in the
     # environment, e.g.
     #   ABOS_CORS_ALLOW_ORIGINS=https://abos-web.onrender.com,http://localhost:3000
@@ -266,9 +280,7 @@ class Settings(BaseSettings):
     # bearer token, not cookies, so this costs nothing).
     # NoDecode keeps pydantic-settings from JSON-decoding the env value, so the
     # validator below can accept a plain comma-separated string.
-    cors_allow_origins: Annotated[list[str], NoDecode] = Field(
-        default_factory=lambda: ["*"]
-    )
+    cors_allow_origins: Annotated[list[str], NoDecode] = Field(default_factory=lambda: ["*"])
 
     @field_validator("cors_allow_origins", mode="before")
     @classmethod

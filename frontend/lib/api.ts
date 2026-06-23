@@ -28,7 +28,7 @@ export interface TokenResponse { access_token: string; token_type: string }
 export interface Company { id: string; name: string; status: string; mission_id: string | null; email_from: string | null }
 export interface ApiKey { id: string; provider: string; key_fingerprint: string; status: string }
 export interface CloudflareStatus { configured: boolean; account_id: string | null }
-export interface GoogleDriveStatus { configured: boolean; root_folder_id: string | null }
+export interface GoogleDriveStatus { configured: boolean; root_folder_id: string | null; connect_available: boolean }
 export interface CompanyFile {
   id: string; category: string; name: string; description: string | null;
   mime_type: string; folder_path: string; web_url: string | null;
@@ -181,14 +181,11 @@ export const api = {
 
   googleDriveStatus: (companyId: string) =>
     req<GoogleDriveStatus>(`/companies/${companyId}/integrations/google-drive`),
-  setGoogleDrive: (
-    companyId: string,
-    creds: { client_id: string; client_secret: string; refresh_token: string; root_folder_id?: string },
-  ) =>
-    req<GoogleDriveStatus>(`/companies/${companyId}/integrations/google-drive`, {
-      method: "PUT",
-      body: JSON.stringify(creds),
-    }),
+  googleDriveConnect: (companyId: string) =>
+    req<{ authorize_url: string }>(
+      `/companies/${companyId}/integrations/google-drive/connect`,
+      { method: "POST" },
+    ),
   clearGoogleDrive: (companyId: string) =>
     req<void>(`/companies/${companyId}/integrations/google-drive`, { method: "DELETE" }),
 

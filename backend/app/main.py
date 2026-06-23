@@ -106,6 +106,7 @@ def create_app() -> FastAPI:
     app.include_router(onboarding.router)
     app.include_router(apikeys.router)
     app.include_router(integrations.router)
+    app.include_router(integrations.callback_router)
     app.include_router(files.router)
     app.include_router(mcp.router)
     app.include_router(artifacts.router)

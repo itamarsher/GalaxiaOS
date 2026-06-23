@@ -35,9 +35,7 @@ async def set_cloudflare(
     await apikeys.store_key(db, company_id=company_id, provider=_CLOUDFLARE, plaintext=payload)
 
 
-async def get_cloudflare(
-    db: AsyncSession, *, company_id: uuid.UUID
-) -> tuple[str, str] | None:
+async def get_cloudflare(db: AsyncSession, *, company_id: uuid.UUID) -> tuple[str, str] | None:
     """Return ``(api_token, account_id)`` for the company, or ``None`` if unset."""
     raw = await apikeys.get_plaintext_key(db, company_id=company_id, provider=_CLOUDFLARE)
     if not raw:
@@ -76,9 +74,7 @@ async def clear_cloudflare(db: AsyncSession, *, company_id: uuid.UUID) -> bool:
     return await apikeys.revoke_key(db, company_id=company_id, key_id=row.id)
 
 
-async def resolve_site_host(
-    db: AsyncSession, *, company_id: uuid.UUID
-) -> SiteHost | None:
+async def resolve_site_host(db: AsyncSession, *, company_id: uuid.UUID) -> SiteHost | None:
     """The company's site host — enabled only when it has saved Cloudflare creds."""
     creds = await get_cloudflare(db, company_id=company_id)
     if creds is None:
@@ -88,9 +84,7 @@ async def resolve_site_host(
     return CloudflareSiteHost(token=creds[0], account_id=creds[1])
 
 
-async def resolve_dns_provider(
-    db: AsyncSession, *, company_id: uuid.UUID
-) -> DnsProvider | None:
+async def resolve_dns_provider(db: AsyncSession, *, company_id: uuid.UUID) -> DnsProvider | None:
     """The company's DNS provider — enabled only when it has saved Cloudflare creds."""
     creds = await get_cloudflare(db, company_id=company_id)
     if creds is None:
@@ -103,49 +97,77 @@ async def resolve_dns_provider(
 # ─────────────────────────── Google Drive (files) ───────────────────────────
 
 
-async def set_google_drive(
+async def set_google_drive_refresh(
     db: AsyncSession,
     *,
     company_id: uuid.UUID,
-    client_id: str,
-    client_secret: str,
     refresh_token: str,
     root_folder_id: str | None = None,
 ) -> None:
-    """Store the company's Google OAuth bundle (whole JSON envelope-encrypted)."""
+    """Store the company's Drive refresh token (envelope-encrypted JSON).
+
+    Only the per-company ``refresh_token`` (and an optional ``root_folder_id``) is
+    saved here; the OAuth ``client_id`` / ``client_secret`` belong to the
+    deployment's Google app (config), so they are not stored per company.
+    """
     payload = json.dumps(
-        {
-            "client_id": client_id,
-            "client_secret": client_secret,
-            "refresh_token": refresh_token,
-            "root_folder_id": root_folder_id or "root",
-        }
+        {"refresh_token": refresh_token, "root_folder_id": root_folder_id or "root"}
     )
     await apikeys.store_key(db, company_id=company_id, provider=_GOOGLE_DRIVE, plaintext=payload)
 
 
 async def get_google_drive(db: AsyncSession, *, company_id: uuid.UUID) -> dict | None:
-    """Return the company's stored Google Drive OAuth bundle, or ``None`` if unset."""
+    """Return the company's stored Drive bundle, or ``None`` if unset/invalid.
+
+    Only the ``refresh_token`` is required. Legacy bundles may also carry their own
+    ``client_id`` / ``client_secret`` (from the old paste-the-secrets flow); those
+    still resolve, falling back to the deployment app only when absent.
+    """
     raw = await apikeys.get_plaintext_key(db, company_id=company_id, provider=_GOOGLE_DRIVE)
     if not raw:
         return None
     try:
         data = json.loads(raw)
-        # Require the three secrets; anything else (root_folder_id) is optional.
-        for field in ("client_id", "client_secret", "refresh_token"):
-            if not data.get(field):
-                return None
-        return data
     except ValueError:
         return None
+    if not data.get("refresh_token"):
+        return None
+    return data
 
 
 async def google_drive_status(db: AsyncSession, *, company_id: uuid.UUID) -> dict:
-    """UI-safe status: whether Drive is configured (never returns the secrets)."""
+    """UI-safe status: whether Drive is connected (never returns the secrets) and
+    whether one-click connect is available on this deployment."""
+    from app.integrations import gdrive_oauth
+
     creds = await get_google_drive(db, company_id=company_id)
-    if creds is None:
-        return {"configured": False, "root_folder_id": None}
-    return {"configured": True, "root_folder_id": creds.get("root_folder_id") or "root"}
+    return {
+        "configured": creds is not None,
+        "root_folder_id": (creds or {}).get("root_folder_id") or "root" if creds else None,
+        "connect_available": gdrive_oauth.connect_configured(),
+    }
+
+
+async def complete_google_drive_oauth(
+    db: AsyncSession, *, company_id: uuid.UUID, code: str, redirect_uri: str
+) -> None:
+    """Finish the Connect flow: trade ``code`` for a refresh token, verify, store.
+
+    Verifying before persisting (one token refresh + reaching the store root)
+    means a bundle that wouldn't actually work is never saved.
+    """
+    from app.config import settings
+    from app.integrations import gdrive_oauth
+
+    refresh_token = await gdrive_oauth.exchange_code_for_refresh_token(
+        code=code, redirect_uri=redirect_uri
+    )
+    await verify_google_drive(
+        client_id=settings.google_oauth_client_id,
+        client_secret=settings.google_oauth_client_secret,
+        refresh_token=refresh_token,
+    )
+    await set_google_drive_refresh(db, company_id=company_id, refresh_token=refresh_token)
 
 
 async def clear_google_drive(db: AsyncSession, *, company_id: uuid.UUID) -> bool:
@@ -197,11 +219,14 @@ async def resolve_file_provider(db: AsyncSession, *, company_id: uuid.UUID) -> F
     creds = await get_google_drive(db, company_id=company_id)
     if creds is None:
         return None
+    from app.config import settings
     from app.integrations.gdrive import GoogleDriveFileProvider
 
     return GoogleDriveFileProvider(
-        client_id=creds["client_id"],
-        client_secret=creds["client_secret"],
+        # New bundles store only the refresh token and use the deployment's OAuth
+        # app; legacy bundles carry their own client_id/secret, which win when set.
+        client_id=creds.get("client_id") or settings.google_oauth_client_id,
+        client_secret=creds.get("client_secret") or settings.google_oauth_client_secret,
         refresh_token=creds["refresh_token"],
         root_folder_id=creds.get("root_folder_id") or "root",
     )

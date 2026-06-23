@@ -210,23 +210,18 @@ class CloudflareStatusOut(BaseModel):
 
 
 # ── Integrations (Google Drive file store) ───────────────────────────────────
-class GoogleDriveCredsRequest(BaseModel):
-    """The OAuth bundle a founder pastes to connect their personal Drive.
-
-    All three are required; ``root_folder_id`` is optional and defaults to the
-    Drive root ("root"). The whole bundle is stored envelope-encrypted and never
-    returned.
-    """
-
-    client_id: str = Field(min_length=8)
-    client_secret: str = Field(min_length=8)
-    refresh_token: str = Field(min_length=8)
-    root_folder_id: str | None = None
-
-
 class GoogleDriveStatusOut(BaseModel):
     configured: bool
     root_folder_id: str | None = None
+    # Whether one-click "Connect with Google" is available (i.e. the deployment
+    # has a Google OAuth app configured). When false, Drive can't be connected.
+    connect_available: bool = False
+
+
+class GoogleDriveConnectOut(BaseModel):
+    """The Google consent URL the browser is redirected to, to start connect."""
+
+    authorize_url: str
 
 
 class CompanyFileOut(ORMModel):
@@ -247,7 +242,9 @@ class McpServerCreateRequest(BaseModel):
     label: str | None = Field(default=None, max_length=255)
     url: str = Field(min_length=4, max_length=1024)
     transport: str = "http"
-    auth_token: str | None = Field(default=None, description="Optional bearer token; encrypted at rest.")
+    auth_token: str | None = Field(
+        default=None, description="Optional bearer token; encrypted at rest."
+    )
 
 
 class McpServerOut(BaseModel):

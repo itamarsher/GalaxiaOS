@@ -47,3 +47,35 @@ def decode_access_token(token: str) -> uuid.UUID | None:
         return uuid.UUID(sub) if sub else None
     except (JWTError, ValueError):
         return None
+
+
+# OAuth ``state`` for the Google Drive connect flow. It is a short-lived JWT
+# carrying the company id, signed with the same secret as access tokens: the
+# unauthenticated callback can trust the company id without a bearer token (the
+# state proves an authenticated member started the flow), which is the standard
+# CSRF defense for an OAuth redirect. A dedicated ``aud`` keeps it from being
+# accepted anywhere an access token is.
+_OAUTH_STATE_AUDIENCE = "gdrive-oauth"
+
+
+def create_oauth_state(company_id: uuid.UUID, *, minutes: int = 10) -> str:
+    expire = datetime.now(UTC) + timedelta(minutes=minutes)
+    payload = {"sub": str(company_id), "exp": expire, "aud": _OAUTH_STATE_AUDIENCE}
+    return jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)
+
+
+def decode_oauth_state(state: str) -> uuid.UUID | None:
+    try:
+        payload = jwt.decode(
+            state,
+            settings.jwt_secret,
+            algorithms=[settings.jwt_algorithm],
+            audience=_OAUTH_STATE_AUDIENCE,
+            # Require the aud claim so a plain access token (which has none) can
+            # never be replayed as OAuth state.
+            options={"require_aud": True},
+        )
+        sub = payload.get("sub")
+        return uuid.UUID(sub) if sub else None
+    except (JWTError, ValueError):
+        return None

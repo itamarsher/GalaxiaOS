@@ -12,11 +12,14 @@ import uuid
 
 import pytest
 
+from app.config import settings
+from app.integrations import gdrive_oauth
 from app.integrations.files import FileProvider, FileProviderError, FolderRef, StoredFile
 from app.integrations.gdrive import GoogleDriveFileProvider, _escape_query_value
 from app.models.enums import FileCategory
 from app.runtime.tools import TOOL_SPECS
 from app.runtime.tools.files import HANDLERS, SPECS
+from app.security import create_oauth_state, decode_oauth_state
 from app.services import files as files_svc
 
 # ─────────────────────────── Google Drive parsers ───────────────────────────
@@ -105,6 +108,84 @@ def test_provider_unconfigured_no_network():
     # Constructing the adapter must not touch the network (creds only resolved on use).
     p = GoogleDriveFileProvider(client_id="a" * 8, client_secret="b" * 8, refresh_token="c" * 8)
     assert p._root_folder_id == "root"
+
+
+# ─────────────────────── Google Drive one-click connect (OAuth) ───────────────────────
+
+
+def test_redirect_uri_appends_callback_and_strips_slash():
+    assert (
+        gdrive_oauth.redirect_uri("https://api.example.com/")
+        == "https://api.example.com/integrations/google-drive/callback"
+    )
+
+
+def test_authorize_url_has_offline_consent_and_params():
+    url = gdrive_oauth.authorize_url(
+        client_id="cid", redirect_uri="https://api/x/callback", state="STATE"
+    )
+    assert url.startswith("https://accounts.google.com/o/oauth2/v2/auth?")
+    assert "client_id=cid" in url
+    assert "response_type=code" in url
+    assert "access_type=offline" in url
+    assert "prompt=consent" in url
+    assert "state=STATE" in url
+    # redirect_uri and scope are URL-encoded
+    assert "redirect_uri=https%3A%2F%2Fapi%2Fx%2Fcallback" in url
+    assert "drive.file" in url
+
+
+def test_exchange_form_shape():
+    form = gdrive_oauth.exchange_form(
+        code="CODE", client_id="cid", client_secret="sec", redirect_uri="https://r"
+    )
+    assert form == {
+        "code": "CODE",
+        "client_id": "cid",
+        "client_secret": "sec",
+        "redirect_uri": "https://r",
+        "grant_type": "authorization_code",
+    }
+
+
+def test_parse_exchange_returns_refresh_token():
+    assert gdrive_oauth.parse_exchange(200, {"refresh_token": "1//abc"}) == "1//abc"
+
+
+def test_parse_exchange_error_raises():
+    with pytest.raises(FileProviderError) as exc:
+        gdrive_oauth.parse_exchange(400, {"error_description": "bad code"})
+    assert "bad code" in str(exc.value)
+
+
+def test_parse_exchange_missing_refresh_token_raises():
+    with pytest.raises(FileProviderError):
+        gdrive_oauth.parse_exchange(200, {"access_token": "at"})
+
+
+def test_connect_configured_reflects_settings(monkeypatch):
+    monkeypatch.setattr(settings, "google_oauth_client_id", "")
+    monkeypatch.setattr(settings, "google_oauth_client_secret", "")
+    assert gdrive_oauth.connect_configured() is False
+    monkeypatch.setattr(settings, "google_oauth_client_id", "cid")
+    monkeypatch.setattr(settings, "google_oauth_client_secret", "sec")
+    assert gdrive_oauth.connect_configured() is True
+
+
+def test_oauth_state_round_trip():
+    cid = uuid.uuid4()
+    assert decode_oauth_state(create_oauth_state(cid)) == cid
+
+
+def test_oauth_state_rejects_garbage():
+    assert decode_oauth_state("not-a-jwt") is None
+
+
+def test_oauth_state_rejects_access_token():
+    # An access token (different audience) must not pass as OAuth state.
+    from app.security import create_access_token
+
+    assert decode_oauth_state(create_access_token(uuid.uuid4())) is None
 
 
 # ─────────────────────────── files service taxonomy ───────────────────────────

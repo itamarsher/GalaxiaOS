@@ -149,35 +149,30 @@ function CloudflareCard({ companyId }: { companyId: string }) {
 
 // Google Drive is the company's file store: agents file deliverables, financial
 // records, data-room docs, brand guidelines and received files into the founder's
-// own Drive under .abos/<company>/…. Bring-your-own OAuth: paste the client id,
-// secret and a refresh token (the whole bundle is encrypted at rest).
+// own Drive under .abos/<company>/…. One-click connect: the button sends the
+// founder to Google's consent screen; the callback stores a refresh token. No
+// Cloud Console setup — the deployment owns the OAuth app.
 function GoogleDriveCard({ companyId }: { companyId: string }) {
   const status = usePoll(() => api.googleDriveStatus(companyId), 0, [companyId]);
   const configured = status.data?.configured ?? false;
-  const [clientId, setClientId] = useState("");
-  const [clientSecret, setClientSecret] = useState("");
-  const [refreshToken, setRefreshToken] = useState("");
-  const [root, setRoot] = useState("");
+  const canConnect = status.data?.connect_available ?? false;
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
-  const save = async () => {
-    if (clientId.trim().length < 8 || clientSecret.trim().length < 8 || refreshToken.trim().length < 8) {
-      setErr("Enter the OAuth client id, client secret and a refresh token."); return;
-    }
+  // Outcome of the OAuth round-trip, surfaced via ?gdrive=… on return. Read from
+  // the URL on the client (avoids a useSearchParams suspense boundary).
+  const [outcome, setOutcome] = useState<string | null>(null);
+  useEffect(() => {
+    setOutcome(new URLSearchParams(window.location.search).get("gdrive"));
+  }, []);
+
+  const connect = async () => {
     setBusy(true); setErr(null);
     try {
-      await api.setGoogleDrive(companyId, {
-        client_id: clientId.trim(),
-        client_secret: clientSecret.trim(),
-        refresh_token: refreshToken.trim(),
-        root_folder_id: root.trim() || undefined,
-      });
-      setClientId(""); setClientSecret(""); setRefreshToken(""); setRoot("");
-      status.reload();
+      const { authorize_url } = await api.googleDriveConnect(companyId);
+      window.location.href = authorize_url; // hand off to Google's consent screen
     } catch (e) {
       setErr(String(e instanceof Error ? e.message : e));
-    } finally {
       setBusy(false);
     }
   };
@@ -199,9 +194,8 @@ function GoogleDriveCard({ companyId }: { companyId: string }) {
       <p className="muted" style={{ fontSize: 13, margin: "6px 0 0" }}>
         Your agents file every deliverable, financial record, data-room document, brand
         guideline and received file into your own Drive under <code>.abos/&lt;company&gt;/…</code> —
-        ready for audits and due diligence. Create an OAuth client (Drive scope) in Google
-        Cloud, authorize it, and paste the client id, secret and refresh token. The bundle is
-        encrypted at rest and verified before saving.
+        ready for audits and due diligence. Connect with one click; ABOS only ever touches
+        the files it creates.
       </p>
 
       {configured && status.data?.root_folder_id && (
@@ -211,25 +205,29 @@ function GoogleDriveCard({ companyId }: { companyId: string }) {
         </div>
       )}
 
-      <label>{configured ? "Replace OAuth client id" : "OAuth client id"}</label>
-      <input type="text" value={clientId} placeholder="…apps.googleusercontent.com"
-        onChange={(e) => setClientId(e.target.value)} />
-      <label>OAuth client secret</label>
-      <input type="password" value={clientSecret} placeholder="GOCSPX-…"
-        onChange={(e) => setClientSecret(e.target.value)} />
-      <label>Refresh token</label>
-      <input type="password" value={refreshToken} placeholder="1//0g…"
-        onChange={(e) => setRefreshToken(e.target.value)} />
-      <label>Root folder id (optional — defaults to your Drive root)</label>
-      <input type="text" value={root} placeholder="root"
-        onChange={(e) => setRoot(e.target.value)}
-        onKeyDown={(e) => e.key === "Enter" && save()} />
-      <div className="btnrow">
-        <button disabled={busy || !clientId.trim() || !clientSecret.trim() || !refreshToken.trim()} onClick={save}>
-          {configured ? "Update" : "Connect"}
-        </button>
-        {configured && <button className="ghost danger" disabled={busy} onClick={remove}>Disconnect</button>}
-      </div>
+      {outcome === "connected" && !configured && (
+        <div className="muted" style={{ fontSize: 13, marginTop: 10 }}>Connecting…</div>
+      )}
+      {outcome && outcome !== "connected" && (
+        <div className="err">
+          {outcome === "denied"
+            ? "Authorization was cancelled."
+            : "Couldn't connect Google Drive. Please try again."}
+        </div>
+      )}
+
+      {!canConnect && !configured ? (
+        <p className="muted" style={{ fontSize: 13, marginTop: 10 }}>
+          Google Drive connect isn&apos;t enabled on this deployment.
+        </p>
+      ) : (
+        <div className="btnrow">
+          <button disabled={busy} onClick={connect}>
+            {busy ? "Redirecting…" : configured ? "Reconnect with Google" : "Connect with Google"}
+          </button>
+          {configured && <button className="ghost danger" disabled={busy} onClick={remove}>Disconnect</button>}
+        </div>
+      )}
       {err && <div className="err">{err}</div>}
     </div>
   );
