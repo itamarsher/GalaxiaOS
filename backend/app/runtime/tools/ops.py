@@ -105,8 +105,8 @@ async def _log_ops_event(db, ctx, *, agent: Agent, task: Task, args: dict) -> To
         db,
         company_id=task.company_id,
         type=MemoryType.result,
-        title=f"Ops {severity}: {title}"[:500],
-        content=content[:2000],
+        title=f"Ops {severity}: {title}",
+        content=content,
         source_task_id=task.id,
     )
     return ToolOutcome(observation=f"logged ops event [{severity}] {title[:80]}")

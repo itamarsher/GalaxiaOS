@@ -35,12 +35,10 @@ class MarketplaceBackend:
                 if agent.marketplace_listing_id
                 else None,
                 description=f"Marketplace invocation: {agent.name}",
-                payload={"goal": task.goal[:500], "role": agent.role.value},
+                payload={"goal": task.goal, "role": agent.role.value},
             )
 
-        result = (
-            f"Hired agent '{agent.name}' ({agent.role.value}) completed: {task.goal[:280]}"
-        )
+        result = f"Hired agent '{agent.name}' ({agent.role.value}) completed: {task.goal}"
 
         async with ctx.session_factory() as db:
             await set_tenant(db, task.company_id)

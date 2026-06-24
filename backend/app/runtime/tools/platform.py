@@ -227,7 +227,7 @@ async def _record_request_internally(
         existing.structured = structured
         existing.content = (
             f"Recorded internally{label_part} — no external issue tracker is connected. "
-            f"Demand so far: {count} request(s) from agents.\n\n{body[:2000]}"
+            f"Demand so far: {count} request(s) from agents.\n\n{body}"
         )
         await db.flush()
         return ToolOutcome(
@@ -246,7 +246,7 @@ async def _record_request_internally(
         content=(
             f"Recorded internally{label_part} — no external issue tracker is connected, so "
             "this was saved to company memory rather than filed in a tracker. Demand so "
-            f"far: 1 request.\n\n{body[:2000]}"
+            f"far: 1 request.\n\n{body}"
         ),
         source_task_id=task.id,
         structured={"request_count": 1, "kind": "platform_request"},
@@ -292,7 +292,7 @@ async def _open_issue(db, ctx, *, agent: Agent, task: Task, args: dict) -> ToolO
             title=f"Issue filed: {title[:80]}",
             content=(
                 f"Tracker issue #{result.number} opened via {result.provider}{label_part}.\n"
-                f"URL: {result.url}\n\n{body[:2000]}"
+                f"URL: {result.url}\n\n{body}"
             ),
             source_task_id=task.id,
         )

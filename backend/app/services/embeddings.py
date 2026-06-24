@@ -231,9 +231,19 @@ def embed(text: str) -> list[float] | None:
 
 async def embed_text(text: str | None) -> list[float] | None:
     """Embed ``text`` with the configured embedder. Never raises; ``None`` on any
-    failure or empty input, so memory writes/recall degrade gracefully."""
+    failure or empty input, so memory writes/recall degrade gracefully.
+
+    The input is capped to ``embeddings_max_input_chars`` first. This is the one
+    place a length bound belongs: real embedding APIs (e.g. OpenAI's) reject input
+    over a fixed token limit, so an oversized memory would otherwise embed to
+    nothing and become recall-invisible. Callers therefore store the *full* content
+    and let this seam bound only what gets embedded — the title + opening carry the
+    semantic signal, so a clipped embedding still retrieves well."""
     if not text:
         return None
+    limit = settings.embeddings_max_input_chars
+    if limit and len(text) > limit:
+        text = text[:limit]
     embedder = get_embedder()
     aembed = getattr(embedder, "aembed", None)
     if aembed is not None:

@@ -88,7 +88,7 @@ def clip(text: str | None, limit: int, *, unit: str = "characters") -> str:
     """
     if not text:
         return text or ""
-    if len(text) <= limit:
+    if limit <= 0 or len(text) <= limit:  # limit <= 0 disables the cap
         return text
     return text[:limit] + truncation_notice(len(text) - limit, unit)
 

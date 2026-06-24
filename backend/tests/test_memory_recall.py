@@ -85,6 +85,42 @@ async def test_embed_text_prefers_async_embedder(monkeypatch):
     assert vec[0] == 1.0  # came from aembed, not embed
 
 
+@pytest.mark.asyncio
+async def test_embed_text_caps_input_to_embedder(monkeypatch):
+    """Oversized content is clipped to ``embeddings_max_input_chars`` before it
+    reaches the embedder, so a real API's token limit can't drop the vector."""
+    seen: dict = {}
+
+    class _Recorder:
+        dim = DIM
+
+        def embed(self, text):
+            seen["len"] = len(text)
+            return [1.0] * DIM
+
+    monkeypatch.setattr(embeddings, "_embedder", _Recorder())
+    monkeypatch.setattr(embeddings.settings, "embeddings_max_input_chars", 100)
+    await embeddings.embed_text("a" * 5000)
+    assert seen["len"] == 100
+
+
+@pytest.mark.asyncio
+async def test_embed_text_cap_disabled_passes_full_text(monkeypatch):
+    seen: dict = {}
+
+    class _Recorder:
+        dim = DIM
+
+        def embed(self, text):
+            seen["len"] = len(text)
+            return [1.0] * DIM
+
+    monkeypatch.setattr(embeddings, "_embedder", _Recorder())
+    monkeypatch.setattr(embeddings.settings, "embeddings_max_input_chars", 0)
+    await embeddings.embed_text("a" * 5000)
+    assert seen["len"] == 5000
+
+
 # ─────────────────────────── recency-decayed re-ranking ───────────────────────────
 
 
