@@ -124,6 +124,8 @@ class GitHubIssueTracker:
         try:
             async with self._client() as client:
                 return await self._create_issue(client, repo, headers, title, body, labels)
+        except httpx.HTTPStatusError as exc:
+            raise IssueTrackerError(self._explain_status(exc, repo)) from exc
         except httpx.HTTPError as exc:
             raise IssueTrackerError(f"GitHub request failed: {exc}") from exc
         except ValueError as exc:  # non-JSON body
@@ -159,10 +161,40 @@ class GitHubIssueTracker:
                     created=True,
                     demand=demand,
                 )
+        except httpx.HTTPStatusError as exc:
+            raise IssueTrackerError(self._explain_status(exc, repo)) from exc
         except httpx.HTTPError as exc:
             raise IssueTrackerError(f"GitHub request failed: {exc}") from exc
         except ValueError as exc:  # non-JSON body
             raise IssueTrackerError(f"GitHub returned non-JSON: {exc}") from exc
+
+    @staticmethod
+    def _explain_status(exc: httpx.HTTPStatusError, repo: str) -> str:
+        """Turn a GitHub HTTP error into an actionable message.
+
+        The token *is* set (we only get here after the credential check), so the
+        Platform agent must not report it as missing. Distinguish "rejected" (bad/
+        expired token), "forbidden" (insufficient scope or rate limit) and "not
+        found" (token can't see the repo) so the founder fixes the right thing.
+        """
+        status = exc.response.status_code
+        if status == 401:
+            return (
+                "GitHub rejected the token (401 Unauthorized): it is set but invalid "
+                "or expired — regenerate the GitHub token in Settings."
+            )
+        if status == 403:
+            return (
+                "GitHub denied the request (403 Forbidden): the token is set but lacks "
+                f"permission to open issues on {repo} (it needs the 'repo'/'issues' "
+                "scope), or it is rate-limited."
+            )
+        if status == 404:
+            return (
+                f"GitHub returned 404 for {repo}: the token is set but cannot see that "
+                "repository — check the repo name and that the token has access to it."
+            )
+        return f"GitHub request failed ({status}): {exc}"
 
     async def _create_issue(
         self,

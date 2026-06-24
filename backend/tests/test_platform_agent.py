@@ -389,6 +389,58 @@ async def test_report_issue_title_match_is_exact_not_fuzzy():
     assert result.number == 8
 
 
+@pytest.mark.asyncio
+async def test_report_issue_explains_rejected_token_not_missing():
+    """A set-but-invalid token (401) must NOT be reported as 'token missing'.
+
+    Regression: a founder who entered a GitHub token in onboarding saw the agent
+    claim the key "wasn't set" — really GitHub rejected an expired/invalid token.
+    """
+    from app.integrations.issues import IssueTrackerError
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/search/issues":
+            return httpx.Response(200, json={"items": []})
+        return httpx.Response(401, json={"message": "Bad credentials"})
+
+    with pytest.raises(IssueTrackerError) as exc:
+        await _github_tracker(handler).report_issue(title="x", body="y", labels=None)
+    msg = str(exc.value)
+    assert "401" in msg and "is set" in msg
+    assert "missing" not in msg.lower()
+
+
+@pytest.mark.asyncio
+async def test_report_issue_explains_forbidden_scope():
+    """403 names the scope/permission problem rather than a generic failure."""
+    from app.integrations.issues import IssueTrackerError
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/search/issues":
+            return httpx.Response(200, json={"items": []})
+        return httpx.Response(403, json={"message": "Forbidden"})
+
+    with pytest.raises(IssueTrackerError) as exc:
+        await _github_tracker(handler).report_issue(title="x", body="y", labels=None)
+    msg = str(exc.value)
+    assert "403" in msg and "o/r" in msg
+
+
+@pytest.mark.asyncio
+async def test_open_issue_explains_repo_not_found():
+    """404 says the token can't see the repo, not that it's unset."""
+    from app.integrations.issues import IssueTrackerError
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(404, json={"message": "Not Found"})
+
+    with pytest.raises(IssueTrackerError) as exc:
+        await _github_tracker(handler).open_issue(title="x", body="y", labels=None)
+    msg = str(exc.value)
+    assert "404" in msg and "o/r" in msg
+    assert "missing" not in msg.lower()
+
+
 # ── Fleet membership & dispatch isolation ─────────────────────────────────────
 
 
