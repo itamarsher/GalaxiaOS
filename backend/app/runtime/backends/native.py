@@ -177,7 +177,8 @@ class NativeBackend:
 
             if not resp.tool_calls:
                 return await self._finish_or_audit(
-                    ctx, agent, task, {"summary": resp.text[:2000]}
+                    ctx, agent, task,
+                    {"summary": resp.text[: settings.max_result_summary_chars]},
                 )
 
             results: list[ToolResultBlock] = []

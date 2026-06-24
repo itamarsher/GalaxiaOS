@@ -104,6 +104,17 @@ class Settings(BaseSettings):
     compaction_trigger_messages: int = 24
     compaction_keep_recent_messages: int = 8
 
+    # How much of a result to keep when surfacing it, so a large deliverable
+    # isn't squeezed down to a sentence. ``max_result_summary_chars`` bounds a
+    # summary captured from a plain-text finish (no ``report_result`` call) —
+    # already limited by ``max_response_tokens``, this is just a defensive cap.
+    # The ``collect_results_*`` pair bounds what a synthesizing agent sees when
+    # it gathers finished sub-tasks: generous per child, with a total ceiling so
+    # a fan-out of large briefs can't overrun the synthesizer's context window.
+    max_result_summary_chars: int = 32_000
+    collect_results_summary_chars: int = 4_000
+    collect_results_total_chars: int = 24_000
+
     # MCP (Model Context Protocol): founders can connect their own tool servers
     # (their CRM, analytics, internal APIs) so agents gain real tools without any
     # ABOS code change. MCP tools are screened by governance and never faked: a

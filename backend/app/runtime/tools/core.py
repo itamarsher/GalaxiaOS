@@ -725,7 +725,8 @@ async def _collect_results(db, ctx, *, agent: Agent, task: Task, args: dict) -> 
         lines.append("Completed sub-task results:")
         for child in done:
             summary = (child.output or {}).get("summary", "") if child.output else ""
-            lines.append(f"- {child.goal[:80]}: {summary[:300] or '(no summary)'}")
+            clipped = summary[: settings.collect_results_summary_chars]
+            lines.append(f"- {child.goal[:80]}: {clipped or '(no summary)'}")
     if failed:
         lines.append(f"Failed/blocked sub-tasks ({len(failed)}): " + ", ".join(c.goal[:50] for c in failed))
     if pending:
@@ -734,7 +735,7 @@ async def _collect_results(db, ctx, *, agent: Agent, task: Task, args: dict) -> 
             f"Still running ({len(pending)}): " + ", ".join(c.goal[:50] for c in pending)
             + ". Check back before synthesizing — these have not reported yet."
         )
-    return ToolOutcome(observation="\n".join(lines)[:2000])
+    return ToolOutcome(observation="\n".join(lines)[: settings.collect_results_total_chars])
 
 
 async def _request_decision(db, ctx, *, agent: Agent, task: Task, args: dict) -> ToolOutcome:
