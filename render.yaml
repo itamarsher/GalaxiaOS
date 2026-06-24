@@ -92,9 +92,17 @@ services:
     dockerContext: ./frontend
     autoDeploy: false
     envVars:
-      # Baked into the client bundle at build time; point at the API's URL.
+      # Baked into the client bundle at build time. Auto-wired from the API
+      # service so a fresh blueprint needs no manual dashboard step: Render
+      # supplies the API's host (no scheme), and the client normalizes it to an
+      # absolute https:// URL (see frontend/lib/api.ts). NB: this is a build-time
+      # value — after it changes you must rebuild abos-web (Clear build cache &
+      # deploy), not just restart it.
       - key: NEXT_PUBLIC_API_BASE_URL
-        sync: false
+        fromService:
+          type: web
+          name: abos-api
+          property: host
 
 envVarGroups:
   - name: abos-shared

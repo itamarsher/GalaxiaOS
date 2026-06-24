@@ -1,6 +1,29 @@
 // Minimal typed API client for the ABOS backend.
 
-const BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
+// Resolve the API base URL. NEXT_PUBLIC_* is inlined at BUILD time, so this is
+// fixed when the bundle is built. Render auto-wires it from the API service's
+// host (no scheme), so accept a bare host ("abos-api.onrender.com") as well as a
+// full URL, and normalize to an absolute origin with no trailing slash. Falls
+// back to localhost for local dev; in a production build a missing value means
+// the deploy was misconfigured (every request would hit the user's own machine),
+// so surface it loudly instead of failing silently with a bare login screen.
+function resolveBase(): string {
+  const raw = process.env.NEXT_PUBLIC_API_BASE_URL?.trim();
+  if (!raw) {
+    if (process.env.NODE_ENV === "production") {
+      // eslint-disable-next-line no-console
+      console.error(
+        "NEXT_PUBLIC_API_BASE_URL is not set; the app cannot reach the API. " +
+          "Set it on the web service and rebuild (Clear build cache & deploy).",
+      );
+    }
+    return "http://localhost:8000";
+  }
+  const withScheme = /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
+  return withScheme.replace(/\/+$/, "");
+}
+
+const BASE = resolveBase();
 
 function token(): string | null {
   if (typeof window === "undefined") return null;
