@@ -30,6 +30,7 @@ from app.models.enums import (
 from app.runtime import breakers
 from app.runtime.backends import get_backend
 from app.runtime.context import RuntimeContext
+from app.runtime.tools.base import clip
 from app.services import budget as budget_svc
 from app.services import tasks as task_svc
 
@@ -158,7 +159,10 @@ async def run_task(ctx: RuntimeContext, task_id: uuid.UUID) -> dict:
         # it could never recover. For a task the CEO delegated, hand the failure to
         # the CEO to decide whether it's transient (re-run) or persistent (abandon);
         # otherwise mark it failed (visible, terminal).
-        error_text = f"{type(exc).__name__}: {exc}"[:1000]
+        # Keep the failure detail the CEO needs to judge transient-vs-persistent,
+        # but flag it when an unusually large error gets clipped (so it's never
+        # silently half-shown).
+        error_text = clip(f"{type(exc).__name__}: {exc}", 4000)
         review_task_id: uuid.UUID | None = None
         async with ctx.session_factory() as db:
             await set_tenant(db, task.company_id)

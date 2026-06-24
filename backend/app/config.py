@@ -114,6 +114,16 @@ class Settings(BaseSettings):
     max_result_summary_chars: int = 32_000
     collect_results_summary_chars: int = 4_000
     collect_results_total_chars: int = 24_000
+    # Web-search results returned to an agent are clipped to this (with an explicit
+    # truncation notice) — generous, since the loop now handles large context, but
+    # bounded so a verbose provider can't flood one observation. 0 disables.
+    web_search_max_chars: int = 8_000
+    # Upper bound on the text handed to the embedding model. Company Memory stores
+    # content in full (an unbounded ``Text`` column); only the *embedded* slice is
+    # capped here, because real embedding APIs reject input past a fixed token
+    # limit and would otherwise drop the vector entirely. ~24k chars ≈ 6k tokens,
+    # safely under OpenAI's 8,191-token ceiling. 0 disables the cap.
+    embeddings_max_input_chars: int = 24_000
 
     # MCP (Model Context Protocol): founders can connect their own tool servers
     # (their CRM, analytics, internal APIs) so agents gain real tools without any

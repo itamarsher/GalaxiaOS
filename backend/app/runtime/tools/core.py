@@ -563,7 +563,7 @@ async def _send_email(db, ctx, *, agent: Agent, task: Task, args: dict) -> ToolO
         company_id=task.company_id,
         type=MemoryType.result,
         title=f"Email to {args['to']}: {args['subject'][:80]}",
-        content=args["body"][:2000],
+        content=args["body"],
         source_task_id=task.id,
     )
     # Best-effort: keep a copy of the outbound email in the company's file store
@@ -698,9 +698,9 @@ async def _web_search(db, ctx, *, agent: Agent, task: Task, args: dict) -> ToolO
         return ToolOutcome(observation=f"web search failed: {exc}", is_error=True)
     if not results:
         return ToolOutcome(observation=f"no web results for {query!r}")
-    lines = [f"- {r.title} ({r.url})\n  {r.snippet[:200]}" for r in results]
+    lines = [f"- {r.title} ({r.url})\n  {r.snippet}" for r in results]
     observation = f"Web results for {query!r}:\n" + "\n".join(lines)
-    return ToolOutcome(observation=clip(observation, 2000))
+    return ToolOutcome(observation=clip(observation, settings.web_search_max_chars))
 
 
 #: Sub-task statuses that mean the child is still working (not yet collectible).

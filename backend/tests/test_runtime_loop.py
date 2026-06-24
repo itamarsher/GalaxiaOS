@@ -68,6 +68,9 @@ def test_clip_flags_only_when_actually_truncated() -> None:
     assert "6 more characters" in out
     # Unit label is configurable (e.g. list items).
     assert "3 more files" in clip("a" * 10, 7, unit="files")
+    # A non-positive limit disables the cap (returns content unchanged, unflagged).
+    assert clip("a" * 100, 0) == "a" * 100
+    assert clip("a" * 100, -1) == "a" * 100
 
 
 def test_effective_playbook_falls_back_to_default() -> None:
