@@ -17,6 +17,7 @@ from app.runtime.prompts import (
     render_agent_system,
 )
 from app.runtime.tools import TOOL_SPECS
+from app.runtime.tools.base import clip
 
 
 def test_system_prompt_has_all_slots() -> None:
@@ -49,6 +50,24 @@ def test_parallel_and_report_tools_registered() -> None:
     names = {spec.name for spec in TOOL_SPECS}
     for expected in {"dispatch_tasks", "create_report", "load_skill"}:
         assert expected in names
+
+
+def test_clip_flags_only_when_actually_truncated() -> None:
+    # Fits within the limit → returned verbatim, no spurious "truncated" marker.
+    assert clip("short", 100) == "short"
+    assert clip("exactly-ten", len("exactly-ten")) == "exactly-ten"
+    assert "truncated" not in clip("short", 100)
+    # Falsy inputs are safe and unflagged.
+    assert clip("", 100) == ""
+    assert clip(None, 100) == ""
+    # Over the limit → cut to the limit and flagged as incomplete, reporting the
+    # number of omitted units so the receiving agent knows it's partial.
+    out = clip("abcdefghij", 4)
+    assert out.startswith("abcd")
+    assert "truncated" in out
+    assert "6 more characters" in out
+    # Unit label is configurable (e.g. list items).
+    assert "3 more files" in clip("a" * 10, 7, unit="files")
 
 
 def test_effective_playbook_falls_back_to_default() -> None:

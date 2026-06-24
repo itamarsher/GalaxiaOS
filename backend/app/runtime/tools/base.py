@@ -65,6 +65,34 @@ async def consume_approval_grant(db, *, task_id: uuid.UUID, tool: str) -> bool:
     return False
 
 
+def truncation_notice(omitted: int, unit: str = "characters") -> str:
+    """The marker appended to any output we had to cut short.
+
+    Phrased so the receiving agent treats the content as incomplete (and, where it
+    can, fetches the rest or narrows its request) instead of mistaking a partial
+    result for the whole.
+    """
+    return (
+        f"\n\n[… truncated: {omitted} more {unit} omitted. This output is INCOMPLETE — "
+        "do not treat it as the full content.]"
+    )
+
+
+def clip(text: str | None, limit: int, *, unit: str = "characters") -> str:
+    """Truncate ``text`` to ``limit`` chars, flagging it ONLY when actually cut.
+
+    Returns the text unchanged (no marker) when it already fits, so an agent never
+    sees a spurious "truncated" note; appends :func:`truncation_notice` when content
+    was genuinely dropped. Use everywhere output handed back to an agent is length-
+    capped, so a clipped result is always self-describing.
+    """
+    if not text:
+        return text or ""
+    if len(text) <= limit:
+        return text
+    return text[:limit] + truncation_notice(len(text) - limit, unit)
+
+
 def unsupported_capability(capability: str, *, hint: str | None = None) -> ToolOutcome:
     """Standard outcome for a tool that has no real backing provider.
 
@@ -96,4 +124,6 @@ __all__ = [
     "Any",
     "consume_approval_grant",
     "unsupported_capability",
+    "clip",
+    "truncation_notice",
 ]

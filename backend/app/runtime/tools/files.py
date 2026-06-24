@@ -18,7 +18,7 @@ from app.integrations.files import FileProviderError
 from app.models import Agent, Company, Task
 from app.models.enums import FileCategory, MemoryType
 from app.providers.base import ToolSpec
-from app.runtime.tools.base import ToolOutcome, unsupported_capability
+from app.runtime.tools.base import ToolOutcome, clip, truncation_notice, unsupported_capability
 from app.services import files as files_svc
 from app.services import memory as memory_svc
 from app.services.integrations import resolve_file_provider
@@ -167,7 +167,10 @@ async def _list_company_files(db, ctx, *, agent: Agent, task: Task, args: dict) 
         + (f" ({r.web_url})" if r.web_url else "")
         for r in rows
     ]
-    return ToolOutcome(observation="Filed documents:\n" + "\n".join(lines[:50]))
+    body = "\n".join(lines[:50])
+    if len(lines) > 50:
+        body += truncation_notice(len(lines) - 50, "files")
+    return ToolOutcome(observation="Filed documents:\n" + body)
 
 
 async def _read_company_file(db, ctx, *, agent: Agent, task: Task, args: dict) -> ToolOutcome:
@@ -191,7 +194,7 @@ async def _read_company_file(db, ctx, *, agent: Agent, task: Task, args: dict) -
         return ToolOutcome(
             observation=f"{row.name} is a binary file ({row.mime_type}); not shown as text."
         )
-    return ToolOutcome(observation=f"{row.name}:\n{text[:4000]}")
+    return ToolOutcome(observation=f"{row.name}:\n" + clip(text, 4000))
 
 
 HANDLERS = {

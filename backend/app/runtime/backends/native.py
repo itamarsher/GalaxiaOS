@@ -34,7 +34,7 @@ from app.runtime import skills as skills_lib
 from app.runtime.context import RuntimeContext
 from app.runtime.prompts import ROLE_DESCRIPTIONS, render_agent_system
 from app.runtime.tools import TOOL_SPECS, execute_tool
-from app.runtime.tools.base import ToolOutcome
+from app.runtime.tools.base import ToolOutcome, clip
 from app.runtime.tools.base import consume_approval_grant as _consume_approval_grant
 from app.runtime.transcript import dump_messages, load_messages, sanitize_messages, transcript_lines
 from app.services import apikeys, memory, metrics, reputation
@@ -178,7 +178,7 @@ class NativeBackend:
             if not resp.tool_calls:
                 return await self._finish_or_audit(
                     ctx, agent, task,
-                    {"summary": resp.text[: settings.max_result_summary_chars]},
+                    {"summary": clip(resp.text, settings.max_result_summary_chars)},
                 )
 
             results: list[ToolResultBlock] = []
@@ -500,7 +500,7 @@ class NativeBackend:
                 observation=f"MCP tool {call.name} failed: {exc}. NOTHING happened — do not assume a result.",
                 is_error=True,
             )
-        return ToolOutcome(observation=text[:4000])
+        return ToolOutcome(observation=clip(text, 4000))
 
     async def _finish_or_audit(
         self, ctx: RuntimeContext, agent: Agent, task: Task, output: dict
