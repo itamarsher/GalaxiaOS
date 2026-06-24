@@ -19,8 +19,9 @@ number/URL. When no real tracker is configured, :func:`get_issue_tracker` return
 ``None`` and ``open_issue`` records the bug/feature request to the company's own
 memory instead (deduped + counted the same way) — a durable, honest internal
 artifact — so the ``request_capability`` → ``open_issue`` escalation loop still works
-offline. Enable real GitHub issues with ``ABOS_ISSUE_TRACKER=github`` (or a
-per-company token).
+offline. Real GitHub issues turn on as soon as a token is configured — a global
+``ABOS_GITHUB_TOKEN`` (no need to also set ``ABOS_ISSUE_TRACKER=github``) or a
+per-company token; set ``ABOS_ISSUE_TRACKER=none`` to force them off.
 """
 
 from __future__ import annotations
@@ -263,10 +264,20 @@ def get_issue_tracker(name: str | None = None) -> IssueTracker | None:
     There is no simulated fallback: an unconfigured environment returns ``None`` so
     ``open_issue`` records the request to company memory instead of fabricating an
     external issue.
+
+    A configured global ``ABOS_GITHUB_TOKEN`` is enough on its own — operators do
+    NOT also have to flip ``ABOS_ISSUE_TRACKER=github``. When a token is present we
+    file real issues unless the tracker was *explicitly* disabled with
+    ``ABOS_ISSUE_TRACKER=none``. Without this, a deployment that set a token but
+    left the tracker at its default would silently drop to internal memory and the
+    Platform agent would tell agents the GitHub token "isn't set" when it is.
     """
     key = (name or settings.issue_tracker).strip().lower()
-    if key in ("", "none", "simulated"):
-        return None
     if key == "github":
         return GitHubIssueTracker()
+    if key in ("", "simulated") and settings.github_token.strip():
+        # Auto-enable real GitHub issues when a global token is configured.
+        return GitHubIssueTracker()
+    if key in ("", "none", "simulated"):
+        return None
     raise ValueError(f"unknown issue tracker: {key!r}")
