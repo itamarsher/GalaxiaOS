@@ -153,6 +153,12 @@ class NativeBackend:
         messages = self._resume_or_seed(task)
         await self._inject_audit_feedback(ctx, task, messages)
         model = _model_for(agent, provider, trust)
+        # Size the per-step output budget to the model's real ceiling (bounded by
+        # ``max_response_tokens``) rather than a fixed small cap, so a large
+        # deliverable packed into one ``report_result`` summary isn't truncated
+        # mid-output. The provider transparently streams when this exceeds its
+        # non-streaming size guard (see ``AnthropicProvider.complete``).
+        max_tokens = min(provider.max_output_tokens(model), settings.max_response_tokens)
 
         for _ in range(settings.max_steps_per_task):
             messages = await self._maybe_compact(ctx, task, provider, api_key, model, messages)
@@ -166,7 +172,7 @@ class NativeBackend:
                 system=system,
                 messages=messages,
                 tools=tools,
-                max_tokens=2048,
+                max_tokens=max_tokens,
             )
 
             if not resp.tool_calls:

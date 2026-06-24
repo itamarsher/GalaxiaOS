@@ -81,6 +81,13 @@ class Settings(BaseSettings):
     max_tasks_per_agent_window: int = 30
     max_loop_signature_repeats: int = 3
     max_steps_per_task: int = 12
+    # Per-step output-token ceiling for the agent loop's LLM call. The effective
+    # cap is ``min(this, provider.max_output_tokens(model))`` so it never exceeds
+    # what the model accepts while still leaving room for a large deliverable
+    # (e.g. a multi-item brief packed into one ``report_result`` summary). Kept
+    # bounded because ``CostMeter`` reserves this as the worst-case output spend
+    # up front, per step. Raise it for longer single-shot outputs.
+    max_response_tokens: int = 8192
     # Checkpoint a task's in-flight conversation to ``Task.transcript`` after each
     # step so it resumes after a restart. The checkpoint is cleared when the task
     # finishes, so the table holds only live tasks' working memory.
