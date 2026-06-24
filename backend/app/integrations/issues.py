@@ -19,8 +19,9 @@ number/URL. When no real tracker is configured, :func:`get_issue_tracker` return
 ``None`` and ``open_issue`` records the bug/feature request to the company's own
 memory instead (deduped + counted the same way) — a durable, honest internal
 artifact — so the ``request_capability`` → ``open_issue`` escalation loop still works
-offline. Enable real GitHub issues with ``ABOS_ISSUE_TRACKER=github`` (or a
-per-company token).
+offline. Real GitHub issues turn on as soon as a token is configured — a global
+``ABOS_GITHUB_TOKEN`` (no need to also set ``ABOS_ISSUE_TRACKER=github``) or a
+per-company token; set ``ABOS_ISSUE_TRACKER=none`` to force them off.
 """
 
 from __future__ import annotations
@@ -123,6 +124,8 @@ class GitHubIssueTracker:
         try:
             async with self._client() as client:
                 return await self._create_issue(client, repo, headers, title, body, labels)
+        except httpx.HTTPStatusError as exc:
+            raise IssueTrackerError(self._explain_status(exc, repo)) from exc
         except httpx.HTTPError as exc:
             raise IssueTrackerError(f"GitHub request failed: {exc}") from exc
         except ValueError as exc:  # non-JSON body
@@ -158,10 +161,40 @@ class GitHubIssueTracker:
                     created=True,
                     demand=demand,
                 )
+        except httpx.HTTPStatusError as exc:
+            raise IssueTrackerError(self._explain_status(exc, repo)) from exc
         except httpx.HTTPError as exc:
             raise IssueTrackerError(f"GitHub request failed: {exc}") from exc
         except ValueError as exc:  # non-JSON body
             raise IssueTrackerError(f"GitHub returned non-JSON: {exc}") from exc
+
+    @staticmethod
+    def _explain_status(exc: httpx.HTTPStatusError, repo: str) -> str:
+        """Turn a GitHub HTTP error into an actionable message.
+
+        The token *is* set (we only get here after the credential check), so the
+        Platform agent must not report it as missing. Distinguish "rejected" (bad/
+        expired token), "forbidden" (insufficient scope or rate limit) and "not
+        found" (token can't see the repo) so the founder fixes the right thing.
+        """
+        status = exc.response.status_code
+        if status == 401:
+            return (
+                "GitHub rejected the token (401 Unauthorized): it is set but invalid "
+                "or expired — regenerate the GitHub token in Settings."
+            )
+        if status == 403:
+            return (
+                "GitHub denied the request (403 Forbidden): the token is set but lacks "
+                f"permission to open issues on {repo} (it needs the 'repo'/'issues' "
+                "scope), or it is rate-limited."
+            )
+        if status == 404:
+            return (
+                f"GitHub returned 404 for {repo}: the token is set but cannot see that "
+                "repository — check the repo name and that the token has access to it."
+            )
+        return f"GitHub request failed ({status}): {exc}"
 
     async def _create_issue(
         self,
@@ -263,10 +296,20 @@ def get_issue_tracker(name: str | None = None) -> IssueTracker | None:
     There is no simulated fallback: an unconfigured environment returns ``None`` so
     ``open_issue`` records the request to company memory instead of fabricating an
     external issue.
+
+    A configured global ``ABOS_GITHUB_TOKEN`` is enough on its own — operators do
+    NOT also have to flip ``ABOS_ISSUE_TRACKER=github``. When a token is present we
+    file real issues unless the tracker was *explicitly* disabled with
+    ``ABOS_ISSUE_TRACKER=none``. Without this, a deployment that set a token but
+    left the tracker at its default would silently drop to internal memory and the
+    Platform agent would tell agents the GitHub token "isn't set" when it is.
     """
     key = (name or settings.issue_tracker).strip().lower()
-    if key in ("", "none", "simulated"):
-        return None
     if key == "github":
         return GitHubIssueTracker()
+    if key in ("", "simulated") and settings.github_token.strip():
+        # Auto-enable real GitHub issues when a global token is configured.
+        return GitHubIssueTracker()
+    if key in ("", "none", "simulated"):
+        return None
     raise ValueError(f"unknown issue tracker: {key!r}")

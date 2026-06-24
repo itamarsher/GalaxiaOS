@@ -10,7 +10,7 @@ from __future__ import annotations
 import base64
 import os
 
-from app.integrations.issues import GitHubIssueTracker
+from app.integrations.issues import GitHubIssueTracker, get_issue_tracker
 from app.runtime.tools.platform import GITHUB_PROVIDER, _resolve_issue_tracker
 from app.services import apikeys
 from tests.conftest import requires_db
@@ -32,6 +32,53 @@ async def test_issue_tracker_is_none_without_github_key(
     # No github key stored and no global tracker configured -> None, so open_issue
     # records the request to company memory instead of fabricating an external issue.
     assert tracker is None
+
+
+def test_global_github_token_enables_github_without_explicit_tracker(monkeypatch):
+    """A configured global ABOS_GITHUB_TOKEN files real issues on its own.
+
+    Regression: with the tracker left at its default ("simulated") a deployment
+    that set only the token used to fall back to None, so the Platform agent told
+    agents the GitHub token "wasn't set" when it was.
+    """
+    from app.config import settings as app_settings
+
+    monkeypatch.setattr(app_settings, "issue_tracker", "simulated")
+    monkeypatch.setattr(app_settings, "github_token", "ghp_globaltoken")
+    assert isinstance(get_issue_tracker(), GitHubIssueTracker)
+
+
+def test_explicit_none_disables_github_even_with_global_token(monkeypatch):
+    """``ABOS_ISSUE_TRACKER=none`` is a hard opt-out even if a token is present."""
+    from app.config import settings as app_settings
+
+    monkeypatch.setattr(app_settings, "issue_tracker", "none")
+    monkeypatch.setattr(app_settings, "github_token", "ghp_globaltoken")
+    assert get_issue_tracker() is None
+
+
+def test_no_tracker_without_any_github_token(monkeypatch):
+    """Default + no token -> None (records to memory, never fabricates an issue)."""
+    from app.config import settings as app_settings
+
+    monkeypatch.setattr(app_settings, "issue_tracker", "simulated")
+    monkeypatch.setattr(app_settings, "github_token", "")
+    assert get_issue_tracker() is None
+
+
+@requires_db
+async def test_resolve_issue_tracker_falls_back_to_global_token(
+    session_factory, company_with_budget, monkeypatch
+):
+    """No per-company key but a global token still resolves to a real tracker."""
+    from app.config import settings as app_settings
+
+    _set_master_key()
+    monkeypatch.setattr(app_settings, "issue_tracker", "simulated")
+    monkeypatch.setattr(app_settings, "github_token", "ghp_globaltoken")
+    async with session_factory() as db:
+        tracker = await _resolve_issue_tracker(db, company_with_budget)
+    assert isinstance(tracker, GitHubIssueTracker)
 
 
 @requires_db
