@@ -25,7 +25,12 @@ from app.models.enums import (
 )
 from app.providers.base import ToolSpec
 from app.runtime.breakers import loop_signature
-from app.runtime.tools.base import ToolOutcome, consume_approval_grant, unsupported_capability
+from app.runtime.tools.base import (
+    ToolOutcome,
+    clip,
+    consume_approval_grant,
+    unsupported_capability,
+)
 from app.services import metrics as metrics_svc
 
 SPECS: list[ToolSpec] = [
@@ -695,7 +700,7 @@ async def _web_search(db, ctx, *, agent: Agent, task: Task, args: dict) -> ToolO
         return ToolOutcome(observation=f"no web results for {query!r}")
     lines = [f"- {r.title} ({r.url})\n  {r.snippet[:200]}" for r in results]
     observation = f"Web results for {query!r}:\n" + "\n".join(lines)
-    return ToolOutcome(observation=observation[:2000])
+    return ToolOutcome(observation=clip(observation, 2000))
 
 
 #: Sub-task statuses that mean the child is still working (not yet collectible).
@@ -725,7 +730,7 @@ async def _collect_results(db, ctx, *, agent: Agent, task: Task, args: dict) -> 
         lines.append("Completed sub-task results:")
         for child in done:
             summary = (child.output or {}).get("summary", "") if child.output else ""
-            clipped = summary[: settings.collect_results_summary_chars]
+            clipped = clip(summary, settings.collect_results_summary_chars)
             lines.append(f"- {child.goal[:80]}: {clipped or '(no summary)'}")
     if failed:
         lines.append(f"Failed/blocked sub-tasks ({len(failed)}): " + ", ".join(c.goal[:50] for c in failed))
@@ -735,7 +740,7 @@ async def _collect_results(db, ctx, *, agent: Agent, task: Task, args: dict) -> 
             f"Still running ({len(pending)}): " + ", ".join(c.goal[:50] for c in pending)
             + ". Check back before synthesizing — these have not reported yet."
         )
-    return ToolOutcome(observation="\n".join(lines)[: settings.collect_results_total_chars])
+    return ToolOutcome(observation=clip("\n".join(lines), settings.collect_results_total_chars))
 
 
 async def _request_decision(db, ctx, *, agent: Agent, task: Task, args: dict) -> ToolOutcome:
