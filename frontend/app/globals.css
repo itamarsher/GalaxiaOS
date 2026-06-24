@@ -1,20 +1,20 @@
 :root {
-  /* ── Focus palette ──
-     Deep midnight-indigo base with a calm teal accent. Blues and teals are
-     the most "focus-friendly" hues: low arousal, easy on the eyes for long
-     sessions, with just enough saturation on the accent to guide attention. */
+  /* ── Brand palette ──
+     Deep midnight base with the ABOS logo's indigo as the accent, so the app
+     and the mark share one signature colour. The white-on-indigo of the logo
+     carries through to buttons and active states (white text on indigo). */
   --bg: #0d1320;
-  --bg-glow: #101a2e;
+  --bg-glow: #161a36;
   --panel: #151d2e;
   --panel-2: #1b2438;
   --border: #27324a;
   --border-soft: #1f293c;
   --text: #e7edf6;
   --muted: #8b99b2;
-  --accent: #2dd4bf;
-  --accent-strong: #5eead4;
-  --accent-soft: rgba(45, 212, 191, 0.12);
-  --on-accent: #042a26;
+  --accent: #6366f1;
+  --accent-strong: #a5b4fc;
+  --accent-soft: rgba(99, 102, 241, 0.14);
+  --on-accent: #ffffff;
   --good: #34d399;
   --warn: #f5b544;
   --danger: #f87171;
@@ -35,7 +35,7 @@ body {
     radial-gradient(1200px 600px at 50% -10%, var(--bg-glow), transparent 70%);
   background-attachment: fixed;
   color: var(--text);
-  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font-family: var(--font-inter), ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
@@ -145,7 +145,23 @@ button.ghost:hover { background: var(--panel-2); filter: none; }
   backdrop-filter: saturate(140%) blur(8px);
   position: sticky; top: 0; z-index: 20;
 }
-.topbar .brand { font-weight: 800; letter-spacing: 0.12em; color: var(--accent-strong); }
+.topbar .brand {
+  display: inline-flex; align-items: center; gap: 10px;
+  font-weight: 800; letter-spacing: 0.14em; color: var(--accent-strong);
+}
+/* Pixel-art mark: keep the blocks crisp at any size (never blur on scaling). */
+.brand-logo {
+  width: 26px; height: 26px; border-radius: 6px; display: block;
+  image-rendering: pixelated;
+}
+
+/* Landing hero: the logo sits beside the ABOS wordmark. */
+.brand-hero { display: flex; align-items: center; gap: 14px; margin-bottom: 6px; }
+.brand-hero h1 { margin: 0; }
+.brand-hero-logo {
+  width: 56px; height: 56px; border-radius: 12px; display: block; flex: 0 0 auto;
+  image-rendering: pixelated; box-shadow: var(--shadow);
+}
 
 .nav {
   display: flex; gap: 4px; padding: 10px 20px;

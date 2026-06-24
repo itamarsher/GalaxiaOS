@@ -154,7 +154,11 @@ export default function Home() {
 
   return (
     <div className="wrap">
-      <h1>ABOS</h1>
+      <div className="brand-hero">
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img src="/abos-logo.png" alt="ABOS logo" className="brand-hero-logo" width={56} height={56} />
+        <h1>ABOS</h1>
+      </div>
       <p className="sub">What&apos;s your mission? What&apos;s your budget? Launch.</p>
 
       {step === "loading" && (

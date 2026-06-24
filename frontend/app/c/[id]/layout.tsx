@@ -30,7 +30,11 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
   return (
     <div>
       <div className="topbar">
-        <span className="brand">ABOS</span>
+        <span className="brand">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src="/abos-logo.png" alt="" className="brand-logo" width={26} height={26} />
+          ABOS
+        </span>
         <button
           className="ghost"
           style={{ marginTop: 0 }}
