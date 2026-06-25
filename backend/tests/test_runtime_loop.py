@@ -46,6 +46,26 @@ def test_render_agent_system_fills_all_slots() -> None:
         assert slot not in rendered
 
 
+def test_file_store_block_reflects_connection_state() -> None:
+    base = dict(
+        role_desc="r", agent_directive=None, playbook=None, mission="m",
+        goal="g", memory="x", metrics="y",
+    )
+    connected = render_agent_system(**base, file_store_connected=True)
+    assert "is CONNECTED" in connected
+    assert "save_file" in connected
+    assert "not connected yet" not in connected
+
+    disconnected = render_agent_system(**base, file_store_connected=False)
+    assert "No company file store is connected" in disconnected
+    assert "request_capability" in disconnected
+    # Don't promise a working file store when there isn't one.
+    assert "is CONNECTED" not in disconnected
+
+    # Default is the safe (disconnected) wording — never claim a store that may not exist.
+    assert "No company file store is connected" in render_agent_system(**base)
+
+
 def test_parallel_and_report_tools_registered() -> None:
     names = {spec.name for spec in TOOL_SPECS}
     for expected in {"dispatch_tasks", "create_report", "load_skill"}:
