@@ -49,11 +49,23 @@ services:
       - key: ABOS_RUN_WORKER_IN_PROCESS
         value: "true"
       # Memory budget (512MB shared by the API + in-process worker):
-      #  - Skip the local fastembed/ONNX embedder — it pins ~150-200MB resident
-      #    once loaded. The dependency-free "hashing" embedder needs <1MB and
-      #    keeps Company-Memory recall working (lexical instead of semantic).
+      #  - Offload the local fastembed/ONNX embedder (~150-200MB resident) to the
+      #    separate `abos-embeddings` service below, so the model lives in its own
+      #    512MB and the API stays lean while keeping real semantic recall. (Set
+      #    this to `hashing` instead to drop the extra service entirely — lexical
+      #    recall, <1MB, no model.)
       - key: ABOS_EMBEDDINGS_PROVIDER
-        value: hashing
+        value: remote
+      - key: ABOS_EMBEDDINGS_URL
+        fromService:
+          type: web
+          name: abos-embeddings
+          property: host   # bare host; RemoteEmbedder assumes https://
+      - key: ABOS_EMBEDDINGS_REMOTE_SECRET
+        fromService:
+          type: web
+          name: abos-embeddings
+          envVarKey: ABOS_EMBEDDINGS_REMOTE_SECRET
       #  - Run fewer agent loops at once; each holds a full working set in memory.
       - key: ABOS_WORKER_MAX_JOBS
         value: "2"
@@ -70,6 +82,30 @@ services:
       # (comma-separated for multiple), e.g. https://abos-web.onrender.com.
       - key: ABOS_CORS_ALLOW_ORIGINS
         sync: false
+      - fromGroup: abos-shared
+
+  # Local neural embedder (fastembed/ONNX) on its own free instance, so its
+  # ~150-200MB model sits in a separate 512MB budget instead of the API's. Same
+  # image as the API — only the start command differs (it serves
+  # `app.embed_service`, no migrations, no DB). The API reaches it via
+  # ABOS_EMBEDDINGS_URL above. NB: free services spin down after ~15 min idle, so
+  # the first embed after idle cold-starts the model (a few seconds); embedding
+  # never blocks a write — a slow/asleep embedder just yields no vector that once
+  # and recall falls back to recency. Ping /health on a schedule to keep it warm.
+  - type: web
+    name: abos-embeddings
+    runtime: docker
+    plan: free
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    dockerCommand: "uvicorn app.embed_service:app --host 0.0.0.0 --port $PORT"
+    autoDeploy: false
+    healthCheckPath: /health
+    envVars:
+      # Shared secret the API must present (x-embeddings-secret). Generated here
+      # and copied into abos-api via fromService above, so both always match.
+      - key: ABOS_EMBEDDINGS_REMOTE_SECRET
+        generateValue: true
       - fromGroup: abos-shared
 
   # Next.js frontend.

@@ -183,7 +183,7 @@ class Settings(BaseSettings):
     # (credential-gated by ABOS_OPENAI_API_KEY). All reduce to the 1536-dim pgvector
     # column. Switching providers re-embeds new writes only — backfill existing rows
     # if you change it on a populated DB.
-    embeddings_provider: str = "local"  # local | hashing | openai
+    embeddings_provider: str = "local"  # local | hashing | openai | remote
     embeddings_model: str = "text-embedding-3-small"  # openai model
     # Local fastembed model (small + CPU-friendly; 384-dim, zero-padded to 1536).
     local_embeddings_model: str = "BAAI/bge-small-en-v1.5"
@@ -193,6 +193,15 @@ class Settings(BaseSettings):
     local_embeddings_cache_dir: str = ""
     embeddings_timeout_seconds: float = 10.0
     openai_api_key: str = ""  # platform key for the OpenAI embeddings endpoint
+    # "remote" embedder: offload the local fastembed/ONNX model to a separate
+    # service (``app.embed_service``) so the model's ~150-200MB lives in its own
+    # memory budget, not the API's — the way to keep real semantic recall on the
+    # 512MB free tier without paying for a bigger API instance. ``embeddings_url``
+    # is that service's base URL (scheme optional; https assumed). The shared
+    # secret authenticates the call (both services get the same value). With the
+    # URL unset the provider yields no vector and recall falls back to recency.
+    embeddings_url: str = ""
+    embeddings_remote_secret: str = ""
     # Recall blends similarity with recency so stale memories rank lower: a memory's
     # weight halves every ``half_life_days``. Candidates are pulled by pure
     # similarity (a pool of ``recall_limit * multiplier``, capped) then re-ranked.

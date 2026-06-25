@@ -203,6 +203,66 @@ class OpenAIEmbedder(Embedder):
             return None
 
 
+class RemoteEmbedder(Embedder):
+    """Embeddings via a separate ABOS embedding service (``app.embed_service``).
+
+    Lets the heavy local fastembed/ONNX model live in its own process/memory
+    budget instead of the API's — the way to keep semantic recall on a 512MB box.
+    POSTs the text to ``<embeddings_url>/embed`` with a shared-secret header and
+    maps the returned vector to the 1536-dim column. Like the other async
+    embedders it never raises: any failure (unset URL, network, cold-start
+    timeout, bad response) returns ``None`` so the write simply stores no vector.
+    """
+
+    dim = DIM
+
+    def __init__(
+        self,
+        base_url: str | None = None,
+        *,
+        secret: str | None = None,
+        timeout: float | None = None,
+    ) -> None:
+        raw = (base_url if base_url is not None else settings.embeddings_url).strip()
+        # Render's ``property: host`` hands back a bare host with no scheme; assume
+        # https so the service URL is usable as-is.
+        if raw and "://" not in raw:
+            raw = "https://" + raw
+        self._base_url = raw.rstrip("/")
+        self._secret = secret if secret is not None else settings.embeddings_remote_secret
+        self._timeout = timeout if timeout is not None else settings.embeddings_timeout_seconds
+
+    def embed(self, text: str) -> list[float] | None:
+        # Network-bound: no synchronous path. Callers go through ``embed_text``.
+        return None
+
+    async def aembed(self, text: str) -> list[float] | None:
+        text = (text or "").strip()
+        if not text or not self._base_url:
+            return None
+        import httpx
+
+        headers = {}
+        if self._secret:
+            headers["x-embeddings-secret"] = self._secret
+        try:
+            async with httpx.AsyncClient(timeout=self._timeout) as client:
+                resp = await client.post(
+                    f"{self._base_url}/embed", json={"text": text}, headers=headers
+                )
+                data = resp.json() if resp.content else {}
+        except (httpx.HTTPError, ValueError) as exc:
+            _log.warning("remote embedding request failed: %s", exc)
+            return None
+        if resp.status_code >= 400:
+            _log.warning("remote embedding response unusable (HTTP %s)", resp.status_code)
+            return None
+        vec = data.get("embedding") if isinstance(data, dict) else None
+        if not isinstance(vec, list):
+            return None
+        return _to_dim(vec)
+
+
 def _build_embedder() -> Embedder:
     provider = (settings.embeddings_provider or "hashing").strip().lower()
     if provider in ("", "hashing", "simulated"):
@@ -211,6 +271,8 @@ def _build_embedder() -> Embedder:
         return LocalEmbedder()
     if provider == "openai":
         return OpenAIEmbedder()
+    if provider == "remote":
+        return RemoteEmbedder()
     raise ValueError(f"unknown embeddings provider: {provider!r}")
 
 
