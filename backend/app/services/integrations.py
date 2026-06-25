@@ -195,10 +195,12 @@ async def verify_google_drive(
     """Prove an OAuth bundle works before it's saved (refresh token + reach root).
 
     Raises :class:`~app.integrations.files.FileProviderError` if Google rejects the
-    credentials. ``get_root()`` is the cheapest valid call that actually validates:
-    a real ``GET /files/<root>`` that forces a refresh-token exchange and confirms
-    Drive is reachable, without creating anything. (An empty ``ensure_folder([])``
-    would make no request at all, so it couldn't catch a bad token.)
+    credentials. ``check_access()`` is the cheapest call that actually validates: a
+    real ``files.list`` that forces a refresh-token exchange and confirms Drive is
+    reachable, without creating anything. It must be scope-safe — the ``drive.file``
+    scope forbids reading My Drive root metadata — so a list (not a root GET) is
+    used. (An empty ``ensure_folder([])`` would make no request at all, so it
+    couldn't catch a bad token.)
     """
     from app.integrations.gdrive import GoogleDriveFileProvider
 
@@ -208,7 +210,7 @@ async def verify_google_drive(
         refresh_token=refresh_token,
         root_folder_id=root_folder_id or "root",
     )
-    await provider.get_root()
+    await provider.check_access()
 
 
 async def _owner_google_drive(company_id: uuid.UUID) -> dict | None:

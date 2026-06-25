@@ -227,26 +227,28 @@ class GoogleDriveFileProvider:
 
     # ─────────────────────────── FileProvider ───────────────────────────
 
-    async def get_root(self) -> str:
-        """Resolve the configured root folder's concrete id, with a real round-trip.
+    async def check_access(self) -> None:
+        """Validate the credential with a real, scope-safe Drive call.
 
-        ``"root"`` is Drive's alias for My Drive root and works as a parent in every
-        create/list call, so *filing* never needs the concrete id. This exists for
-        the one case that genuinely benefits from a live call: verifying a
-        freshly-connected credential. ``GET /files/<root>`` forces a token refresh
-        and a real Drive read, so a broken/expired refresh token (or an
-        unreachable/missing configured root) surfaces as a :class:`FileProviderError`
-        instead of being persisted as "connected". Returns the resolved id (falling
-        back to the configured ``root_folder_id`` if Drive omits it)."""
+        The OAuth scope is ``drive.file`` (per-file), under which the app may only
+        see files it created — so reading My Drive root metadata
+        (``GET /files/root``) is *forbidden* and 4xx's, and there is no way to
+        resolve the root id dynamically. ``"root"`` is therefore used purely as a
+        creation-parent alias (which the scope allows) when filing.
+
+        A ``files.list`` IS permitted (it returns the app's own files, possibly
+        none) and still forces a refresh-token exchange and confirms Drive is
+        reachable, so a broken/expired/revoked token raises
+        :class:`FileProviderError`. This is the cheapest call that actually
+        validates a freshly-connected credential before it's saved."""
         async with httpx.AsyncClient(timeout=self._timeout) as client:
-            resp = await self._send(
+            await self._send(
                 client,
                 "GET",
-                f"{_DRIVE_API}/{self._root_folder_id}",
-                action="get-root",
-                params={"fields": "id"},
+                _DRIVE_API,
+                action="check-access",
+                params={"pageSize": 1, "fields": "files(id)", "spaces": "drive"},
             )
-        return str(_json(resp).get("id") or self._root_folder_id)
 
     async def ensure_folder(self, path: list[str]) -> FolderRef:
         parent = self._root_folder_id
