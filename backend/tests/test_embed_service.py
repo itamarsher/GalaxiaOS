@@ -12,7 +12,27 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.services import embeddings
-from app.services.embeddings import DIM, RemoteEmbedder, _build_embedder, _to_dim
+from app.services.embeddings import DIM, LocalEmbedder, RemoteEmbedder, _build_embedder, _to_dim
+
+# ─────────────────────── LocalEmbedder strict mode (no hashing) ───────────────────────
+
+
+def test_local_embedder_falls_back_to_hashing_by_default():
+    # Default in-process `local` mode keeps memory working if the model can't load.
+    emb = LocalEmbedder()
+    emb._unavailable = True  # simulate a model that won't load
+    vec = emb.embed("grow the pipeline")
+    assert vec is not None and len(vec) == DIM  # a (hashing) vector, not None
+
+
+def test_local_embedder_strict_returns_none_instead_of_hashing():
+    # The dedicated service runs with allow_fallback=False: an unavailable model
+    # yields no vector rather than a non-semantic hashing one (no space poisoning).
+    emb = LocalEmbedder(allow_fallback=False)
+    emb._unavailable = True
+    assert emb.embed("grow the pipeline") is None
+    assert emb.is_ready() is False
+
 
 # ─────────────────────────── RemoteEmbedder (client) ───────────────────────────
 
@@ -110,12 +130,15 @@ async def test_remote_aembed_bad_body_returns_none(monkeypatch):
 # ─────────────────────────── embed_service (server) ───────────────────────────
 
 
-def _client(monkeypatch, *, secret: str = "", vector=None):
+def _client(monkeypatch, *, secret: str = "", vector=None, ready: bool = True):
     from app import embed_service
 
     class _Emb:
         async def aembed(self, text):
             return vector
+
+        def is_ready(self):
+            return ready
 
     monkeypatch.setattr(embed_service, "_embedder", _Emb())
     monkeypatch.setattr(embed_service.settings, "embeddings_remote_secret", secret)
@@ -127,6 +150,11 @@ def test_embed_service_health(monkeypatch):
     assert resp.status_code == 200 and resp.json()["status"] == "ok"
 
 
+def test_embed_service_ready_reflects_model_state(monkeypatch):
+    assert _client(monkeypatch, ready=True).get("/ready").status_code == 200
+    assert _client(monkeypatch, ready=False).get("/ready").status_code == 503
+
+
 def test_embed_service_returns_vector(monkeypatch):
     client = _client(monkeypatch, vector=[0.25] * DIM)
     resp = client.post("/embed", json={"text": "hello"})
@@ -135,10 +163,19 @@ def test_embed_service_returns_vector(monkeypatch):
     assert body["dim"] == DIM and body["embedding"][0] == pytest.approx(0.25)
 
 
-def test_embed_service_empty_vector_is_null(monkeypatch):
+def test_embed_service_empty_text_is_null(monkeypatch):
+    # Empty input is an honest "no vector", not a failure.
     client = _client(monkeypatch, vector=None)
-    resp = client.post("/embed", json={"text": ""})
+    resp = client.post("/embed", json={"text": "   "})
     assert resp.status_code == 200 and resp.json()["embedding"] is None
+
+
+def test_embed_service_unready_model_returns_503_not_hashing(monkeypatch):
+    # Strict mode: non-empty text with no vector (cold start / load failure) must
+    # surface as a transient 503 — never a fabricated (hashing) vector.
+    client = _client(monkeypatch, vector=None)
+    resp = client.post("/embed", json={"text": "real text"})
+    assert resp.status_code == 503
 
 
 def test_embed_service_secret_required_when_configured(monkeypatch):

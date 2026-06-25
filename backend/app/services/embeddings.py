@@ -95,15 +95,32 @@ class LocalEmbedder(Embedder):
     it isn't installed or the model can't load/run, every call falls back to the
     hashing embedder so Company Memory keeps working. The model's native dimension
     is padded/truncated to the 1536-dim pgvector column by :func:`_to_dim`.
+
+    ``allow_fallback=False`` disables the hashing fallback: an unavailable model or
+    a failed embed returns ``None`` instead of a hashing vector. The dedicated
+    embedding service (:mod:`app.embed_service`) uses this so it can never persist
+    a non-semantic vector into the same pgvector space as the real ones — most
+    importantly during a cold start, while the model is still loading.
     """
 
     dim = DIM
 
-    def __init__(self, model_name: str | None = None) -> None:
+    def __init__(self, model_name: str | None = None, *, allow_fallback: bool = True) -> None:
         self._model_name = model_name or settings.local_embeddings_model
         self._model = None
         self._unavailable = False
-        self._fallback = HashingEmbedder()
+        self._fallback: Embedder | None = HashingEmbedder() if allow_fallback else None
+
+    def _fallback_or_none(self, text: str) -> list[float] | None:
+        return self._fallback.embed(text) if self._fallback is not None else None
+
+    def is_ready(self) -> bool:
+        """True once the real ONNX model is loaded (no hashing involved).
+
+        Lets the embedding service report itself unavailable while the model is
+        still loading on a cold start, rather than silently degrading.
+        """
+        return self._model_or_none() is not None
 
     def _model_or_none(self):
         if self._model is None and not self._unavailable:
@@ -130,12 +147,12 @@ class LocalEmbedder(Embedder):
             return None
         model = self._model_or_none()
         if model is None:
-            return self._fallback.embed(text)
+            return self._fallback_or_none(text)
         try:
             vec = next(iter(model.embed([text])))
         except Exception as exc:  # noqa: BLE001 — never let an embed failure break a write/recall
             _log.warning("local embedding failed (%s); using hashing fallback", exc)
-            return self._fallback.embed(text)
+            return self._fallback_or_none(text)
         return _to_dim(vec)
 
     async def aembed(self, text: str) -> list[float] | None:

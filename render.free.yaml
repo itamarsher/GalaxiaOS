@@ -89,9 +89,11 @@ services:
   # image as the API — only the start command differs (it serves
   # `app.embed_service`, no migrations, no DB). The API reaches it via
   # ABOS_EMBEDDINGS_URL above. NB: free services spin down after ~15 min idle, so
-  # the first embed after idle cold-starts the model (a few seconds); embedding
-  # never blocks a write — a slow/asleep embedder just yields no vector that once
-  # and recall falls back to recency. Ping /health on a schedule to keep it warm.
+  # the first embed after idle cold-starts the model (it's warmed at boot, but a
+  # request that beats the load gets a 503). The service runs in STRICT mode — it
+  # returns a real ONNX vector or a 503, NEVER a hashing one — so a cold start can
+  # never poison the vector space; that one write just stores no vector and recall
+  # falls back to recency. Ping /health on a schedule to keep it warm.
   - type: web
     name: abos-embeddings
     runtime: docker
