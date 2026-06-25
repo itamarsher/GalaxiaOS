@@ -155,14 +155,7 @@ You also have a built-in CRM — the company's own system of record — that alw
 with `schedule_followup` / `crm_log_activity`; pull a full relationship view with
 `crm_contact_timeline`. Read your real pipeline before acting on it — never invent one.
 
-You have a durable company file store (the founder's Drive, organized into folders).
-File anything worth keeping with `save_file` — pick the category by purpose: a deliverable
-you produced (artifact), a financial record for the audit trail (financial), a
-due-diligence document (data_room), shared messaging or design guidelines (brand), a
-noteworthy received file (inbox), or other retained knowledge. List what exists with
-`list_company_files` and read one back with `read_company_file` before recreating it — keep
-one source of truth for the brand voice, financials, and the data room rather than
-re-deriving them. This is how the company stays audit- and DD-ready.
+{file_store}
 
 Tools that reach the outside world (e.g. send_email, web_search, register_domain,
 publish_content, schedule_social_post, run_ad_campaign, send_notification,
@@ -225,6 +218,36 @@ def agent_directive_block(system_prompt: str | None) -> str:
     return f"Your company-specific directive (set by the CEO — follow it):\n{directive}\n"
 
 
+_FILE_STORE_CONNECTED = (
+    "You have a durable company file store (the founder's Drive, organized into folders) "
+    "and it is CONNECTED. File anything worth keeping with `save_file` — pick the category "
+    "by purpose: a deliverable you produced (artifact), a financial record for the audit "
+    "trail (financial), a due-diligence document (data_room), shared messaging or design "
+    "guidelines (brand), a noteworthy received file (inbox), or other retained knowledge. "
+    "List what exists with `list_company_files` and read one back with `read_company_file` "
+    "before recreating it — keep one source of truth for the brand voice, financials, and "
+    "the data room rather than re-deriving them. This is how the company stays audit- and "
+    "DD-ready."
+)
+
+_FILE_STORE_DISCONNECTED = (
+    "No company file store is connected yet (the founder hasn't linked Google Drive in "
+    "Settings), so `save_file` / `list_company_files` / `read_company_file` will report "
+    "\"not supported\" — NOTHING is filed when they do. Do not claim a document was saved. "
+    "If you need durable file storage for the task, call `request_capability` once to ask "
+    "the founder to connect Drive; otherwise keep your deliverable in `create_report`."
+)
+
+
+def file_store_block(connected: bool) -> str:
+    """The file-store paragraph, matched to whether Drive is actually connected.
+
+    The loop builds the system prompt fresh every run, so this reflects the live
+    connection state — an agent is never told it has a file store it can't use, and
+    starts using `save_file` as soon as the founder connects Drive."""
+    return _FILE_STORE_CONNECTED if connected else _FILE_STORE_DISCONNECTED
+
+
 def render_agent_system(
     *,
     role_desc: str,
@@ -235,6 +258,7 @@ def render_agent_system(
     memory: str,
     metrics: str,
     skills: str = "",
+    file_store_connected: bool = False,
 ) -> str:
     """Compose an agent's full launch system prompt for one task.
 
@@ -253,6 +277,7 @@ def render_agent_system(
         memory=memory,
         metrics=metrics,
         skills=skills,
+        file_store=file_store_block(file_store_connected),
     )
 
 

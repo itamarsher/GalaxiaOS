@@ -40,6 +40,7 @@ from app.runtime.transcript import dump_messages, load_messages, sanitize_messag
 from app.services import apikeys, memory, metrics, reputation
 from app.services import external_messages as ext
 from app.services import governance as gov
+from app.services import integrations as integrations_svc
 from app.services import mcp as mcp_svc
 from app.services import tasks as task_svc
 from app.services.budget import BudgetExceeded
@@ -135,6 +136,14 @@ class NativeBackend:
             mcp_specs, mcp_routing = await mcp_svc.tool_specs_for_company(
                 db, company_id=task.company_id
             )
+
+            # Whether the company's file store (Drive) is actually connected, so the
+            # prompt tells the agent the truth about `save_file` rather than always
+            # claiming a file store exists. Resolved in this same tenant-scoped
+            # session, so it matches exactly what the file tools will see.
+            file_store_connected = (
+                await integrations_svc.resolve_file_provider(db, company_id=task.company_id)
+            ) is not None
         if resolved is None:
             return await self._finish(ctx, task, TaskStatus.failed, {"error": "no API key"})
         provider, api_key = resolved
@@ -148,6 +157,7 @@ class NativeBackend:
             memory=memory_summary,
             metrics=metrics_summary,
             skills=skills_lib.index_for_role(agent.role.value),
+            file_store_connected=file_store_connected,
         )
         tools = list(TOOL_SPECS) + mcp_specs
         messages = self._resume_or_seed(task)
