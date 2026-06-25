@@ -70,10 +70,20 @@ _DEFAULT_MIME = "text/markdown"
 
 
 def company_folder_name(company: Company) -> str:
-    """A Drive-safe folder name for a company (its name, sanitized; id as fallback)."""
+    """A Drive-safe, per-company-UNIQUE folder name (sanitized name + short id).
+
+    The short id suffix is what guarantees each company gets its OWN subfolder:
+    the founder's Drive is shared across every business they launch (see
+    ``resolve_file_provider``), and distinct companies routinely share a name —
+    onboarding even creates them all as "Untitled Company" — so keying the folder
+    on the name alone would mix two businesses' files into one folder. The id is
+    unique per company, so the folder never collides; the readable name is kept as
+    a prefix so the founder can still tell the folders apart at a glance.
+    """
     cleaned = re.sub(r"[\\/\r\n\t]+", " ", (company.name or "").strip())
-    cleaned = re.sub(r"\s+", " ", cleaned).strip()[:120].strip()
-    return cleaned or f"company-{str(company.id)[:8]}"
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()[:100].strip()
+    short_id = str(company.id)[:8]
+    return f"{cleaned} ({short_id})" if cleaned else f"company-{short_id}"
 
 
 def category_path(company: Company, category: FileCategory) -> list[str]:

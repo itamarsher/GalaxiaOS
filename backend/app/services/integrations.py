@@ -195,8 +195,10 @@ async def verify_google_drive(
     """Prove an OAuth bundle works before it's saved (refresh token + reach root).
 
     Raises :class:`~app.integrations.files.FileProviderError` if Google rejects the
-    credentials. ``ensure_folder([])`` is the cheapest valid call: it forces a token
-    refresh and returns the store root without creating anything.
+    credentials. ``get_root()`` is the cheapest valid call that actually validates:
+    a real ``GET /files/<root>`` that forces a refresh-token exchange and confirms
+    Drive is reachable, without creating anything. (An empty ``ensure_folder([])``
+    would make no request at all, so it couldn't catch a bad token.)
     """
     from app.integrations.gdrive import GoogleDriveFileProvider
 
@@ -206,17 +208,78 @@ async def verify_google_drive(
         refresh_token=refresh_token,
         root_folder_id=root_folder_id or "root",
     )
-    await provider.ensure_folder([])
+    await provider.get_root()
+
+
+async def _owner_google_drive(company_id: uuid.UUID) -> dict | None:
+    """Fall back to a Drive the same FOUNDER connected on another of their companies.
+
+    A founder's Google Drive is their *personal* store: they connect it once and
+    reasonably expect every business they launch to file into it. But each launched
+    business is its own ``Company`` (and Drive credentials are stored per company),
+    so a business that didn't do the connecting itself has no bundle — which is why
+    its agents see ``save_file`` as "not connected" even though the founder linked
+    Drive on a sibling company.
+
+    This finds the most recent active Drive bundle among the companies owned by the
+    SAME user. It runs on a fresh, non-tenant-scoped session on purpose: the caller's
+    session is RLS-pinned to its own company and cannot see a sibling company's rows.
+    The lookup is still strictly scoped to the same ``owner_user_id``, so it never
+    reaches another founder's credentials.
+    """
+    from sqlalchemy import select
+
+    from app.crypto import envelope
+    from app.db import SessionLocal
+    from app.models import ApiKey, Company
+    from app.models.enums import ApiKeyStatus
+
+    async with SessionLocal() as s:
+        owner_id = await s.scalar(select(Company.owner_user_id).where(Company.id == company_id))
+        if owner_id is None:
+            return None
+        row = await s.scalar(
+            select(ApiKey)
+            .join(Company, ApiKey.company_id == Company.id)
+            .where(
+                Company.owner_user_id == owner_id,
+                ApiKey.provider == _GOOGLE_DRIVE,
+                ApiKey.status == ApiKeyStatus.active,
+            )
+            .order_by(ApiKey.created_at.desc())
+            .limit(1)
+        )
+        if row is None:
+            return None
+        raw = envelope.open_secret(
+            envelope.SealedSecret(
+                ciphertext=row.encrypted_key,
+                wrapped_data_key=row.encrypted_data_key,
+                nonce=row.nonce,
+            )
+        )
+    try:
+        data = json.loads(raw)
+    except ValueError:
+        return None
+    return data if data.get("refresh_token") else None
 
 
 async def resolve_file_provider(db: AsyncSession, *, company_id: uuid.UUID) -> FileProvider | None:
-    """The company's file store — enabled only when it has connected Google Drive.
+    """The company's file store — enabled when this company, or its founder on a
+    sibling company, has connected Google Drive.
 
-    Bring-your-own, like the site host: with no saved OAuth bundle this returns
-    ``None`` so the file tools report the capability is unsupported rather than
-    pretending a document was filed.
+    Bring-your-own, like the site host: with no saved OAuth bundle anywhere for the
+    founder this returns ``None`` so the file tools report the capability is
+    unsupported rather than pretending a document was filed. The founder-level
+    fallback means connecting Drive once covers every business they launch, instead
+    of silently only working for the one company that did the connecting.
     """
     creds = await get_google_drive(db, company_id=company_id)
+    if creds is None:
+        # This business didn't connect Drive itself — use the founder's Drive
+        # connected on another of their companies, if any.
+        creds = await _owner_google_drive(company_id)
     if creds is None:
         return None
     from app.config import settings

@@ -172,6 +172,56 @@ def test_connect_configured_reflects_settings(monkeypatch):
     assert gdrive_oauth.connect_configured() is True
 
 
+@pytest.mark.asyncio
+async def test_resolve_file_provider_uses_companys_own_drive(monkeypatch):
+    from app.services import integrations as integrations_svc
+
+    fallback_called = {"hit": False}
+
+    async def _own(db, *, company_id):
+        return {"refresh_token": "rt-company"}
+
+    async def _fallback(company_id):
+        fallback_called["hit"] = True
+        return None
+
+    monkeypatch.setattr(integrations_svc, "get_google_drive", _own)
+    monkeypatch.setattr(integrations_svc, "_owner_google_drive", _fallback)
+    provider = await integrations_svc.resolve_file_provider(object(), company_id=uuid.uuid4())
+    assert isinstance(provider, GoogleDriveFileProvider)
+    assert fallback_called["hit"] is False  # own creds short-circuit the founder fallback
+
+
+@pytest.mark.asyncio
+async def test_resolve_file_provider_falls_back_to_founder_drive(monkeypatch):
+    # This company connected nothing itself, but the founder linked Drive on a
+    # sibling company → the file store still resolves (connect-once-covers-all).
+    from app.services import integrations as integrations_svc
+
+    async def _none(db, *, company_id):
+        return None
+
+    async def _owner(company_id):
+        return {"refresh_token": "rt-owner"}
+
+    monkeypatch.setattr(integrations_svc, "get_google_drive", _none)
+    monkeypatch.setattr(integrations_svc, "_owner_google_drive", _owner)
+    provider = await integrations_svc.resolve_file_provider(object(), company_id=uuid.uuid4())
+    assert isinstance(provider, GoogleDriveFileProvider)
+
+
+@pytest.mark.asyncio
+async def test_resolve_file_provider_none_when_founder_has_no_drive(monkeypatch):
+    from app.services import integrations as integrations_svc
+
+    async def _none(*a, **k):
+        return None
+
+    monkeypatch.setattr(integrations_svc, "get_google_drive", _none)
+    monkeypatch.setattr(integrations_svc, "_owner_google_drive", _none)
+    assert await integrations_svc.resolve_file_provider(object(), company_id=uuid.uuid4()) is None
+
+
 def test_oauth_state_round_trip():
     cid = uuid.uuid4()
     assert decode_oauth_state(create_oauth_state(cid)) == cid
@@ -197,19 +247,111 @@ class _Company:
         self.name = name
 
 
-def test_company_folder_name_sanitizes():
-    assert files_svc.company_folder_name(_Company("Acme / Co\nInc")) == "Acme Co Inc"
+def test_provider_root_folder_defaults_to_root():
+    # "root" is Drive's alias for My Drive root and a valid parent for create/list,
+    # so an unset/empty stored root_folder_id must normalize to it (never "").
+    common = dict(client_id="c", client_secret="s", refresh_token="r")
+    assert GoogleDriveFileProvider(**common)._root_folder_id == "root"
+    assert GoogleDriveFileProvider(**common, root_folder_id="")._root_folder_id == "root"
+    assert GoogleDriveFileProvider(**common, root_folder_id="root")._root_folder_id == "root"
+    assert GoogleDriveFileProvider(**common, root_folder_id="abc123")._root_folder_id == "abc123"
+
+
+@pytest.mark.asyncio
+async def test_get_root_does_a_real_call_and_resolves_id(monkeypatch):
+    provider = GoogleDriveFileProvider(client_id="c", client_secret="s", refresh_token="r")
+    captured: dict = {}
+
+    class _Resp:
+        content = b"{}"
+
+        def json(self):
+            return {"id": "real-root-id"}
+
+    async def _fake_send(client, method, url, *, action, **kwargs):
+        captured.update(method=method, url=url, action=action, params=kwargs.get("params"))
+        return _Resp()
+
+    monkeypatch.setattr(provider, "_send", _fake_send)
+    assert await provider.get_root() == "real-root-id"
+    # A real GET against the configured root (default "root") — this is what forces
+    # the token refresh that actually validates the credential.
+    assert captured["method"] == "GET"
+    assert captured["url"].endswith("/files/root")
+    assert captured["params"] == {"fields": "id"}
+
+
+@pytest.mark.asyncio
+async def test_get_root_falls_back_to_configured_id_when_absent(monkeypatch):
+    provider = GoogleDriveFileProvider(client_id="c", client_secret="s", refresh_token="r")
+
+    class _Resp:
+        content = b"{}"
+
+        def json(self):
+            return {}  # Drive omitted the id
+
+    async def _fake_send(client, method, url, *, action, **kwargs):
+        return _Resp()
+
+    monkeypatch.setattr(provider, "_send", _fake_send)
+    assert await provider.get_root() == "root"
+
+
+@pytest.mark.asyncio
+async def test_verify_google_drive_does_a_real_reachability_check(monkeypatch):
+    # The verify-before-store must actually hit Drive (so a bad/expired token is
+    # rejected up front) — i.e. it calls get_root, not the no-op ensure_folder([]).
+    from app.services import integrations as integrations_svc
+
+    called = {"hit": False}
+
+    async def _fake_get_root(self):
+        called["hit"] = True
+        return "root"
+
+    monkeypatch.setattr(GoogleDriveFileProvider, "get_root", _fake_get_root)
+    await integrations_svc.verify_google_drive(client_id="c", client_secret="s", refresh_token="r")
+    assert called["hit"] is True
+
+
+@pytest.mark.asyncio
+async def test_verify_google_drive_propagates_failure(monkeypatch):
+    from app.services import integrations as integrations_svc
+
+    async def _boom(self):
+        raise FileProviderError("invalid_grant")
+
+    monkeypatch.setattr(GoogleDriveFileProvider, "get_root", _boom)
+    with pytest.raises(FileProviderError):
+        await integrations_svc.verify_google_drive(
+            client_id="c", client_secret="s", refresh_token="bad"
+        )
+
+
+def test_company_folder_name_sanitizes_and_appends_id():
+    c = _Company("Acme / Co\nInc")
+    name = files_svc.company_folder_name(c)
+    assert name == f"Acme Co Inc ({str(c.id)[:8]})"
 
 
 def test_company_folder_name_falls_back_to_id():
     c = _Company("")
-    assert files_svc.company_folder_name(c).startswith("company-")
+    assert files_svc.company_folder_name(c) == f"company-{str(c.id)[:8]}"
+
+
+def test_company_folder_name_is_unique_for_same_named_companies():
+    # Two businesses share a name (e.g. onboarding's default "Untitled Company") —
+    # they must still get distinct folders in the founder's shared Drive.
+    a, b = _Company("Untitled Company"), _Company("Untitled Company")
+    assert files_svc.company_folder_name(a) != files_svc.company_folder_name(b)
 
 
 def test_category_path_uses_root_and_category_folder():
-    path = files_svc.category_path(_Company("Acme"), FileCategory.financial)
+    c = _Company("Acme")
+    path = files_svc.category_path(c, FileCategory.financial)
     assert path[0] == ".abos"
-    assert path[1] == "Acme"
+    assert path[1] == f"Acme ({str(c.id)[:8]})"
     assert path[2] == "Financials"
 
 
@@ -334,7 +476,8 @@ async def test_archive_files_into_category_folder_and_indexes():
         content=b"x",
         description="DD doc",
     )
-    assert row.folder_path == ".abos/Acme/Data Room"
+    folder = f".abos/{files_svc.company_folder_name(company)}/Data Room"
+    assert row.folder_path == folder
     assert row.name == "cap table.md"  # extension added
     assert row.external_id == "file-folder-1-cap table.md"
     assert row.web_url == "https://drive/cap table.md"
@@ -342,7 +485,7 @@ async def test_archive_files_into_category_folder_and_indexes():
     assert row.description == "DD doc"
     assert db.added == [row]
     # The file actually reached the (fake) provider.
-    assert (provider.folders[".abos/Acme/Data Room"], "cap table.md") in provider.files
+    assert (provider.folders[folder], "cap table.md") in provider.files
 
 
 @pytest.mark.asyncio
@@ -386,4 +529,4 @@ async def test_safe_archive_files_when_provider_present(monkeypatch):
         content="To: a@b.com\nSubject: Hello\n\nhi",
     )
     assert out is not None
-    assert out.folder_path == ".abos/Acme/Communications"
+    assert out.folder_path == f".abos/{files_svc.company_folder_name(company)}/Communications"
