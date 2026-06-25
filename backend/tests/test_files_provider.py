@@ -247,19 +247,39 @@ class _Company:
         self.name = name
 
 
-def test_company_folder_name_sanitizes():
-    assert files_svc.company_folder_name(_Company("Acme / Co\nInc")) == "Acme Co Inc"
+def test_provider_root_folder_defaults_to_root():
+    # "root" is Drive's alias for My Drive root and a valid parent for create/list,
+    # so an unset/empty stored root_folder_id must normalize to it (never "").
+    common = dict(client_id="c", client_secret="s", refresh_token="r")
+    assert GoogleDriveFileProvider(**common)._root_folder_id == "root"
+    assert GoogleDriveFileProvider(**common, root_folder_id="")._root_folder_id == "root"
+    assert GoogleDriveFileProvider(**common, root_folder_id="root")._root_folder_id == "root"
+    assert GoogleDriveFileProvider(**common, root_folder_id="abc123")._root_folder_id == "abc123"
+
+
+def test_company_folder_name_sanitizes_and_appends_id():
+    c = _Company("Acme / Co\nInc")
+    name = files_svc.company_folder_name(c)
+    assert name == f"Acme Co Inc ({str(c.id)[:8]})"
 
 
 def test_company_folder_name_falls_back_to_id():
     c = _Company("")
-    assert files_svc.company_folder_name(c).startswith("company-")
+    assert files_svc.company_folder_name(c) == f"company-{str(c.id)[:8]}"
+
+
+def test_company_folder_name_is_unique_for_same_named_companies():
+    # Two businesses share a name (e.g. onboarding's default "Untitled Company") —
+    # they must still get distinct folders in the founder's shared Drive.
+    a, b = _Company("Untitled Company"), _Company("Untitled Company")
+    assert files_svc.company_folder_name(a) != files_svc.company_folder_name(b)
 
 
 def test_category_path_uses_root_and_category_folder():
-    path = files_svc.category_path(_Company("Acme"), FileCategory.financial)
+    c = _Company("Acme")
+    path = files_svc.category_path(c, FileCategory.financial)
     assert path[0] == ".abos"
-    assert path[1] == "Acme"
+    assert path[1] == f"Acme ({str(c.id)[:8]})"
     assert path[2] == "Financials"
 
 
@@ -384,7 +404,8 @@ async def test_archive_files_into_category_folder_and_indexes():
         content=b"x",
         description="DD doc",
     )
-    assert row.folder_path == ".abos/Acme/Data Room"
+    folder = f".abos/{files_svc.company_folder_name(company)}/Data Room"
+    assert row.folder_path == folder
     assert row.name == "cap table.md"  # extension added
     assert row.external_id == "file-folder-1-cap table.md"
     assert row.web_url == "https://drive/cap table.md"
@@ -392,7 +413,7 @@ async def test_archive_files_into_category_folder_and_indexes():
     assert row.description == "DD doc"
     assert db.added == [row]
     # The file actually reached the (fake) provider.
-    assert (provider.folders[".abos/Acme/Data Room"], "cap table.md") in provider.files
+    assert (provider.folders[folder], "cap table.md") in provider.files
 
 
 @pytest.mark.asyncio
@@ -436,4 +457,4 @@ async def test_safe_archive_files_when_provider_present(monkeypatch):
         content="To: a@b.com\nSubject: Hello\n\nhi",
     )
     assert out is not None
-    assert out.folder_path == ".abos/Acme/Communications"
+    assert out.folder_path == f".abos/{files_svc.company_folder_name(company)}/Communications"
