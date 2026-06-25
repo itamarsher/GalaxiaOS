@@ -208,6 +208,12 @@ class Settings(BaseSettings):
     memory_recency_half_life_days: float = 30.0
     memory_candidate_multiplier: int = 4
     memory_candidate_cap: int = 60
+    # Heal memories written with no vector (e.g. while a ``remote`` embedding
+    # service was cold-starting): a periodic job re-embeds ``embedding IS NULL``
+    # rows once the embedder is warm. Bounded per company per run so the pass stays
+    # light on a small instance; the cron also keeps a remote embedder warm.
+    embedding_backfill_enabled: bool = True
+    embedding_backfill_batch: int = 50
 
     # Reputation-driven model selection: bump a struggling agent to a stronger
     # tier when its trust falls below the threshold.

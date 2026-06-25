@@ -10,6 +10,7 @@ from app.models import Company
 from app.models.enums import CompanyStatus
 from app.runtime import orchestrator
 from app.services import copilot
+from app.services import memory as memory_svc
 from app.services import runway as runway_svc
 from app.services import sites as sites_svc
 
@@ -61,6 +62,25 @@ async def reconcile_site_domains(ctx: dict) -> dict:
                 advanced += 1
             await db.commit()
     return {"advanced": advanced}
+
+
+async def backfill_memory_embeddings(ctx: dict) -> dict:
+    """Re-embed memories left without a vector (e.g. written while a remote
+    embedder was cold). Probes the embedder per company and skips quietly when it
+    isn't ready yet, so a cold/down embedding service costs nothing but a retry."""
+    if not settings.embedding_backfill_enabled:
+        return {"skipped": True}
+    scanned = updated = 0
+    for company_id in await _active_company_ids():
+        async with SessionLocal() as db:
+            await set_tenant(db, company_id)
+            res = await memory_svc.backfill_embeddings(
+                db, company_id=company_id, limit=settings.embedding_backfill_batch
+            )
+            await db.commit()
+        scanned += res["scanned"]
+        updated += res["updated"]
+    return {"scanned": scanned, "updated": updated}
 
 
 async def run_business_cycle(ctx: dict) -> dict:
