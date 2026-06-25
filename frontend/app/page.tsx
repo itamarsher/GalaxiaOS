@@ -56,22 +56,54 @@ export default function Home() {
   }
 
   // Bootstrap: use an existing session; else try the dev default account
-  // (auto-login); else fall back to the normal auth screen.
+  // (auto-login); else fall back to the normal auth screen. Each step is
+  // resilient: a stale/expired token is cleared rather than blocking
+  // auto-login, and a cold-started API (Render free tier spins down) is
+  // retried so it isn't mistaken for "dev tools disabled".
   useEffect(() => {
     let cancelled = false;
-    (async () => {
-      try {
-        if (api.hasToken()) { await afterAuth(false); return; }
-        const status = await api.devStatus().catch(() => ({ enabled: false }));
-        if (!cancelled && status.enabled) {
+
+    const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+    // Auto-login as the dev default account. Returns true if it handled
+    // navigation (logged in OR dev genuinely disabled), false to keep trying.
+    async function tryDevAutoLogin(): Promise<boolean> {
+      for (let attempt = 0; attempt < 3 && !cancelled; attempt++) {
+        try {
+          const status = await api.devStatus();
+          if (!status.enabled) return false; // dev off -> normal auth screen
           const res = await api.defaultLogin();
+          if (cancelled) return true;
           api.setToken(res.access_token);
           await afterAuth(true);
-          return;
+          return true;
+        } catch {
+          // Network/cold-start error: wait and retry before giving up so a
+          // spun-down API doesn't silently bounce us to the login screen.
+          if (attempt < 2) await sleep(1500);
         }
-      } catch { /* fall through to auth */ }
+      }
+      return false;
+    }
+
+    (async () => {
+      // 1) Reuse an existing session — but a stale/expired token must not
+      //    block auto-login. If it fails, drop it and fall through.
+      if (api.hasToken()) {
+        try {
+          await afterAuth(false);
+          return;
+        } catch {
+          api.logout();
+        }
+      }
+      if (cancelled) return;
+      // 2) Dev convenience: auto-login as the default account.
+      if (await tryDevAutoLogin()) return;
+      // 3) Normal auth screen.
       if (!cancelled) setStep("auth");
     })();
+
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
