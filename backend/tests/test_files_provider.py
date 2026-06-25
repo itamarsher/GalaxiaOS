@@ -172,6 +172,56 @@ def test_connect_configured_reflects_settings(monkeypatch):
     assert gdrive_oauth.connect_configured() is True
 
 
+@pytest.mark.asyncio
+async def test_resolve_file_provider_uses_companys_own_drive(monkeypatch):
+    from app.services import integrations as integrations_svc
+
+    fallback_called = {"hit": False}
+
+    async def _own(db, *, company_id):
+        return {"refresh_token": "rt-company"}
+
+    async def _fallback(company_id):
+        fallback_called["hit"] = True
+        return None
+
+    monkeypatch.setattr(integrations_svc, "get_google_drive", _own)
+    monkeypatch.setattr(integrations_svc, "_owner_google_drive", _fallback)
+    provider = await integrations_svc.resolve_file_provider(object(), company_id=uuid.uuid4())
+    assert isinstance(provider, GoogleDriveFileProvider)
+    assert fallback_called["hit"] is False  # own creds short-circuit the founder fallback
+
+
+@pytest.mark.asyncio
+async def test_resolve_file_provider_falls_back_to_founder_drive(monkeypatch):
+    # This company connected nothing itself, but the founder linked Drive on a
+    # sibling company → the file store still resolves (connect-once-covers-all).
+    from app.services import integrations as integrations_svc
+
+    async def _none(db, *, company_id):
+        return None
+
+    async def _owner(company_id):
+        return {"refresh_token": "rt-owner"}
+
+    monkeypatch.setattr(integrations_svc, "get_google_drive", _none)
+    monkeypatch.setattr(integrations_svc, "_owner_google_drive", _owner)
+    provider = await integrations_svc.resolve_file_provider(object(), company_id=uuid.uuid4())
+    assert isinstance(provider, GoogleDriveFileProvider)
+
+
+@pytest.mark.asyncio
+async def test_resolve_file_provider_none_when_founder_has_no_drive(monkeypatch):
+    from app.services import integrations as integrations_svc
+
+    async def _none(*a, **k):
+        return None
+
+    monkeypatch.setattr(integrations_svc, "get_google_drive", _none)
+    monkeypatch.setattr(integrations_svc, "_owner_google_drive", _none)
+    assert await integrations_svc.resolve_file_provider(object(), company_id=uuid.uuid4()) is None
+
+
 def test_oauth_state_round_trip():
     cid = uuid.uuid4()
     assert decode_oauth_state(create_oauth_state(cid)) == cid
