@@ -257,6 +257,78 @@ def test_provider_root_folder_defaults_to_root():
     assert GoogleDriveFileProvider(**common, root_folder_id="abc123")._root_folder_id == "abc123"
 
 
+@pytest.mark.asyncio
+async def test_get_root_does_a_real_call_and_resolves_id(monkeypatch):
+    provider = GoogleDriveFileProvider(client_id="c", client_secret="s", refresh_token="r")
+    captured: dict = {}
+
+    class _Resp:
+        content = b"{}"
+
+        def json(self):
+            return {"id": "real-root-id"}
+
+    async def _fake_send(client, method, url, *, action, **kwargs):
+        captured.update(method=method, url=url, action=action, params=kwargs.get("params"))
+        return _Resp()
+
+    monkeypatch.setattr(provider, "_send", _fake_send)
+    assert await provider.get_root() == "real-root-id"
+    # A real GET against the configured root (default "root") — this is what forces
+    # the token refresh that actually validates the credential.
+    assert captured["method"] == "GET"
+    assert captured["url"].endswith("/files/root")
+    assert captured["params"] == {"fields": "id"}
+
+
+@pytest.mark.asyncio
+async def test_get_root_falls_back_to_configured_id_when_absent(monkeypatch):
+    provider = GoogleDriveFileProvider(client_id="c", client_secret="s", refresh_token="r")
+
+    class _Resp:
+        content = b"{}"
+
+        def json(self):
+            return {}  # Drive omitted the id
+
+    async def _fake_send(client, method, url, *, action, **kwargs):
+        return _Resp()
+
+    monkeypatch.setattr(provider, "_send", _fake_send)
+    assert await provider.get_root() == "root"
+
+
+@pytest.mark.asyncio
+async def test_verify_google_drive_does_a_real_reachability_check(monkeypatch):
+    # The verify-before-store must actually hit Drive (so a bad/expired token is
+    # rejected up front) — i.e. it calls get_root, not the no-op ensure_folder([]).
+    from app.services import integrations as integrations_svc
+
+    called = {"hit": False}
+
+    async def _fake_get_root(self):
+        called["hit"] = True
+        return "root"
+
+    monkeypatch.setattr(GoogleDriveFileProvider, "get_root", _fake_get_root)
+    await integrations_svc.verify_google_drive(client_id="c", client_secret="s", refresh_token="r")
+    assert called["hit"] is True
+
+
+@pytest.mark.asyncio
+async def test_verify_google_drive_propagates_failure(monkeypatch):
+    from app.services import integrations as integrations_svc
+
+    async def _boom(self):
+        raise FileProviderError("invalid_grant")
+
+    monkeypatch.setattr(GoogleDriveFileProvider, "get_root", _boom)
+    with pytest.raises(FileProviderError):
+        await integrations_svc.verify_google_drive(
+            client_id="c", client_secret="s", refresh_token="bad"
+        )
+
+
 def test_company_folder_name_sanitizes_and_appends_id():
     c = _Company("Acme / Co\nInc")
     name = files_svc.company_folder_name(c)

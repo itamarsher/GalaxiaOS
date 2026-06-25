@@ -227,6 +227,27 @@ class GoogleDriveFileProvider:
 
     # ─────────────────────────── FileProvider ───────────────────────────
 
+    async def get_root(self) -> str:
+        """Resolve the configured root folder's concrete id, with a real round-trip.
+
+        ``"root"`` is Drive's alias for My Drive root and works as a parent in every
+        create/list call, so *filing* never needs the concrete id. This exists for
+        the one case that genuinely benefits from a live call: verifying a
+        freshly-connected credential. ``GET /files/<root>`` forces a token refresh
+        and a real Drive read, so a broken/expired refresh token (or an
+        unreachable/missing configured root) surfaces as a :class:`FileProviderError`
+        instead of being persisted as "connected". Returns the resolved id (falling
+        back to the configured ``root_folder_id`` if Drive omits it)."""
+        async with httpx.AsyncClient(timeout=self._timeout) as client:
+            resp = await self._send(
+                client,
+                "GET",
+                f"{_DRIVE_API}/{self._root_folder_id}",
+                action="get-root",
+                params={"fields": "id"},
+            )
+        return str(_json(resp).get("id") or self._root_folder_id)
+
     async def ensure_folder(self, path: list[str]) -> FolderRef:
         parent = self._root_folder_id
         async with httpx.AsyncClient(timeout=self._timeout) as client:
