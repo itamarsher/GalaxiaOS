@@ -11,6 +11,7 @@ import uuid
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import defer
 
 from app.db import SessionLocal
 from app.models import Artifact
@@ -55,8 +56,11 @@ async def create_artifact(
 
 
 async def list_artifacts(db: AsyncSession, *, company_id: uuid.UUID, limit: int = 100) -> list[Artifact]:
+    # The list response (``ArtifactListOut``) carries only metadata, so don't pull
+    # every row's full ``body_md`` Text column into memory just to drop it.
     rows = await db.scalars(
         select(Artifact)
+        .options(defer(Artifact.body_md))
         .where(Artifact.company_id == company_id)
         .order_by(Artifact.created_at.desc())
         .limit(limit)

@@ -49,6 +49,15 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+asyncpg://abos:abos@localhost:5432/abos"
     redis_url: str = "redis://localhost:6379/0"
 
+    # Connection-pool sizing. Each pooled asyncpg connection holds a socket plus
+    # per-connection buffers, so on a memory-constrained host (e.g. the 512MB
+    # free tier, where the API and the in-process worker share this one engine)
+    # the default 5+10 pool is worth trimming. ``pool_recycle`` also drops idle
+    # connections so their buffers aren't pinned for the life of the process.
+    db_pool_size: int = 5
+    db_max_overflow: int = 10
+    db_pool_recycle_seconds: int = 1800
+
     @field_validator("database_url")
     @classmethod
     def _normalize_database_url(cls, v: str) -> str:
@@ -174,7 +183,7 @@ class Settings(BaseSettings):
     # (credential-gated by ABOS_OPENAI_API_KEY). All reduce to the 1536-dim pgvector
     # column. Switching providers re-embeds new writes only — backfill existing rows
     # if you change it on a populated DB.
-    embeddings_provider: str = "local"  # local | hashing | openai
+    embeddings_provider: str = "local"  # local | hashing | openai | remote
     embeddings_model: str = "text-embedding-3-small"  # openai model
     # Local fastembed model (small + CPU-friendly; 384-dim, zero-padded to 1536).
     local_embeddings_model: str = "BAAI/bge-small-en-v1.5"
@@ -184,12 +193,27 @@ class Settings(BaseSettings):
     local_embeddings_cache_dir: str = ""
     embeddings_timeout_seconds: float = 10.0
     openai_api_key: str = ""  # platform key for the OpenAI embeddings endpoint
+    # "remote" embedder: offload the local fastembed/ONNX model to a separate
+    # service (``app.embed_service``) so the model's ~150-200MB lives in its own
+    # memory budget, not the API's — the way to keep real semantic recall on the
+    # 512MB free tier without paying for a bigger API instance. ``embeddings_url``
+    # is that service's base URL (scheme optional; https assumed). The shared
+    # secret authenticates the call (both services get the same value). With the
+    # URL unset the provider yields no vector and recall falls back to recency.
+    embeddings_url: str = ""
+    embeddings_remote_secret: str = ""
     # Recall blends similarity with recency so stale memories rank lower: a memory's
     # weight halves every ``half_life_days``. Candidates are pulled by pure
     # similarity (a pool of ``recall_limit * multiplier``, capped) then re-ranked.
     memory_recency_half_life_days: float = 30.0
     memory_candidate_multiplier: int = 4
     memory_candidate_cap: int = 60
+    # Heal memories written with no vector (e.g. while a ``remote`` embedding
+    # service was cold-starting): a periodic job re-embeds ``embedding IS NULL``
+    # rows once the embedder is warm. Bounded per company per run so the pass stays
+    # light on a small instance; the cron also keeps a remote embedder warm.
+    embedding_backfill_enabled: bool = True
+    embedding_backfill_batch: int = 50
 
     # Reputation-driven model selection: bump a struggling agent to a stronger
     # tier when its trust falls below the threshold.
@@ -225,6 +249,20 @@ class Settings(BaseSettings):
     # times the CEO may re-run the same failed task before it stays failed, so a
     # fail↔retry loop can't burn budget forever.
     max_task_retries: int = 3
+
+    # Max tasks the arq worker runs concurrently. Each in-flight task holds an
+    # agent loop's working set (system prompt, tool specs, the growing message
+    # history, the latest LLM response), so on the free tier — where the worker
+    # runs inside the API process under a 512MB cap — this is the main lever on
+    # peak concurrent memory. Lower it there; keep it higher on the dedicated
+    # worker service.
+    worker_max_jobs: int = 10
+
+    # Defensive cap on how many bytes an agent's ``read_company_file`` will pull
+    # into memory. A file is materialized whole to decode it as text, so without
+    # a bound a runaway agent reading a large attachment could OOM the box. 0
+    # disables the guard.
+    max_file_read_bytes: int = 5_000_000
 
     # Restart safety: the durable business state lives in Postgres, but the work
     # queue is arq-on-Redis and ephemeral on this deployment. On worker startup,

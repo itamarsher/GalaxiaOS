@@ -38,9 +38,11 @@ class InMemoryRateLimiter:
         self._window = window_seconds
         self._clock = clock
         self._state: dict[str, tuple[float, int]] = {}  # key -> (window_start, count)
+        self._last_sweep = clock()
 
     async def allow(self, key: str) -> tuple[bool, int]:
         now = self._clock()
+        self._maybe_sweep(now)
         window_start, count = self._state.get(key, (now, 0))
         if now - window_start >= self._window:
             window_start, count = now, 0
@@ -50,6 +52,22 @@ class InMemoryRateLimiter:
             retry_after = max(1, int(self._window - (now - window_start)))
             return False, retry_after
         return True, 0
+
+    def _maybe_sweep(self, now: float) -> None:
+        """Drop keys whose window has elapsed so ``_state`` can't grow unbounded.
+
+        Without this, every distinct client (user id or IP) leaves a permanent
+        entry behind — a slow leak that matters most on the single free-tier
+        instance, which uses this in-memory backend. We only sweep once per
+        window so the common per-request path stays O(1).
+        """
+        if now - self._last_sweep < self._window:
+            return
+        self._last_sweep = now
+        cutoff = now - self._window
+        stale = [k for k, (start, _) in self._state.items() if start <= cutoff]
+        for k in stale:
+            del self._state[k]
 
 
 class RedisRateLimiter:

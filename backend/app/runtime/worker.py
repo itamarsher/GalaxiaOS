@@ -10,6 +10,7 @@ from app.config import settings
 from app.db import SessionLocal
 from app.jobs.recovery import recover_pending_work
 from app.jobs.scheduled import (
+    backfill_memory_embeddings,
     generate_digests,
     recompute_runway,
     reconcile_site_domains,
@@ -72,10 +73,13 @@ class WorkerSettings:
         # Push in-flight domain connections forward (zone activation + HTTPS take
         # minutes and happen out-of-band); every 5 minutes is plenty.
         cron(reconcile_site_domains, minute=set(range(0, 60, 5))),
+        # Heal memories written without a vector (e.g. while a remote embedder was
+        # cold-starting); every 10 minutes also keeps that embedder warm.
+        cron(backfill_memory_embeddings, minute=set(range(0, 60, 10))),
     ]
     on_startup = startup
     redis_settings = redis_settings()
-    max_jobs = 10
+    max_jobs = settings.worker_max_jobs
 
 
 def build_worker(handle_signals: bool = True):

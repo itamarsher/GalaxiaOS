@@ -20,6 +20,7 @@ import uuid
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import defer
 
 from app.config import settings
 from app.db import set_tenant
@@ -189,8 +190,14 @@ def lead_capture_action(site_id: uuid.UUID) -> str | None:
 
 
 async def list_sites(db: AsyncSession, *, company_id: uuid.UUID) -> list[Site]:
+    # ``SiteOut`` exposes only metadata, so don't load every page's ``body``
+    # markdown and rendered ``html`` Text columns (tens of KB each) just to drop
+    # them — defer them and let the detail view pull them when actually needed.
     rows = await db.scalars(
-        select(Site).where(Site.company_id == company_id).order_by(Site.created_at.desc())
+        select(Site)
+        .options(defer(Site.body), defer(Site.html))
+        .where(Site.company_id == company_id)
+        .order_by(Site.created_at.desc())
     )
     return list(rows)
 
