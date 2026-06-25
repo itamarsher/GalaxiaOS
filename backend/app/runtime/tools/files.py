@@ -14,6 +14,7 @@ and indexing live in :mod:`app.services.files`.
 
 from __future__ import annotations
 
+from app.config import settings
 from app.integrations.files import FileProviderError
 from app.models import Agent, Company, Task
 from app.models.enums import FileCategory, MemoryType
@@ -184,6 +185,17 @@ async def _read_company_file(db, ctx, *, agent: Agent, task: Task, args: dict) -
     provider = await resolve_file_provider(db, company_id=task.company_id)
     if provider is None or not row.external_id:
         return unsupported_capability("Reading a file", hint=_UNSUPPORTED_HINT)
+    # A file is pulled whole into memory to decode it as text, so refuse an
+    # oversized one up front rather than risk OOM-ing the box on a 512MB host.
+    cap = settings.max_file_read_bytes
+    if cap and row.size_bytes and row.size_bytes > cap:
+        return ToolOutcome(
+            observation=(
+                f"{row.name} is too large to read ({row.size_bytes // 1024} KB; "
+                f"limit {cap // 1024} KB)."
+            ),
+            is_error=True,
+        )
     try:
         data = await provider.download_file(row.external_id)
     except FileProviderError as exc:

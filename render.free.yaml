@@ -48,6 +48,20 @@ services:
           property: connectionString
       - key: ABOS_RUN_WORKER_IN_PROCESS
         value: "true"
+      # Memory budget (512MB shared by the API + in-process worker):
+      #  - Skip the local fastembed/ONNX embedder — it pins ~150-200MB resident
+      #    once loaded. The dependency-free "hashing" embedder needs <1MB and
+      #    keeps Company-Memory recall working (lexical instead of semantic).
+      - key: ABOS_EMBEDDINGS_PROVIDER
+        value: hashing
+      #  - Run fewer agent loops at once; each holds a full working set in memory.
+      - key: ABOS_WORKER_MAX_JOBS
+        value: "2"
+      #  - Trim the DB pool so connection buffers don't pin memory.
+      - key: ABOS_DB_POOL_SIZE
+        value: "3"
+      - key: ABOS_DB_MAX_OVERFLOW
+        value: "2"
       - key: ABOS_MASTER_KEY
         sync: false   # set in dashboard: `make gen-key`
       - key: ABOS_JWT_SECRET

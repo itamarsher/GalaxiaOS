@@ -46,7 +46,18 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from app.config import settings
 
-engine = create_async_engine(settings.database_url, pool_pre_ping=True, future=True)
+engine = create_async_engine(
+    settings.database_url,
+    pool_pre_ping=True,
+    future=True,
+    # Bound the pool so connection buffers don't pin memory on a small host (the
+    # API and in-process worker share this one engine on the free tier). Recycle
+    # idle connections so their buffers are released rather than held for the
+    # process lifetime.
+    pool_size=settings.db_pool_size,
+    max_overflow=settings.db_max_overflow,
+    pool_recycle=settings.db_pool_recycle_seconds,
+)
 
 SessionLocal = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
 

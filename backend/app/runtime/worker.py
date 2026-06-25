@@ -75,7 +75,7 @@ class WorkerSettings:
     ]
     on_startup = startup
     redis_settings = redis_settings()
-    max_jobs = 10
+    max_jobs = settings.worker_max_jobs
 
 
 def build_worker(handle_signals: bool = True):

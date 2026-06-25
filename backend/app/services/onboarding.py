@@ -73,10 +73,29 @@ class OnboardingError(Exception):
 _PROGRESS: dict[str, dict] = {}
 _PROGRESS_LOCK = Lock()
 _MAX_EVENTS = 40
+# Cap how many companies' progress blobs we retain. Each finished generation
+# otherwise leaves its blob (up to ``_MAX_EVENTS`` events) in memory forever —
+# a slow leak over the life of the process. We evict the least-recently-updated
+# entries once the registry grows past this, which is harmless: a stale blob is
+# only read by the founder's spinner while a generate request is still in flight.
+_MAX_TRACKED_COMPANIES = 256
+
+
+def _evict_stale_progress_locked(keep_key: str) -> None:
+    """Bound ``_PROGRESS`` to the most recent companies. Caller holds the lock."""
+    if len(_PROGRESS) <= _MAX_TRACKED_COMPANIES:
+        return
+    victims = sorted(
+        (k for k in _PROGRESS if k != keep_key),
+        key=lambda k: _PROGRESS[k].get("updated_at", 0.0),
+    )
+    for k in victims[: len(_PROGRESS) - _MAX_TRACKED_COMPANIES]:
+        del _PROGRESS[k]
 
 
 def reset_progress(company_id: uuid.UUID) -> None:
     with _PROGRESS_LOCK:
+        _evict_stale_progress_locked(str(company_id))
         _PROGRESS[str(company_id)] = {
             "phase": "queued",
             "pct": 0,

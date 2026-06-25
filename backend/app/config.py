@@ -49,6 +49,15 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+asyncpg://abos:abos@localhost:5432/abos"
     redis_url: str = "redis://localhost:6379/0"
 
+    # Connection-pool sizing. Each pooled asyncpg connection holds a socket plus
+    # per-connection buffers, so on a memory-constrained host (e.g. the 512MB
+    # free tier, where the API and the in-process worker share this one engine)
+    # the default 5+10 pool is worth trimming. ``pool_recycle`` also drops idle
+    # connections so their buffers aren't pinned for the life of the process.
+    db_pool_size: int = 5
+    db_max_overflow: int = 10
+    db_pool_recycle_seconds: int = 1800
+
     @field_validator("database_url")
     @classmethod
     def _normalize_database_url(cls, v: str) -> str:
@@ -225,6 +234,20 @@ class Settings(BaseSettings):
     # times the CEO may re-run the same failed task before it stays failed, so a
     # fail↔retry loop can't burn budget forever.
     max_task_retries: int = 3
+
+    # Max tasks the arq worker runs concurrently. Each in-flight task holds an
+    # agent loop's working set (system prompt, tool specs, the growing message
+    # history, the latest LLM response), so on the free tier — where the worker
+    # runs inside the API process under a 512MB cap — this is the main lever on
+    # peak concurrent memory. Lower it there; keep it higher on the dedicated
+    # worker service.
+    worker_max_jobs: int = 10
+
+    # Defensive cap on how many bytes an agent's ``read_company_file`` will pull
+    # into memory. A file is materialized whole to decode it as text, so without
+    # a bound a runaway agent reading a large attachment could OOM the box. 0
+    # disables the guard.
+    max_file_read_bytes: int = 5_000_000
 
     # Restart safety: the durable business state lives in Postgres, but the work
     # queue is arq-on-Redis and ephemeral on this deployment. On worker startup,
