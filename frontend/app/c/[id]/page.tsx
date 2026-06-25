@@ -3,14 +3,9 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
-import { api, fmtUsd, sortTasksForView, statusLabel, type Task } from "@/lib/api";
-import { usePoll } from "@/lib/useApi";
+import { api, fmtUsd, sortTasksForView, statusLabel } from "@/lib/api";
+import { usePoll, useLiveTasks } from "@/lib/useApi";
 import { Markdown } from "@/lib/markdown";
-
-interface EventFrame {
-  tasks: Task[];
-  budget: { spent_cents: number; reserved_cents: number; limit_cents: number } | null;
-}
 
 export default function Overview() {
   const { id } = useParams<{ id: string }>();
@@ -23,12 +18,9 @@ export default function Overview() {
   // TEMP dev tools — remove before launch.
   const dev = usePoll(() => api.devStatus(), 0, [id]);
 
-  // Live task stream (SSE) so the founder sees work happening, auto-updating
-  // without a refresh. Falls back to polling the task list so the Overview always
-  // shows the task list (the same view as right after onboarding), even when the
-  // org is idle and no SSE frames are arriving.
-  const [liveTasks, setLiveTasks] = useState<Task[] | null>(null);
-  const polledTasks = usePoll(() => api.tasks(id), 5000, [id]);
+  // Live task stream (SSE when healthy, polling fallback) so the founder sees work
+  // happening and the feed keeps refreshing even when SSE drops (see useLiveTasks).
+  const tasks = useLiveTasks(id);
   const [justLaunched, setJustLaunched] = useState(false);
   const [deleting, setDeleting] = useState(false);
 
@@ -36,20 +28,10 @@ export default function Overview() {
     if (typeof window !== "undefined") {
       setJustLaunched(new URLSearchParams(window.location.search).get("launched") === "1");
     }
-    const url = api.eventsUrl(id);
-    if (typeof window === "undefined" || typeof EventSource === "undefined" || !url) return;
-    const es = new EventSource(url);
-    es.onmessage = (e: MessageEvent) => {
-      try { setLiveTasks((JSON.parse(e.data) as EventFrame).tasks); } catch { /* ignore */ }
-    };
-    es.onerror = () => es.close();
-    return () => es.close();
-  }, [id]);
+  }, []);
 
   const b = budget.data?.budget;
   const pct = b && b.limit_cents ? Math.min(100, (b.spent_cents / b.limit_cents) * 100) : 0;
-
-  const tasks = liveTasks ?? polledTasks.data ?? [];
   const counts = tasks.reduce<Record<string, number>>((acc, t) => {
     acc[t.status] = (acc[t.status] ?? 0) + 1;
     return acc;
