@@ -2,23 +2,15 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useParams } from "next/navigation";
-import { api, fmtUsd, sortTasksForView, statusLabel, type Task, type TaskDetail } from "@/lib/api";
-import { usePoll } from "@/lib/useApi";
+import { api, fmtUsd, sortTasksForView, statusLabel, type TaskDetail } from "@/lib/api";
+import { usePoll, useLiveTasks } from "@/lib/useApi";
 import { Markdown } from "@/lib/markdown";
-
-interface EventFrame {
-  tasks: Task[];
-  budget: { spent_cents: number; reserved_cents: number; limit_cents: number } | null;
-}
 
 export default function TasksPage() {
   const { id } = useParams<{ id: string }>();
-  // Streamed tasks via SSE; null until the first frame arrives (or SSE fails).
-  const [streamed, setStreamed] = useState<Task[] | null>(null);
-  const [sseOk, setSseOk] = useState(true);
   const [openId, setOpenId] = useState<string | null>(null);
-  // Fallback polling, only active once SSE has errored out.
-  const polled = usePoll(() => api.tasks(id), sseOk ? 0 : 3000, [id, sseOk]);
+  // Live task list — SSE when healthy, polling fallback otherwise (see useLiveTasks).
+  const tasks = sortTasksForView(useLiveTasks(id));
 
   // Deep-link: /tasks?task=<id> (e.g. from the Overview activity feed) opens the drawer.
   useEffect(() => {
@@ -26,31 +18,6 @@ export default function TasksPage() {
     const t = new URLSearchParams(window.location.search).get("task");
     if (t) setOpenId(t);
   }, []);
-
-  useEffect(() => {
-    const url = api.eventsUrl(id);
-    if (typeof window === "undefined" || typeof EventSource === "undefined" || !url) {
-      setSseOk(false);
-      return;
-    }
-    const es = new EventSource(url);
-    es.onmessage = (e: MessageEvent) => {
-      try {
-        const frame = JSON.parse(e.data) as EventFrame;
-        setStreamed(frame.tasks);
-        setSseOk(true);
-      } catch {
-        /* ignore malformed frame */
-      }
-    };
-    es.onerror = () => {
-      es.close();
-      setSseOk(false);
-    };
-    return () => es.close();
-  }, [id]);
-
-  const tasks: Task[] = sortTasksForView(streamed ?? polled.data ?? []);
 
   return (
     <div>
