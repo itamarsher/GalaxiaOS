@@ -95,6 +95,20 @@ export interface TaskDetail extends Task {
 }
 export interface TaskTranscript { task_id: string; status: string; lines: string[] }
 export interface ChatTurn { who: "you" | "agent"; text: string }
+// Fleet + founder collaboration (channels and founder DMs). A null agent id
+// (sender/participant) is the founder.
+export interface ChatParticipant { agent_id: string | null; name: string; role: string | null }
+export interface ChatMessage {
+  id: string; channel_id: string; sender_agent_id: string | null;
+  sender_name: string | null; sender_role: string | null; is_founder: boolean;
+  body: string; created_at: string;
+}
+export interface ChatChannel {
+  id: string; name: string; purpose: string | null; kind: string; archived: boolean;
+  created_at: string; participants: ChatParticipant[]; message_count: number;
+  last_message_at: string | null; last_message_preview: string | null;
+  waiting_agents: string[]; pending_decision: Decision | null;
+}
 export interface SpendEntry {
   id: string; category: string; amount_cents: number;
   vendor: string | null; sku: string | null; description: string | null;
@@ -272,6 +286,26 @@ export const api = {
   resetBreaker: (companyId: string, breakerId: string) =>
     req<Breaker>(`/companies/${companyId}/circuit-breakers/${breakerId}/reset`, { method: "POST" }),
   reputation: (companyId: string) => req<Reputation[]>(`/companies/${companyId}/reputation`),
+
+  // Chat — the unified collaboration surface (channels + founder DMs). Decisions
+  // now show up here as founder DMs marked "waiting for a response".
+  chatChannels: (companyId: string) =>
+    req<ChatChannel[]>(`/companies/${companyId}/chat/channels`),
+  createChatChannel: (
+    companyId: string,
+    body: { name: string; purpose?: string; member_roles?: string[] },
+  ) =>
+    req<ChatChannel>(`/companies/${companyId}/chat/channels`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  chatMessages: (companyId: string, channelId: string) =>
+    req<ChatMessage[]>(`/companies/${companyId}/chat/channels/${channelId}/messages`),
+  postChatMessage: (companyId: string, channelId: string, message: string) =>
+    req<ChatMessage>(`/companies/${companyId}/chat/channels/${channelId}/messages`, {
+      method: "POST",
+      body: JSON.stringify({ message }),
+    }),
 
   decisions: (companyId: string, onlyPending = true) =>
     req<Decision[]>(`/companies/${companyId}/decisions?only_pending=${onlyPending}`),

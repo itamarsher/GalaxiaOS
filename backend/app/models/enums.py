@@ -158,6 +158,33 @@ class DecisionStatus(str, enum.Enum):
     expired = "expired"
 
 
+class ChatChannelKind(str, enum.Enum):
+    """Shape of a chat conversation.
+
+    ``channel`` is a named space for a big initiative that several agents (and the
+    founder) collaborate in; ``direct`` is a 1:1 thread between two participants
+    (an agent and another agent, or an agent and the founder).
+    """
+
+    channel = "channel"
+    direct = "direct"
+
+
+class ChatWaitStatus(str, enum.Enum):
+    """Lifecycle of an agent's "wait for a reply in this channel" request.
+
+    Mirrors the decision-parking mechanic: a ``pending`` wait blocks its task
+    until someone else posts to the channel, which flips it to ``satisfied`` and
+    re-queues the task. The reply is then delivered to the agent on resume and the
+    wait is marked ``consumed`` so it is not delivered twice.
+    """
+
+    pending = "pending"
+    satisfied = "satisfied"
+    consumed = "consumed"
+    expired = "expired"
+
+
 class SiteStatus(str, enum.Enum):
     """Lifecycle of a generated landing page / site."""
 

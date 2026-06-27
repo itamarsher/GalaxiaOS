@@ -84,9 +84,9 @@ function ApprovalToggle({ companyId }: { companyId: string }) {
         <div>
           <div className="step" style={{ marginBottom: 4 }}>Approve every external message</div>
           <span className="muted" style={{ fontSize: 13 }}>
-            When on, every outbound communication pauses for your sign-off in the{" "}
-            <Link href={`/c/${companyId}/decisions`}>Decisions</Link> inbox, where you can
-            discuss it with the agent before it goes out. Useful for early cycles.
+            When on, every outbound communication pauses for your sign-off in{" "}
+            <Link href={`/c/${companyId}/chat`}>Chat</Link>, where it appears as a founder DM
+            you can discuss with the agent before it goes out. Useful for early cycles.
           </span>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 10, flex: "0 0 auto" }}>
@@ -132,7 +132,7 @@ function MessageRow({ m, companyId }: { m: ExternalMessage; companyId: string })
             {m.body && <div style={{ whiteSpace: "pre-wrap", fontSize: 13, marginBottom: 6 }}>{m.body}</div>}
             {m.detail && <div className="muted" style={{ fontSize: 12 }}>{m.detail}</div>}
             {m.status === "pending_approval" && m.decision_id && (
-              <Link href={`/c/${companyId}/decisions`}>Review in Decisions →</Link>
+              <Link href={`/c/${companyId}/chat`}>Review in Chat →</Link>
             )}
             {!m.body && !m.detail && <span className="muted">No content recorded.</span>}
           </td>

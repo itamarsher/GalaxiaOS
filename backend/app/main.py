@@ -17,6 +17,7 @@ from app.api import (
     artifacts,
     auth,
     budget,
+    chat,
     comms,
     companies,
     copilot,
@@ -117,6 +118,7 @@ def create_app() -> FastAPI:
     app.include_router(metrics.router)
     app.include_router(decisions.router)
     app.include_router(comms.router)
+    app.include_router(chat.router)
     app.include_router(copilot.router)
     app.include_router(events.router)
     app.include_router(marketplace.catalog_router)

@@ -12,7 +12,7 @@ export default function Overview() {
   const router = useRouter();
   const company = usePoll(() => api.company(id), 0, [id]);
   const budget = usePoll(() => api.budget(id), 5000, [id]);
-  const decisions = usePoll(() => api.decisions(id, true), 5000, [id]);
+  const chatChannels = usePoll(() => api.chatChannels(id), 5000, [id]);
   const digest = usePoll(() => api.digestLatest(id), 0, [id]);
   const sites = usePoll(() => api.sites(id), 10000, [id]);
   // TEMP dev tools — remove before launch.
@@ -124,9 +124,13 @@ export default function Overview() {
         </div>
 
         <div className="card">
-          <div className="step">Decisions needed</div>
-          <p style={{ fontSize: 32, margin: "8px 0" }}>{decisions.data?.length ?? 0}</p>
-          <p className="muted">Pending founder approvals. See the Decisions tab.</p>
+          <div className="step">Needs you</div>
+          <p style={{ fontSize: 32, margin: "8px 0" }}>
+            {(chatChannels.data ?? []).filter(
+              (c) => c.waiting_agents.length > 0 || c.pending_decision != null,
+            ).length}
+          </p>
+          <p className="muted">Chat threads where an agent is waiting for your reply. See the Chat tab.</p>
         </div>
       </div>
 

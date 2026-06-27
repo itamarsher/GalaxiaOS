@@ -4,16 +4,16 @@ from __future__ import annotations
 
 from sqlalchemy import select
 
-from app.models import Agent, AgentRun, DecisionRequest, Task
+from app.models import Agent, AgentRun, ChatWait, DecisionRequest, Task
 from app.models.enums import (
     AgentRole,
-    DecisionKind,
-    DecisionStatus,
+    ChatWaitStatus,
     RunStatus,
     RunTrigger,
     TaskStatus,
 )
 from app.runtime.tools import TOOL_SPECS, execute_tool
+from app.services import chat
 from tests.conftest import requires_db
 
 
@@ -58,7 +58,11 @@ async def test_request_user_action_parks_and_asks_founder(session_factory, compa
 
     async with session_factory() as db:
         out = await execute_tool(
-            db, object(), agent=agent, task=task, name="request_user_action",
+            db,
+            object(),
+            agent=agent,
+            task=task,
+            name="request_user_action",
             args={"action": "Call the vendor and confirm pricing", "reason": "need the quote"},
         )
         await db.commit()
@@ -66,14 +70,18 @@ async def test_request_user_action_parks_and_asks_founder(session_factory, compa
     assert out.park is True
 
     async with session_factory() as db:
-        decision = await db.scalar(
+        # request_user_action is now a founder DM that waits for the founder's
+        # report: a ChatWait parks the task and the ask is posted to the thread.
+        wait = await db.scalar(select(ChatWait).where(ChatWait.task_id == task.id))
+        assert wait is not None and wait.status is ChatWaitStatus.pending
+        channel = await chat.founder_dm(db, company_id=company_id, agent_id=agent.id)
+        msgs = await chat.messages(db, channel_id=channel.id)
+        assert any("Call the vendor" in m.body for m in msgs)
+        # No separate decision row for an open-ended ask.
+        decisions = await db.scalar(
             select(DecisionRequest).where(DecisionRequest.task_id == task.id)
         )
-        assert decision is not None
-        assert decision.kind is DecisionKind.user_action
-        assert decision.status is DecisionStatus.pending
-        assert (decision.payload or {}).get("tool") == "request_user_action"
-        assert "Call the vendor" in (decision.payload or {}).get("action", "")
+        assert decisions is None
         row = await db.get(Task, task.id)
         assert row.status is TaskStatus.waiting_approval
 
@@ -85,7 +93,11 @@ async def test_request_user_action_requires_an_action(session_factory, company_w
 
     async with session_factory() as db:
         out = await execute_tool(
-            db, object(), agent=agent, task=task, name="request_user_action",
+            db,
+            object(),
+            agent=agent,
+            task=task,
+            name="request_user_action",
             args={"action": "   "},
         )
     assert out.is_error

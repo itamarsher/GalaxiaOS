@@ -61,7 +61,10 @@ class ReputationScore(Base, PKMixin, TenantMixin, TimestampMixin):
     __tablename__ = "reputation_scores"
 
     agent_id: Mapped[uuid.UUID] = mapped_column(
-        PGUUID(as_uuid=True), ForeignKey("agents.id", ondelete="CASCADE"), nullable=False, index=True
+        PGUUID(as_uuid=True),
+        ForeignKey("agents.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
     )
     trust: Mapped[float] = mapped_column(Float, default=0.5, nullable=False)
     accuracy: Mapped[float] = mapped_column(Float, default=0.5, nullable=False)
@@ -86,6 +89,14 @@ class DecisionRequest(Base, PKMixin, TenantMixin, TimestampMixin):
     )
     summary: Mapped[str] = mapped_column(Text, nullable=False)
     payload: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    # The founder DM channel this decision is surfaced in. Every decision now
+    # appears as a direct message to the founder marked "waiting for a response"
+    # (see app.services.chat); this links the structured decision (which carries
+    # the approval grant / budget metadata) to that chat thread so resolving it
+    # can post back into the conversation. NULL for legacy rows.
+    channel_id: Mapped[uuid.UUID | None] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("chat_channels.id", ondelete="SET NULL"), nullable=True
+    )
     # Persisted founder↔agent discussion thread, oldest first: a list of
     # ``{"who": "you"|"agent", "text": str}`` turns. Survives reloads/devices so
     # the conversation (and the agent's context) isn't lost between messages.
@@ -96,5 +107,7 @@ class DecisionRequest(Base, PKMixin, TenantMixin, TimestampMixin):
         nullable=False,
         index=True,
     )
-    resolved_by_user_id: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), nullable=True)
+    resolved_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        PGUUID(as_uuid=True), nullable=True
+    )
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

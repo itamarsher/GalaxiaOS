@@ -108,7 +108,7 @@ function TaskDrawer({ companyId, taskId, onClose }: { companyId: string; taskId:
                   <button disabled={busy} onClick={() => resolve(true)}>Approve</button>
                   <button className="ghost" disabled={busy} onClick={() => resolve(false)}>Reject</button>
                   <a className="muted" style={{ fontSize: 12, alignSelf: "center" }}
-                     href={`/c/${companyId}/decisions`}>Discuss in Decisions →</a>
+                     href={`/c/${companyId}/chat`}>Discuss in Chat →</a>
                 </div>
               </div>
             )}

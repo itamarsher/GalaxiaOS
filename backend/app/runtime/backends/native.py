@@ -37,7 +37,7 @@ from app.runtime.tools import TOOL_SPECS, execute_tool
 from app.runtime.tools.base import ToolOutcome, clip
 from app.runtime.tools.base import consume_approval_grant as _consume_approval_grant
 from app.runtime.transcript import dump_messages, load_messages, sanitize_messages, transcript_lines
-from app.services import apikeys, memory, metrics, reputation
+from app.services import apikeys, chat, memory, metrics, reputation
 from app.services import external_messages as ext
 from app.services import governance as gov
 from app.services import integrations as integrations_svc
@@ -392,8 +392,10 @@ class NativeBackend:
                     status=DecisionStatus.pending,
                 )
                 db.add(decision)
+                await db.flush()
+                # Surface the gated action in the agent↔founder DM, marked waiting.
+                await chat.attach_decision_dm(db, decision=decision)
                 if is_external:
-                    await db.flush()
                     await ext.record(
                         db,
                         company_id=task.company_id,
@@ -427,29 +429,30 @@ class NativeBackend:
                 # so the action goes through on resume.
                 await db.rollback()
                 shortfall = max(0, exc.requested_cents - exc.available_cents)
-                db.add(
-                    DecisionRequest(
-                        company_id=task.company_id,
-                        agent_id=agent.id,
-                        task_id=task.id,
-                        kind=DecisionKind.spend_approval,
-                        summary=(
-                            f"**Over budget — approval needed**\n\n"
-                            f"`{call.name}` needs **${exc.requested_cents / 100:.2f}**, "
-                            f"but only **${max(0, exc.available_cents) / 100:.2f}** is left "
-                            f"in the {exc.scope} budget.\n\n"
-                            f"Approve to add **${shortfall / 100:.2f}** of headroom and proceed."
-                        ),
-                        payload={
-                            "tool": call.name,
-                            "args": call.arguments,
-                            "requested_cents": exc.requested_cents,
-                            "available_cents": exc.available_cents,
-                            "budget_increase_cents": shortfall,
-                        },
-                        status=DecisionStatus.pending,
-                    )
+                decision = DecisionRequest(
+                    company_id=task.company_id,
+                    agent_id=agent.id,
+                    task_id=task.id,
+                    kind=DecisionKind.spend_approval,
+                    summary=(
+                        f"**Over budget — approval needed**\n\n"
+                        f"`{call.name}` needs **${exc.requested_cents / 100:.2f}**, "
+                        f"but only **${max(0, exc.available_cents) / 100:.2f}** is left "
+                        f"in the {exc.scope} budget.\n\n"
+                        f"Approve to add **${shortfall / 100:.2f}** of headroom and proceed."
+                    ),
+                    payload={
+                        "tool": call.name,
+                        "args": call.arguments,
+                        "requested_cents": exc.requested_cents,
+                        "available_cents": exc.available_cents,
+                        "budget_increase_cents": shortfall,
+                    },
+                    status=DecisionStatus.pending,
                 )
+                db.add(decision)
+                await db.flush()
+                await chat.attach_decision_dm(db, decision=decision)
                 task_row = await db.get(Task, task.id)
                 if task_row is not None:
                     task_row.status = TaskStatus.waiting_approval
