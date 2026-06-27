@@ -31,6 +31,7 @@ from app.runtime.tools.base import (
     consume_approval_grant,
     unsupported_capability,
 )
+from app.services import chat
 from app.services import metrics as metrics_svc
 
 SPECS: list[ToolSpec] = [
@@ -376,17 +377,18 @@ async def _submit_plan(db, ctx, *, agent: Agent, task: Task, args: dict) -> Tool
                 "initiatives to the functional agents."
             )
         )
-    db.add(
-        DecisionRequest(
-            company_id=task.company_id,
-            agent_id=agent.id,
-            task_id=task.id,
-            kind=DecisionKind.plan_approval,
-            summary=f"Proposed execution plan:\n\n{plan}",
-            payload={"tool": "submit_plan", "plan": plan},
-            status=DecisionStatus.pending,
-        )
+    decision = DecisionRequest(
+        company_id=task.company_id,
+        agent_id=agent.id,
+        task_id=task.id,
+        kind=DecisionKind.plan_approval,
+        summary=f"Proposed execution plan:\n\n{plan}",
+        payload={"tool": "submit_plan", "plan": plan},
+        status=DecisionStatus.pending,
     )
+    db.add(decision)
+    await db.flush()
+    await chat.attach_decision_dm(db, decision=decision)
     row = await db.get(Task, task.id)
     if row is not None:
         row.status = TaskStatus.waiting_approval
@@ -425,28 +427,29 @@ async def _request_budget(db, ctx, *, agent: Agent, task: Task, args: dict) -> T
     # Over budget → escalate to the founder. Approving lifts the cap by the
     # shortfall so the spend can go through (payment is wired in separately).
     shortfall = amount_cents - max(0, remaining)
-    db.add(
-        DecisionRequest(
-            company_id=task.company_id,
-            agent_id=agent.id,
-            task_id=task.id,
-            kind=DecisionKind.spend_approval,
-            summary=(
-                f"**Budget request — over budget**\n\n"
-                f"**${amount_cents / 100:.2f}** requested for {reason or 'an upcoming spend'}, "
-                f"but only **${max(0, remaining) / 100:.2f}** is left this month.\n\n"
-                f"Approve to add **${shortfall / 100:.2f}** of headroom."
-            ),
-            payload={
-                "tool": "request_budget",
-                "reason": reason,
-                "requested_cents": amount_cents,
-                "available_cents": max(0, remaining),
-                "budget_increase_cents": shortfall,
-            },
-            status=DecisionStatus.pending,
-        )
+    decision = DecisionRequest(
+        company_id=task.company_id,
+        agent_id=agent.id,
+        task_id=task.id,
+        kind=DecisionKind.spend_approval,
+        summary=(
+            f"**Budget request — over budget**\n\n"
+            f"**${amount_cents / 100:.2f}** requested for {reason or 'an upcoming spend'}, "
+            f"but only **${max(0, remaining) / 100:.2f}** is left this month.\n\n"
+            f"Approve to add **${shortfall / 100:.2f}** of headroom."
+        ),
+        payload={
+            "tool": "request_budget",
+            "reason": reason,
+            "requested_cents": amount_cents,
+            "available_cents": max(0, remaining),
+            "budget_increase_cents": shortfall,
+        },
+        status=DecisionStatus.pending,
     )
+    db.add(decision)
+    await db.flush()
+    await chat.attach_decision_dm(db, decision=decision)
     row = await db.get(Task, task.id)
     if row is not None:
         row.status = TaskStatus.waiting_approval
@@ -744,29 +747,25 @@ async def _collect_results(db, ctx, *, agent: Agent, task: Task, args: dict) -> 
 
 
 async def _request_decision(db, ctx, *, agent: Agent, task: Task, args: dict) -> ToolOutcome:
-    db.add(
-        DecisionRequest(
-            company_id=task.company_id,
-            agent_id=agent.id,
-            task_id=task.id,
-            kind=DecisionKind(args["kind"]),
-            summary=args["summary"],
-            status=DecisionStatus.pending,
+    """Escalate an open-ended decision to the founder as a DM that waits for a reply.
+
+    Consolidated into chat: rather than a separate decision-inbox row, the question
+    becomes a message in the agent↔founder thread and the task parks until the
+    founder replies (the reply is delivered back to the agent on resume).
+    """
+    from app.runtime.tools.chat import escalate_to_founder
+
+    summary = str(args.get("summary") or "").strip()
+    if not summary:
+        return ToolOutcome(
+            observation="Describe what you need the founder to decide.", is_error=True
         )
-    )
-    # ``task`` is detached from this session (it was loaded in the worker's
-    # session, which has since closed), so mutating it directly would never be
-    # persisted — leaving the task stuck in ``running`` even though it's parked.
-    # Re-fetch the live row so the ``waiting_approval`` status actually commits.
-    row = await db.get(Task, task.id)
-    if row is not None:
-        row.status = TaskStatus.waiting_approval
-    task.status = TaskStatus.waiting_approval  # keep the in-memory copy consistent
-    await db.flush()
-    return ToolOutcome(observation="escalated to founder", park=True)
+    return await escalate_to_founder(db, ctx, agent=agent, task=task, summary=summary)
 
 
 async def _request_user_action(db, ctx, *, agent: Agent, task: Task, args: dict) -> ToolOutcome:
+    from app.runtime.tools.chat import escalate_to_founder
+
     action = str(args.get("action") or "").strip()
     if not action:
         return ToolOutcome(
@@ -780,30 +779,8 @@ async def _request_user_action(db, ctx, *, agent: Agent, task: Task, args: dict)
     )
     if reason:
         summary += f"\n\n_Why:_ {reason}"
-    summary += (
-        "\n\nDo this, then approve with the **results in your note** so the agent can "
-        "continue with them (reject if it shouldn't be done)."
-    )
-    db.add(
-        DecisionRequest(
-            company_id=task.company_id,
-            agent_id=agent.id,
-            task_id=task.id,
-            kind=DecisionKind.user_action,
-            summary=summary,
-            payload={"tool": "request_user_action", "action": action, "reason": reason},
-            status=DecisionStatus.pending,
-        )
-    )
-    row = await db.get(Task, task.id)
-    if row is not None:
-        row.status = TaskStatus.waiting_approval
-    task.status = TaskStatus.waiting_approval  # keep the in-memory copy consistent
-    await db.flush()
-    return ToolOutcome(
-        observation="asked the founder to perform the action; waiting for their report",
-        park=True,
-    )
+    summary += "\n\nDo this, then **reply here with the result** so the agent can continue with it."
+    return await escalate_to_founder(db, ctx, agent=agent, task=task, summary=summary)
 
 
 async def _report_result(db, ctx, *, agent: Agent, task: Task, args: dict) -> ToolOutcome:

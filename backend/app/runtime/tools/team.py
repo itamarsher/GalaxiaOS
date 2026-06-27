@@ -44,6 +44,7 @@ from app.providers.base import ToolSpec
 from app.runtime.prompts import effective_playbook
 from app.runtime.tools.base import ToolOutcome, consume_approval_grant
 from app.services import budget as budget_svc
+from app.services import chat
 
 #: Cap on the global playbook so a runaway edit can't bloat every agent's prompt.
 _MAX_PLAYBOOK_CHARS = 8000
@@ -331,25 +332,26 @@ async def _hire_agent(db, ctx, *, agent: Agent, task: Task, args: dict) -> ToolO
     # again forever (mirrors submit_plan / request_budget).
     responsibility = str(args.get("responsibility") or "").strip()
     if not await consume_approval_grant(db, task_id=task.id, tool="hire_agent"):
-        db.add(
-            DecisionRequest(
-                company_id=task.company_id,
-                agent_id=agent.id,
-                task_id=task.id,
-                kind=DecisionKind.hire_approval,
-                summary=(
-                    f"**Hire request — approval needed**\n\n"
-                    f"Proposing to hire **{name}** ({role.value}) at "
-                    f"**{_usd(allocation)}/mo**, drawn from the unallocated pool "
-                    f"({_usd(pool)} available).\n\n"
-                    f"Responsibility: {responsibility or '(none given)'}\n\n"
-                    "Approve to add them to the team (note any changes to role or budget), "
-                    "or reject to keep the current team."
-                ),
-                payload={"tool": "hire_agent", "args": args},
-                status=DecisionStatus.pending,
-            )
+        decision = DecisionRequest(
+            company_id=task.company_id,
+            agent_id=agent.id,
+            task_id=task.id,
+            kind=DecisionKind.hire_approval,
+            summary=(
+                f"**Hire request — approval needed**\n\n"
+                f"Proposing to hire **{name}** ({role.value}) at "
+                f"**{_usd(allocation)}/mo**, drawn from the unallocated pool "
+                f"({_usd(pool)} available).\n\n"
+                f"Responsibility: {responsibility or '(none given)'}\n\n"
+                "Approve to add them to the team (note any changes to role or budget), "
+                "or reject to keep the current team."
+            ),
+            payload={"tool": "hire_agent", "args": args},
+            status=DecisionStatus.pending,
         )
+        db.add(decision)
+        await db.flush()
+        await chat.attach_decision_dm(db, decision=decision)
         row = await db.get(Task, task.id)
         if row is not None:
             row.status = TaskStatus.waiting_approval

@@ -456,6 +456,55 @@ class ExternalApprovalUpdate(BaseModel):
     enabled: bool
 
 
+# ── Chat (fleet + founder collaboration) ─────────────────────────────────────
+class ChatParticipantOut(BaseModel):
+    agent_id: uuid.UUID | None = None  # None = the founder
+    name: str  # "Founder", or the agent's name
+    role: str | None = None  # the agent's role, when not the founder
+
+
+class ChatMessageOut(ORMModel):
+    id: uuid.UUID
+    channel_id: uuid.UUID
+    sender_agent_id: uuid.UUID | None = None  # None = the founder
+    sender_name: str | None = None  # joined at read time
+    sender_role: str | None = None
+    is_founder: bool = False
+    body: str
+    created_at: datetime
+
+
+class ChatChannelOut(ORMModel):
+    id: uuid.UUID
+    name: str
+    purpose: str | None = None
+    kind: str
+    archived: bool = False
+    created_at: datetime
+    participants: list[ChatParticipantOut] = Field(default_factory=list)
+    message_count: int = 0
+    last_message_at: datetime | None = None
+    last_message_preview: str | None = None
+    # Names of agents currently parked waiting for a reply in this channel — the
+    # "an agent needs you" signal the founder acts on (like the decision inbox).
+    waiting_agents: list[str] = Field(default_factory=list)
+    # A structured decision awaiting the founder in this thread (budget/plan/hire/
+    # external). When set, the UI offers Approve/Reject inline; open-ended asks
+    # have no decision here and are resolved by simply replying.
+    pending_decision: DecisionOut | None = None
+
+
+class ChatChannelCreateRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=255)
+    purpose: str | None = Field(default=None, max_length=2000)
+    # Agent roles to add as members (the founder is always a member).
+    member_roles: list[str] = Field(default_factory=list)
+
+
+class ChatPostRequest(BaseModel):
+    message: str = Field(min_length=1)
+
+
 # ── Memory / Copilot ─────────────────────────────────────────────────────────
 class MemoryOut(ORMModel):
     id: uuid.UUID

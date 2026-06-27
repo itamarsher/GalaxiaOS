@@ -2,16 +2,20 @@
 
 Guards the bug where ``request_decision`` mutated a session-detached ``Task`` and
 so never persisted ``waiting_approval`` — leaving the task stuck in ``running``
-even though a pending decision had been raised.
+even though it had escalated. Open-ended escalations are now consolidated into
+chat: ``request_decision`` posts a founder DM and parks on a ``ChatWait`` instead
+of creating a separate ``DecisionRequest`` (which now only backs structured,
+grant-carrying decisions).
 """
 
 from __future__ import annotations
 
 from sqlalchemy import func, select
 
-from app.models import Agent, AgentRun, DecisionRequest, Task
+from app.models import Agent, AgentRun, ChatWait, DecisionRequest, Task
 from app.models.enums import (
     AgentRole,
+    ChatWaitStatus,
     DecisionKind,
     DecisionStatus,
     RunStatus,
@@ -20,6 +24,7 @@ from app.models.enums import (
 )
 from app.runtime.backends.native import _consume_approval_grant
 from app.runtime.tools import execute_tool
+from app.services import chat
 from tests.conftest import requires_db
 
 
@@ -74,15 +79,21 @@ async def test_request_decision_parks_detached_task(session_factory, company_wit
 
     async with session_factory() as db:
         row = await db.get(Task, task.id)
-        pending = await db.scalar(
+        # The task must actually be parked in the DB (not silently left running).
+        assert row.status is TaskStatus.waiting_approval
+        # Open-ended decisions are now founder DMs: a ChatWait marks the wait and
+        # the question is posted into the agent↔founder thread (no DecisionRequest).
+        wait = await db.scalar(select(ChatWait).where(ChatWait.task_id == task.id))
+        assert wait is not None and wait.status is ChatWaitStatus.pending
+        channel = await chat.founder_dm(db, company_id=company_id, agent_id=agent.id)
+        msgs = await chat.messages(db, channel_id=channel.id)
+        assert any("need founder approval" in m.body for m in msgs)
+        decisions = await db.scalar(
             select(func.count())
             .select_from(DecisionRequest)
             .where(DecisionRequest.task_id == task.id)
         )
-        # The task must actually be parked in the DB (not silently left running),
-        # and a pending decision must exist for the founder's inbox.
-        assert row.status is TaskStatus.waiting_approval
-        assert pending == 1
+        assert decisions == 0
 
 
 @requires_db

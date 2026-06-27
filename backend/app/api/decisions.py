@@ -21,6 +21,7 @@ from app.schemas import (
     DecisionResolveRequest,
 )
 from app.services import budget as budget_svc
+from app.services import chat as chat_svc
 from app.services import copilot, memory
 from app.services import external_messages as ext
 
@@ -224,6 +225,24 @@ def _render_discussion(thread) -> str:
     return "\n".join(lines)
 
 
+async def _post_resolution_dm(
+    db, decision: DecisionRequest, *, resolution: str, note: str | None
+) -> None:
+    """Post the founder's verdict back into the decision's DM thread.
+
+    Keeps the consolidated chat view honest: a structured decision surfaced as a
+    founder DM gets a closing message when it's approved/rejected, so the thread
+    reflects the outcome instead of going silent.
+    """
+    if decision.channel_id is None:
+        return
+    mark = "✅ Approved" if resolution == "approved" else "❌ Rejected"
+    body = f"{mark}." + (f" {note.strip()}" if (note or "").strip() else "")
+    await chat_svc.post_system_reply(
+        db, company_id=decision.company_id, channel_id=decision.channel_id, body=body
+    )
+
+
 async def _apply_discussion(db, decision: DecisionRequest, *, resolution: str) -> None:
     """Surface the *entire* founder↔agent discussion to the agent on resume.
 
@@ -257,6 +276,7 @@ async def approve(
     decision.resolved_at = datetime.now(UTC)
     await _apply_note(db, decision, body.note if body else None)
     await _apply_discussion(db, decision, resolution="approved")
+    await _post_resolution_dm(db, decision, resolution="approved", note=body.note if body else None)
 
     # Over-budget approvals carry the shortfall: authorising the spend lifts the
     # budget ceiling by that amount so the action goes through on resume. (The
@@ -297,6 +317,7 @@ async def reject(
     decision.resolved_at = datetime.now(UTC)
     await _apply_note(db, decision, body.note if body else None)
     await _apply_discussion(db, decision, resolution="rejected")
+    await _post_resolution_dm(db, decision, resolution="rejected", note=body.note if body else None)
     # If this gated an outbound message, mark its indexed record rejected so the
     # communications log shows it was never sent.
     await ext.mark_decision_resolved(db, decision_id=decision.id, approved=False)

@@ -139,6 +139,15 @@ When you have several INDEPENDENT initiatives to delegate, dispatch them togethe
 PARALLEL and the run finishes sooner. Dispatch fans the work out; use `collect_results`
 to converge once the sub-tasks come back.
 
+You can talk directly to your teammates and the founder in chat. DM one teammate (or the
+founder) with `message_teammate`, or for a big initiative that spans several roles open a
+shared channel with `start_chat_channel` and post to it with `send_chat_message`; catch up
+with `list_chat_channels` and `read_chat_channel`. When you genuinely need an answer before
+you can proceed, send with `wait_for_reply=true` — your task PAUSES until a teammate or the
+founder replies, then resumes with their reply delivered to you (the same way a founder
+decision pauses and resumes a task). Prefer asking and waiting over guessing when another
+agent owns the information you need; leave `wait_for_reply` off for FYIs and status updates.
+
 When the founder should see a synthesized deliverable — an investor update, a growth or
 research report, a board brief — produce it with `create_report`. It is filed to the
 founder's Reports for them to read; it does not send anything externally.
@@ -233,7 +242,7 @@ _FILE_STORE_CONNECTED = (
 _FILE_STORE_DISCONNECTED = (
     "No company file store is connected yet (the founder hasn't linked Google Drive in "
     "Settings), so `save_file` / `list_company_files` / `read_company_file` will report "
-    "\"not supported\" — NOTHING is filed when they do. Do not claim a document was saved. "
+    '"not supported" — NOTHING is filed when they do. Do not claim a document was saved. '
     "If you need durable file storage for the task, call `request_capability` once to ask "
     "the founder to connect Drive; otherwise keep your deliverable in `create_report`."
 )
