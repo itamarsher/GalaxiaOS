@@ -46,9 +46,10 @@ See the full design in the plan referenced from the project history.
   inside the company's remaining budget, and the registrar fails *before* the
   irreversible call when the balance is short. (2) **Stripe Link** — an agent mints a
   scoped, single-purchase Shared Payment Token a Stripe-enabled seller charges (the
-  `card_checkout` registrar). Both are test-mode first (`ABOS_STRIPE_TEST_MODE=true`),
-  off by default, live keys refused until you opt in, and metered through the same
-  `CostMeter` reserve→commit path so the budget is reserved before any money moves.
+  `card_checkout` registrar). Each is off until its provider is selected (a key +
+  `ABOS_DOMAIN_REGISTRAR`/`ABOS_PAYMENT_WALLET`); a live Stripe key moves real money,
+  bounded by the same `CostMeter` reserve→commit path so the budget is reserved
+  before any charge.
 - **Live runtime**: native agent loop, CEO-as-planner orchestration, circuit breakers,
   declarative policy engine, founder decision inbox.
 - **External-comms index & approval gate**: every outbound message the fleet sends

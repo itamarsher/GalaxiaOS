@@ -5,11 +5,10 @@ Availability uses RDAP (free); registration calls the Namecheap
 from settings (``ABOS_NAMECHEAP_*``); without them, :meth:`register` raises
 :class:`RegistrarError` rather than attempting a charge.
 
-⚠️  This performs a REAL purchase and has not been exercised against the live
-API in this repo. Verify against the Namecheap **sandbox**
-(``ABOS_NAMECHEAP_SANDBOX=true``) before enabling in production, and confirm the
-contact fields your account requires. It is off by default
-(``ABOS_DOMAIN_REGISTRAR=simulated``).
+⚠️  This performs a REAL purchase against the live Namecheap API by default
+(``ABOS_NAMECHEAP_SANDBOX=false``); set it true to point at the sandbox. Confirm
+the contact fields your account requires. The registrar itself is off until
+selected (``ABOS_DOMAIN_REGISTRAR=namecheap``).
 """
 
 from __future__ import annotations

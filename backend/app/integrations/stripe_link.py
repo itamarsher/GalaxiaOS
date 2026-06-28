@@ -9,10 +9,9 @@ data.
 
 ⚠️  Live Link issuance is US-only preview and, by design, asks the wallet owner
 to approve every purchase (Stripe pushes an approval prompt; the ``link-cli``
-drives that flow). This adapter performs the server-side issuance call only. It
-is test-mode first (``ABOS_STRIPE_TEST_MODE=true``, the default) and off unless
-``ABOS_PAYMENT_WALLET=stripe_link``. It has not been exercised against the live
-preview API in this repo — verify with Stripe test keys first.
+drives that flow). This adapter performs the server-side issuance call only,
+using ``ABOS_STRIPE_SECRET_KEY`` as-is (live moves real money). Off unless
+``ABOS_PAYMENT_WALLET=stripe_link``.
 """
 
 from __future__ import annotations

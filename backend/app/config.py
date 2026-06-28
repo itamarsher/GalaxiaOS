@@ -150,8 +150,9 @@ class Settings(BaseSettings):
     # External integrations
     domain_registrar: str = "simulated"  # simulated | rdap | namecheap | card_checkout
     rdap_timeout_seconds: float = 4.0
-    # Namecheap (only used when domain_registrar == "namecheap")
-    namecheap_sandbox: bool = True
+    # Namecheap (only used when domain_registrar == "namecheap").
+    # Live by default — set true to point at the Namecheap sandbox instead.
+    namecheap_sandbox: bool = False
     namecheap_api_user: str = ""
     namecheap_api_key: str = ""
     namecheap_username: str = ""
@@ -164,11 +165,8 @@ class Settings(BaseSettings):
 
     # Payment wallet — an agent's scoped access to real external spend.
     payment_wallet: str = "none"  # none | stripe_link
-    stripe_secret_key: str = ""
+    stripe_secret_key: str = ""  # test or live key; used as-is (live moves real money)
     stripe_api_version: str = "2026-04-22.preview"  # SPT preview API
-    # Hard guard: refuse a live key (sk_live_…) unless this is explicitly False,
-    # so a stray live key can never move real money by accident.
-    stripe_test_mode: bool = True
     stripe_timeout_seconds: float = 20.0
     stripe_currency: str = "usd"
     # Stripe Link agent wallet (only used when payment_wallet == "stripe_link")

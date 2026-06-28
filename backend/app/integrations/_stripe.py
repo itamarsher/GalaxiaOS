@@ -6,10 +6,11 @@ the same dependency-light approach the Namecheap adapter takes. Only the handful
 of endpoints the agentic-commerce flow needs are exercised, all form-encoded with
 the secret key as HTTP basic-auth username.
 
-Safety: live charges require a deliberate opt-in. A secret key beginning with
-``sk_live_`` is refused while ``ABOS_STRIPE_TEST_MODE`` is on (the default), so a
-stray live key can never move real money by accident — flip
-``ABOS_STRIPE_TEST_MODE=false`` to allow it.
+Live charges are enabled: whatever ``ABOS_STRIPE_SECRET_KEY`` is set to (test or
+live) is used as-is — a live ``sk_live_`` key moves real money. The remaining
+spend guards are the budget chokepoint (:class:`~app.runtime.cost_meter.CostMeter`,
+which reserves against the company budget before any charge) and the Issuing
+card's own ``spending_controls``.
 """
 
 from __future__ import annotations
@@ -29,11 +30,6 @@ def _require_secret_key() -> str:
     key = settings.stripe_secret_key.strip()
     if not key:
         raise StripeError("Stripe secret key missing (set ABOS_STRIPE_SECRET_KEY).")
-    if key.startswith("sk_live_") and settings.stripe_test_mode:
-        raise StripeError(
-            "Refusing a live Stripe key (sk_live_…) while ABOS_STRIPE_TEST_MODE is on. "
-            "Set ABOS_STRIPE_TEST_MODE=false to allow real charges."
-        )
     return key
 
 
