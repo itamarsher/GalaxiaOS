@@ -23,6 +23,7 @@ from app.api import (
     copilot,
     decisions,
     dev,  # TEMP dev-only endpoints — remove before launch
+    domains,
     events,
     files,
     governance,
@@ -115,6 +116,7 @@ def create_app() -> FastAPI:
     app.include_router(artifacts.router)
     app.include_router(companies.router)
     app.include_router(companies.mine_router)
+    app.include_router(domains.router)
     app.include_router(budget.router)
     app.include_router(governance.router)
     app.include_router(metrics.router)
