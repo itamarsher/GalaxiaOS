@@ -3,12 +3,16 @@
 import Link from "next/link";
 import { usePathname, useParams, useRouter, useSearchParams } from "next/navigation";
 import type { ReactNode } from "react";
-import { api } from "@/lib/api";
+import { api, type ChatChannel } from "@/lib/api";
 import { usePoll } from "@/lib/useApi";
+import { Avatar, channelDisplayName, founderIsMember } from "@/lib/chat";
 
-// Every workspace is a "channel". The former top-nav pages are default channels
-// (Spaces); live agent/founder threads are Conversations. Onboarding and Settings
-// are intentionally NOT folded in — onboarding is its own flow and Settings sits
+// A Slack-style workspace. The left rail carries the workspace's "Spaces" (the
+// dashboard surfaces — Org, Budget, Tasks, …) plus the live collaboration:
+// Channels the fleet coordinates in and Direct messages. The founder sees every
+// channel in the company, not just their own DMs — agent-to-agent conversations
+// show too (tagged "observing" when the founder isn't a participant). Onboarding
+// and Settings stay out of the rail — onboarding is its own flow, Settings sits
 // in the footer.
 const SPACES = [
   ["", "Home"],
@@ -35,6 +39,33 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
   const activeChannel = search.get("channel");
   const onChat = pathname === `${base}/chat`;
 
+  // Slack splits the rail into Channels and Direct messages; we do the same.
+  const channelList = convos.filter((c) => c.kind !== "direct");
+  const dmList = convos.filter((c) => c.kind === "direct");
+
+  const chatLink = (c: ChatChannel) => {
+    const active = onChat && activeChannel === c.id;
+    const isChannel = c.kind !== "direct";
+    const label = channelDisplayName(c);
+    return (
+      <Link
+        key={c.id}
+        href={`${base}/chat?channel=${c.id}`}
+        className={`chat-item${active ? " active" : ""}`}
+        title={isChannel ? `#${label}` : label}
+      >
+        {isChannel ? (
+          <Avatar name={label} square size={18} />
+        ) : (
+          <Avatar name={label} size={18} />
+        )}
+        <span className="chat-item-name">{label}</span>
+        {!founderIsMember(c) && <span className="tag-observe">observing</span>}
+        {isWaiting(c) && <span className="dot" />}
+      </Link>
+    );
+  };
+
   return (
     <div className="shell">
       <aside className="sidebar">
@@ -58,26 +89,24 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
         </div>
 
         <div>
-          <div className="grp-label">Chat</div>
-          <Link href={`${base}/chat`} className={onChat && !activeChannel ? "active" : ""}>
-            <span>All conversations</span>
+          <div className="grp-label grp-label-row">
+            <span>Channels</span>
+            <Link href={`${base}/chat?new=1`} className="grp-add" title="New channel">
+              +
+            </Link>
+          </div>
+          <Link href={`${base}/chat`} className={`chat-item${onChat && !activeChannel ? " active" : ""}`}>
+            <span className="chat-item-name">All conversations</span>
             {convos.some(isWaiting) && <span className="dot" />}
           </Link>
-          {convos.map((c) => {
-            const active = onChat && activeChannel === c.id;
-            const title = c.kind === "direct" ? c.name : `# ${c.name}`;
-            return (
-              <Link
-                key={c.id}
-                href={`${base}/chat?channel=${c.id}`}
-                className={active ? "active" : ""}
-                title={title}
-              >
-                <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{title}</span>
-                {isWaiting(c) && <span className="dot" />}
-              </Link>
-            );
-          })}
+          {channelList.map(chatLink)}
+          {channelList.length === 0 && <div className="grp-empty">No channels yet</div>}
+        </div>
+
+        <div>
+          <div className="grp-label">Direct messages</div>
+          {dmList.map(chatLink)}
+          {dmList.length === 0 && <div className="grp-empty">No direct messages yet</div>}
         </div>
 
         <div className="spacer" />
