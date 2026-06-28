@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname, useParams, useRouter, useSearchParams } from "next/navigation";
-import type { ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { api, type ChatChannel } from "@/lib/api";
 import { usePoll } from "@/lib/useApi";
 import { Avatar, channelDisplayName, founderIsMember } from "@/lib/chat";
@@ -39,6 +39,12 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
   const activeChannel = search.get("channel");
   const onChat = pathname === `${base}/chat`;
 
+  // On phones the rail is a slide-in left drawer (like Slack mobile). Close it
+  // whenever the route changes — i.e. after the founder taps a nav item.
+  const [navOpen, setNavOpen] = useState(false);
+  const searchStr = search.toString();
+  useEffect(() => { setNavOpen(false); }, [pathname, searchStr]);
+
   // Slack splits the rail into Channels and Direct messages; we do the same.
   const channelList = convos.filter((c) => c.kind !== "direct");
   const dmList = convos.filter((c) => c.kind === "direct");
@@ -68,7 +74,16 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
 
   return (
     <div className="shell">
-      <aside className="sidebar">
+      <button
+        className="nav-toggle"
+        onClick={() => setNavOpen(true)}
+        aria-label="Open menu"
+        aria-expanded={navOpen}
+      >
+        ☰
+      </button>
+      {navOpen && <div className="nav-scrim" onClick={() => setNavOpen(false)} />}
+      <aside className={`sidebar${navOpen ? " open" : ""}`}>
         <span className="brand">
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img src="/galaxiaos-logo.png" alt="" className="brand-logo" width={26} height={26} />
