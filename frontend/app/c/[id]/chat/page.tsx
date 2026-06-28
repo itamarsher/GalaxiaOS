@@ -1,15 +1,19 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useSearchParams } from "next/navigation";
 import { api, decisionKindLabel, type ChatChannel, type ChatMessage, type ChatThread } from "@/lib/api";
 import { usePoll } from "@/lib/useApi";
 import { Markdown } from "@/lib/markdown";
+import { Avatar, channelDisplayName, founderIsMember } from "@/lib/chat";
 
-// The unified collaboration surface. Agents and the founder talk in channels and
-// 1:1 threads; what used to be the "decision inbox" is now just founder DMs marked
-// "waiting for a response" (open-ended asks resolve by replying; structured ones —
-// budget/plan/hire/external — show inline Approve/Reject).
+// The unified collaboration surface, laid out like Slack: a channel header, a
+// linear message timeline (avatar · name · time · message), and a composer at
+// the bottom. Agents and the founder talk in channels and 1:1 DMs; what used to
+// be the "decision inbox" is now founder DMs marked "waiting for a response"
+// (open-ended asks resolve by replying; structured ones — budget/plan/hire/
+// external — show inline Approve/Reject). The founder sees every channel in the
+// company, including internal agent-to-agent ones (tagged "observing").
 export default function ChatPage() {
   const { id } = useParams<{ id: string }>();
   const search = useSearchParams();
@@ -17,7 +21,7 @@ export default function ChatPage() {
   const channels = usePoll(() => api.chatChannels(id), 5000, [id]);
   const list = channels.data ?? [];
   const [selected, setSelected] = useState<string | null>(null);
-  const [creating, setCreating] = useState(false);
+  const [creating, setCreating] = useState(search.get("new") === "1");
 
   // A channel picked from the sidebar (?channel=) wins; otherwise default to the
   // first thread that needs the founder, else the most recent.
@@ -34,29 +38,23 @@ export default function ChatPage() {
   const active = useMemo(() => list.find((c) => c.id === selected) ?? null, [list, selected]);
 
   return (
-    <div>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-        <h2>Chat</h2>
-        <button style={{ marginTop: 0 }} onClick={() => setCreating((v) => !v)}>
-          {creating ? "Cancel" : "New channel"}
-        </button>
-      </div>
-      <p className="muted">
-        Talk to your fleet. Threads marked <span className="status pending">waiting</span> need a
-        reply from you — answer to unblock the agent (or Approve/Reject a request).
-      </p>
-
-      {creating && <NewChannel companyId={id} onDone={() => { setCreating(false); channels.reload(); }} />}
+    <div className="chatpage">
+      {creating && (
+        <NewChannel
+          companyId={id}
+          onDone={() => { setCreating(false); channels.reload(); }}
+          onCancel={() => setCreating(false)}
+        />
+      )}
 
       {list.length === 0 && !creating && (
         <div className="empty">No conversations yet. Agents will reach out here when they need you.</div>
       )}
 
-      {/* Pick a conversation from the left rail; this pane shows the thread. */}
       {active ? (
         <Thread companyId={id} channel={active} onChanged={() => channels.reload()} />
       ) : (
-        list.length > 0 && (
+        list.length > 0 && !creating && (
           <div className="empty">Pick a conversation from the sidebar to open it.</div>
         )
       )}
@@ -68,8 +66,10 @@ function isWaiting(c: ChatChannel): boolean {
   return c.waiting_agents.length > 0 || c.pending_decision != null;
 }
 
-function channelTitle(c: ChatChannel): string {
-  return c.kind === "direct" ? c.name : `#${c.name}`;
+function fmtTime(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  return d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
 }
 
 function Thread({
@@ -101,6 +101,16 @@ function Thread({
   // Decisions live on the channel's main timeline, not inside a sub-thread.
   const decision = activeThread ? null : channel.pending_decision;
 
+  const isChannel = channel.kind !== "direct";
+  const title = channelDisplayName(channel);
+  const memberNames = channel.participants.map((p) => p.role ?? p.name);
+
+  // Auto-scroll the timeline to the newest message as it grows.
+  const endRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    endRef.current?.scrollIntoView({ block: "end" });
+  }, [msgs.length, activeThread]);
+
   const send = async () => {
     const text = input.trim();
     if (!text || busy) return;
@@ -131,38 +141,42 @@ function Thread({
   };
 
   return (
-    <div className="card" style={{ marginTop: 0 }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
-        <strong>
-          {channelTitle(channel)}
-          {current && <span className="muted"> › {current.title}</span>}
-        </strong>
-        <span className="muted" style={{ fontSize: 12 }}>
-          {channel.participants.map((p) => p.role ?? p.name).join(", ")}
+    <div className="convo">
+      <header className="ch-head">
+        <div className="ch-head-title">
+          {isChannel ? <Avatar name={title} square size={26} /> : <Avatar name={title} size={26} />}
+          <div className="ch-head-text">
+            <strong>
+              {isChannel ? `#${title}` : title}
+              {current && <span className="muted"> › {current.title}</span>}
+            </strong>
+            <span className="ch-head-sub muted">
+              {channel.purpose && !current ? channel.purpose + " · " : ""}
+              {memberNames.length} member{memberNames.length === 1 ? "" : "s"}
+              {!founderIsMember(channel) && <span className="tag-observe"> observing</span>}
+            </span>
+          </div>
+        </div>
+        <span className="ch-head-members muted" title={memberNames.join(", ")}>
+          {memberNames.join(", ")}
         </span>
-      </div>
-      {channel.purpose && !current && (
-        <p className="muted" style={{ marginTop: 4 }}>{channel.purpose}</p>
-      )}
+      </header>
 
       {threads.length > 0 && (
-        <ThreadBar
-          threads={threads}
-          active={activeThread}
-          onPick={(id) => setActiveThread(id)}
-        />
+        <ThreadBar threads={threads} active={activeThread} onPick={(id) => setActiveThread(id)} />
       )}
 
-      <div className="chat" style={{ margin: "12px 0", maxHeight: 420, overflowY: "auto" }}>
-        {msgs.length === 0 && <div className="msg bot muted">No messages yet.</div>}
-        {msgs.map((m) => (
-          <MessageBubble key={m.id} message={m} />
+      <div className="timeline">
+        {msgs.length === 0 && <div className="empty">No messages yet.</div>}
+        {msgs.map((m, i) => (
+          <MessageRow key={m.id} message={m} prev={msgs[i - 1]} />
         ))}
-        {busy && <div className="msg bot muted">sending…</div>}
+        {busy && <div className="muted" style={{ padding: "6px 16px", fontSize: 13 }}>sending…</div>}
+        <div ref={endRef} />
       </div>
 
       {decision && (
-        <div className="dctx" style={{ marginBottom: 12 }}>
+        <div className="dctx" style={{ margin: "0 16px 12px" }}>
           <div className="row">
             <span className="lbl">Awaiting</span>
             <span className="val accent">{decisionKindLabel(decision.kind)}</span>
@@ -173,14 +187,16 @@ function Thread({
         </div>
       )}
 
-      <div className="chatbar">
+      <div className="composer">
         <input
           placeholder={
             decision
               ? "Add a note (optional), then Approve/Reject…"
               : current
-                ? `Reply in ${current.title}…`
-                : "Reply…"
+                ? `Message ${current.title}`
+                : isChannel
+                  ? `Message #${title}`
+                  : `Message ${title}`
           }
           value={input}
           onChange={(e) => setInput(e.target.value)}
@@ -221,7 +237,7 @@ function ThreadBar({
     color: selected ? "#fff" : "inherit",
   });
   return (
-    <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 8 }}>
+    <div style={{ display: "flex", flexWrap: "wrap", gap: 6, padding: "10px 16px 0" }}>
       <button style={{ ...chip(active === null), marginTop: 0 }} onClick={() => onPick(null)}>
         Main
       </button>
@@ -240,20 +256,47 @@ function ThreadBar({
   );
 }
 
-function MessageBubble({ message: m }: { message: ChatMessage }) {
-  const who = m.is_founder ? "you" : "bot";
-  const label = m.is_founder
+// A single Slack-style message row: avatar + (name · time) + body. Consecutive
+// messages from the same sender collapse the avatar/header for a compact thread.
+function MessageRow({ message: m, prev }: { message: ChatMessage; prev?: ChatMessage }) {
+  const name = m.is_founder
     ? "You"
-    : `${m.sender_name ?? "Agent"}${m.sender_role ? ` · ${m.sender_role}` : ""}`;
+    : m.sender_name ?? "Agent";
+  const grouped =
+    prev != null &&
+    prev.sender_agent_id === m.sender_agent_id &&
+    prev.is_founder === m.is_founder;
+
   return (
-    <div className={`msg ${who}`}>
-      <div className="muted" style={{ fontSize: 11, marginBottom: 2 }}>{label}</div>
-      <Markdown>{m.body}</Markdown>
+    <div className={`smsg${grouped ? " grouped" : ""}`}>
+      <div className="smsg-gutter">
+        {!grouped && <Avatar name={name} size={36} />}
+      </div>
+      <div className="smsg-body">
+        {!grouped && (
+          <div className="smsg-head">
+            <span className="smsg-name">{name}</span>
+            {m.sender_role && <span className="smsg-role">{m.sender_role}</span>}
+            <span className="smsg-time">{fmtTime(m.created_at)}</span>
+          </div>
+        )}
+        <div className="smsg-text">
+          <Markdown>{m.body}</Markdown>
+        </div>
+      </div>
     </div>
   );
 }
 
-function NewChannel({ companyId, onDone }: { companyId: string; onDone: () => void }) {
+function NewChannel({
+  companyId,
+  onDone,
+  onCancel,
+}: {
+  companyId: string;
+  onDone: () => void;
+  onCancel: () => void;
+}) {
   const [name, setName] = useState("");
   const [purpose, setPurpose] = useState("");
   const [roles, setRoles] = useState("");
@@ -276,6 +319,10 @@ function NewChannel({ companyId, onDone }: { companyId: string; onDone: () => vo
 
   return (
     <div className="card">
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <h3 style={{ margin: 0 }}>New channel</h3>
+        <button className="ghost" style={{ marginTop: 0 }} onClick={onCancel}>Cancel</button>
+      </div>
       <label>Channel name</label>
       <input value={name} onChange={(e) => setName(e.target.value)} placeholder="q3-launch" />
       <label>Purpose</label>
