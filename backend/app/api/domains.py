@@ -48,7 +48,10 @@ def _out(sd: SiteDomain) -> DomainOut:
 async def capabilities(company: CompanyDep, db: DbDep):
     cap = await domains_svc.capabilities(db, company_id=company.id)
     return DomainCapabilitiesOut(
-        registrar=cap.registrar, can_buy=cap.can_buy, can_connect=cap.can_connect
+        registrar=cap.registrar,
+        can_buy=cap.can_buy,
+        can_connect=cap.can_connect,
+        can_send_email=cap.can_send_email,
     )
 
 

@@ -50,12 +50,36 @@ async def test_search_expands_bare_name_across_tlds(monkeypatch):
 
 @requires_db
 async def test_capabilities_default_is_honest(session_factory, company_with_budget):
-    # Default config: simulated registrar (no buy), no DNS/site (no connect).
+    # Default config: simulated registrar (no buy), no DNS/site (no connect), no
+    # Resend key (no email auto-setup) — so the UI can nudge.
     async with session_factory() as db:
         cap = await domains_svc.capabilities(db, company_id=company_with_budget)
     assert cap.registrar == "simulated"
     assert cap.can_buy is False
     assert cap.can_connect is False
+    assert cap.can_send_email is False
+
+
+@requires_db
+async def test_capabilities_can_send_email_once_resend_key_attached(
+    session_factory, company_with_budget
+):
+    from app.models import ApiKey
+    from app.models.enums import ApiKeyStatus
+
+    async with session_factory() as db:
+        # Insert the row directly (has_active_key only checks presence, so no
+        # encryption/master key is needed for this test).
+        db.add(
+            ApiKey(
+                company_id=company_with_budget, provider="resend",
+                encrypted_key=b"x", encrypted_data_key=b"x", nonce=b"x",
+                key_fingerprint="fp", status=ApiKeyStatus.active,
+            )
+        )
+        await db.commit()
+        cap = await domains_svc.capabilities(db, company_id=company_with_budget)
+    assert cap.can_send_email is True
 
 
 @requires_db

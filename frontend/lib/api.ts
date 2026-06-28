@@ -155,7 +155,7 @@ export interface OwnedDomain {
   id: string; domain: string; status: string;
   site_id: string | null; last_error: string | null; created_at: string;
 }
-export interface DomainCapabilities { registrar: string; can_buy: boolean; can_connect: boolean }
+export interface DomainCapabilities { registrar: string; can_buy: boolean; can_connect: boolean; can_send_email: boolean }
 export interface EmailDnsRecord { record: string; type: string; name: string; ok: boolean; error: string | null }
 export interface EmailSetup { domain: string; status: string; all_written: boolean; records: EmailDnsRecord[] }
 export interface EmailStatus { domain: string; configured: boolean; status: string; pending: string[] }

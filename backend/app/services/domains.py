@@ -29,8 +29,12 @@ from app.integrations.registry import get_registrar
 from app.models import Site, SiteDomain
 from app.models.enums import SiteConnectStatus
 from app.runtime.cost_meter import CostMeter
+from app.services import apikeys
 from app.services import email_setup as email_setup_svc
 from app.services import sites as sites_svc
+
+# Provider key a company's Resend secret is stored under (matches the send path).
+_RESEND_KEY_PROVIDER = "resend"
 
 # When the founder types a bare name (no dot), quote it across a few common TLDs.
 _SUGGEST_TLDS = ("com", "ai", "io", "co")
@@ -45,16 +49,21 @@ class Capabilities:
     registrar: str  # the configured registrar name (e.g. "simulated", "namecheap")
     can_buy: bool  # a real registrar is wired (else search/purchase report unsupported)
     can_connect: bool  # a DNS provider *and* a site exist to point a bought domain at
+    can_send_email: bool  # a Resend key is attached, so email auto-setup can run
 
 
 async def capabilities(db: AsyncSession, *, company_id: uuid.UUID) -> Capabilities:
     """What the Domains space can do right now, so the UI can guide the founder."""
     dns = await sites_svc.resolve_dns_provider(db, company_id=company_id)
     site = await sites_svc.latest_published_site(db, company_id=company_id)
+    has_resend = await apikeys.has_active_key(
+        db, company_id=company_id, provider=_RESEND_KEY_PROVIDER
+    )
     return Capabilities(
         registrar=settings.domain_registrar,
         can_buy=get_registrar() is not None,
         can_connect=dns is not None and site is not None,
+        can_send_email=has_resend,
     )
 
 

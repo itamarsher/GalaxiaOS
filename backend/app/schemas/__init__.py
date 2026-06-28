@@ -181,6 +181,7 @@ class DomainCapabilitiesOut(BaseModel):
     registrar: str
     can_buy: bool
     can_connect: bool
+    can_send_email: bool
 
 
 class DomainPurchaseRequest(BaseModel):

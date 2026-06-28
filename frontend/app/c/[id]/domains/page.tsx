@@ -141,6 +141,17 @@ export default function DomainsPage() {
         </div>
       )}
 
+      {owned.data && owned.data.length > 0 && caps.data?.can_send_email === false && (
+        <div className="card" style={{ borderColor: "var(--warn, #b08900)" }}>
+          <div className="step">Send email from your domain</div>
+          <p className="muted" style={{ margin: 0 }}>
+            Add a free <a href="https://resend.com" target="_blank" rel="noopener noreferrer">Resend</a> API
+            key in <a href={`/c/${id}/settings`}>Settings</a> and we’ll auto-configure the email DNS
+            (SPF/DKIM/DMARC) on each domain you buy — no manual records.
+          </p>
+        </div>
+      )}
+
       <div className="card">
         <div className="step">Your domains</div>
         {owned.data && owned.data.length > 0 ? (
@@ -162,8 +173,12 @@ export default function DomainsPage() {
                       className="navbtn"
                       style={{ fontSize: 12, padding: "2px 8px" }}
                       onClick={() => setupEmail(d.domain)}
-                      disabled={emailBusy != null}
-                      title="Register this domain with Resend and write its email DNS into Cloudflare"
+                      disabled={emailBusy != null || caps.data?.can_send_email === false}
+                      title={
+                        caps.data?.can_send_email === false
+                          ? "Add a Resend key in Settings to enable email"
+                          : "Register this domain with Resend and write its email DNS into Cloudflare"
+                      }
                     >
                       {emailBusy === d.domain ? "Setting up…" : "Set up email"}
                     </button>
