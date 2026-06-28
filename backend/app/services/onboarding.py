@@ -52,6 +52,7 @@ from app.runtime.prompts import (
     REFINE_SYSTEM,
 )
 from app.services import apikeys, investors
+from app.services import chat as chat_svc
 from app.services import governance as gov
 
 _log = get_logger("abos.onboarding")
@@ -862,6 +863,9 @@ async def launch(db: AsyncSession, *, company: Company) -> uuid.UUID | None:
     await gov.set_external_comms_approval(db, company_id=company.id, enabled=False)
 
     company.status = CompanyStatus.active
+    # Open the founder's standing direct line to the CEO up front, so it's there
+    # to message the moment the company is live.
+    await chat_svc.ensure_ceo_dm(db, company_id=company.id)
     task_id = await orchestrator.create_launch_run(db, company.id)
     await db.flush()
     return task_id

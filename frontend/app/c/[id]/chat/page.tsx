@@ -2,10 +2,17 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useSearchParams } from "next/navigation";
-import { api, decisionKindLabel, type ChatChannel, type ChatMessage, type ChatThread } from "@/lib/api";
+import {
+  api,
+  decisionKindLabel,
+  type ChatChannel,
+  type ChatMessage,
+  type ChatThread,
+  type Decision,
+} from "@/lib/api";
 import { usePoll } from "@/lib/useApi";
 import { Markdown } from "@/lib/markdown";
-import { Avatar, channelDisplayName, founderIsMember } from "@/lib/chat";
+import { Avatar, channelDisplayName, founderIsMember, isCeoDm } from "@/lib/chat";
 
 // The unified collaboration surface, laid out like Slack: a channel header, a
 // linear message timeline (avatar · name · time · message), and a composer at
@@ -24,15 +31,17 @@ export default function ChatPage() {
   const [creating, setCreating] = useState(search.get("new") === "1");
 
   // A channel picked from the sidebar (?channel=) wins; otherwise default to the
-  // first thread that needs the founder, else the most recent.
+  // founder's direct line to the CEO (the standing channel to steer the company),
+  // then any thread that needs the founder, else the most recent.
   useEffect(() => {
     if (fromUrl) {
       setSelected(fromUrl);
       return;
     }
     if (selected || list.length === 0) return;
+    const ceo = list.find(isCeoDm);
     const needy = list.find((c) => isWaiting(c));
-    setSelected((needy ?? list[0]).id);
+    setSelected((ceo ?? needy ?? list[0]).id);
   }, [fromUrl, list, selected]);
 
   const active = useMemo(() => list.find((c) => c.id === selected) ?? null, [list, selected]);
@@ -125,14 +134,12 @@ function Thread({
     }
   };
 
-  const resolve = async (approve: boolean) => {
+  const resolve = async (approve: boolean, note?: string) => {
     if (!decision) return;
     setBusy(true);
     try {
-      const note = input.trim() || undefined;
       if (approve) await api.approveDecision(decision.id, note);
       else await api.rejectDecision(decision.id, note);
-      setInput("");
       messages.reload();
       onChanged();
     } finally {
@@ -167,50 +174,32 @@ function Thread({
       )}
 
       <div className="timeline">
-        {msgs.length === 0 && <div className="empty">No messages yet.</div>}
+        {msgs.length === 0 && !decision && <div className="empty">No messages yet.</div>}
         {msgs.map((m, i) => (
           <MessageRow key={m.id} message={m} prev={msgs[i - 1]} />
         ))}
+        {/* A pending decision rides in the timeline as a special message with its
+            own Approve/Reject — seamless chat, no separate widget. */}
+        {decision && <DecisionMessage decision={decision} onResolve={resolve} busy={busy} />}
         {busy && <div className="muted" style={{ padding: "6px 16px", fontSize: 13 }}>sending…</div>}
         <div ref={endRef} />
       </div>
 
-      {decision && (
-        <div className="dctx" style={{ margin: "0 16px 12px" }}>
-          <div className="row">
-            <span className="lbl">Awaiting</span>
-            <span className="val accent">{decisionKindLabel(decision.kind)}</span>
-          </div>
-          <p className="muted" style={{ marginTop: 6 }}>
-            Approve or reject below. You can add a note (used as your guidance to the agent).
-          </p>
-        </div>
-      )}
-
       <div className="composer">
         <input
           placeholder={
-            decision
-              ? "Add a note (optional), then Approve/Reject…"
-              : current
-                ? `Message ${current.title}`
-                : isChannel
-                  ? `Message #${title}`
-                  : `Message ${title}`
+            current
+              ? `Message ${current.title}`
+              : isChannel
+                ? `Message #${title}`
+                : `Message ${title}`
           }
           value={input}
           onChange={(e) => setInput(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && !decision && send()}
+          onKeyDown={(e) => e.key === "Enter" && send()}
           disabled={busy}
         />
-        {decision ? (
-          <>
-            <button onClick={() => resolve(true)} disabled={busy}>Approve</button>
-            <button className="ghost" onClick={() => resolve(false)} disabled={busy}>Reject</button>
-          </>
-        ) : (
-          <button onClick={send} disabled={busy || !input.trim()}>Send</button>
-        )}
+        <button onClick={send} disabled={busy || !input.trim()}>Send</button>
       </div>
     </div>
   );
@@ -252,6 +241,58 @@ function ThreadBar({
           {t.escalation_pending && <span className="status pending"> · waiting</span>}
         </button>
       ))}
+    </div>
+  );
+}
+
+// A pending decision rendered inline as a special chat message: it reads as part
+// of the timeline (same avatar gutter + header), but its body is an action panel
+// with Approve/Reject and an optional note instead of plain text. Replaces the
+// old separate decision widget so the surface stays fully chat-based.
+function DecisionMessage({
+  decision,
+  onResolve,
+  busy,
+}: {
+  decision: Decision;
+  onResolve: (approve: boolean, note?: string) => Promise<void>;
+  busy: boolean;
+}) {
+  const [note, setNote] = useState("");
+  const who = decision.agent_name ?? "Agent";
+  const act = async (approve: boolean) => {
+    await onResolve(approve, note.trim() || undefined);
+    setNote("");
+  };
+  return (
+    <div className="smsg decision-msg">
+      <div className="smsg-gutter">
+        <Avatar name={who} size={36} />
+      </div>
+      <div className="smsg-body">
+        <div className="smsg-head">
+          <span className="smsg-name">{who}</span>
+          {decision.agent_role && <span className="smsg-role">{decision.agent_role}</span>}
+          <span className="status waiting_approval">needs your decision</span>
+        </div>
+        <div className="decision-panel">
+          <div className="decision-kind">{decisionKindLabel(decision.kind)}</div>
+          <p className="muted decision-hint">
+            Review the message above, then approve or reject. A note becomes your guidance to the agent.
+          </p>
+          <input
+            className="decision-note"
+            placeholder="Add a note for the agent (optional)…"
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+            disabled={busy}
+          />
+          <div className="btnrow">
+            <button onClick={() => act(true)} disabled={busy}>Approve</button>
+            <button className="ghost" onClick={() => act(false)} disabled={busy}>Reject</button>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
