@@ -192,6 +192,25 @@ class DomainAssociateRequest(BaseModel):
     site_id: uuid.UUID
 
 
+class EmailSetupRequest(BaseModel):
+    domain: str
+
+
+class EmailDnsRecordOut(BaseModel):
+    record: str
+    type: str
+    name: str
+    ok: bool
+    error: str | None = None
+
+
+class EmailSetupOut(BaseModel):
+    domain: str
+    status: str
+    all_written: bool
+    records: list[EmailDnsRecordOut]
+
+
 class GenerationEvent(BaseModel):
     ts: float
     label: str

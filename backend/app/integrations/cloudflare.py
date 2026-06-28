@@ -151,9 +151,7 @@ class CloudflareSiteHost(_CloudflareBase):
             expected=(200, 201),
         )
 
-    async def _deploy_index_html(
-        self, account: str, project: str, html: str, token: str
-    ) -> str:
+    async def _deploy_index_html(self, account: str, project: str, html: str, token: str) -> str:
         """Direct-upload a single ``index.html`` and create a production deployment.
 
         Cloudflare's Direct Upload flow: fetch a short-lived upload JWT, hash the
@@ -236,7 +234,14 @@ class CloudflareDns(_CloudflareBase):
         return str(result.get("status") or "unknown")
 
     async def upsert_record(
-        self, *, zone_id: str, type: str, name: str, content: str, proxied: bool = True
+        self,
+        *,
+        zone_id: str,
+        type: str,
+        name: str,
+        content: str,
+        proxied: bool = True,
+        priority: int | None = None,
     ) -> str:
         token = self._token()
         existing = await _request(
@@ -245,7 +250,13 @@ class CloudflareDns(_CloudflareBase):
             error=DnsError,
             token=token,
         )
-        body = {"type": type, "name": name, "content": content, "proxied": proxied}
+        body: dict[str, Any] = {"type": type, "name": name, "content": content}
+        # ``proxied`` only applies to proxiable record types (A/AAAA/CNAME); sending
+        # it on TXT/MX is rejected by Cloudflare. ``priority`` is required for MX.
+        if type in ("A", "AAAA", "CNAME"):
+            body["proxied"] = proxied
+        if priority is not None:
+            body["priority"] = priority
         # ``existing`` is a list when querying with filters; reuse the first match.
         record = existing[0] if isinstance(existing, list) and existing else None
         if record:
@@ -268,9 +279,7 @@ class CloudflareDns(_CloudflareBase):
         return str(result.get("id") or "")
 
     async def _find_zone(self, domain: str) -> Zone | None:
-        result = await _request(
-            "GET", f"/zones?name={domain}", error=DnsError, token=self._token()
-        )
+        result = await _request("GET", f"/zones?name={domain}", error=DnsError, token=self._token())
         if isinstance(result, list) and result:
             return _zone_from_result(result[0])
         return None
@@ -282,9 +291,7 @@ async def verify_credentials(token: str, account_id: str) -> None:
     Used when the founder saves credentials so a bad token/account is rejected up
     front (the REST API requires a working token for everything else).
     """
-    await _request(
-        "GET", f"/accounts/{account_id}", error=SiteHostError, token=token
-    )
+    await _request("GET", f"/accounts/{account_id}", error=SiteHostError, token=token)
 
 
 # ── helpers ────────────────────────────────────────────────────────────────────

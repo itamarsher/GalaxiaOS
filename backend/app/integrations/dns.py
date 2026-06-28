@@ -42,9 +42,20 @@ class DnsProvider(Protocol):
         ...
 
     async def upsert_record(
-        self, *, zone_id: str, type: str, name: str, content: str, proxied: bool = True
+        self,
+        *,
+        zone_id: str,
+        type: str,
+        name: str,
+        content: str,
+        proxied: bool = True,
+        priority: int | None = None,
     ) -> str:
-        """Create or update a DNS record. Returns the record id."""
+        """Create or update a DNS record. Returns the record id.
+
+        ``priority`` is used for record types that need it (e.g. MX); ``proxied``
+        applies only to proxiable types (A/AAAA/CNAME) and is ignored otherwise.
+        """
         ...
 
 

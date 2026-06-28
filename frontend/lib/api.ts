@@ -156,6 +156,8 @@ export interface OwnedDomain {
   site_id: string | null; last_error: string | null; created_at: string;
 }
 export interface DomainCapabilities { registrar: string; can_buy: boolean; can_connect: boolean }
+export interface EmailDnsRecord { record: string; type: string; name: string; ok: boolean; error: string | null }
+export interface EmailSetup { domain: string; status: string; all_written: boolean; records: EmailDnsRecord[] }
 export interface AgentListing {
   id: string; name: string; role: string; description: string; provider: string; price_cents: number;
   trust: number | null; accuracy: number | null; roi: number | null; reliability: number | null;
@@ -295,6 +297,11 @@ export const api = {
     req<OwnedDomain>(`/companies/${companyId}/domains/${domainId}/associate`, {
       method: "POST",
       body: JSON.stringify({ site_id: siteId }),
+    }),
+  setupDomainEmail: (companyId: string, domain: string) =>
+    req<EmailSetup>(`/companies/${companyId}/domains/email-setup`, {
+      method: "POST",
+      body: JSON.stringify({ domain }),
     }),
 
   sites: (companyId: string) => req<Site[]>(`/companies/${companyId}/sites`),

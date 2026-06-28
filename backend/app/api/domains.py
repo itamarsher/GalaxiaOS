@@ -13,6 +13,8 @@ import uuid
 from fastapi import APIRouter, HTTPException, status
 
 from app.deps import CompanyDep, DbDep
+from app.integrations.dns import DnsError
+from app.integrations.email import EmailError
 from app.models import SiteDomain
 from app.schemas import (
     DomainAssociateRequest,
@@ -20,8 +22,12 @@ from app.schemas import (
     DomainOut,
     DomainPurchaseRequest,
     DomainQuoteOut,
+    EmailDnsRecordOut,
+    EmailSetupOut,
+    EmailSetupRequest,
 )
 from app.services import domains as domains_svc
+from app.services import email_setup as email_setup_svc
 
 router = APIRouter(prefix="/companies/{company_id}/domains", tags=["domains"])
 
@@ -85,3 +91,24 @@ async def associate(
     except domains_svc.DomainsError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
     return _out(sd)
+
+
+@router.post("/email-setup", response_model=EmailSetupOut)
+async def email_setup(company: CompanyDep, db: DbDep, body: EmailSetupRequest):
+    """Auto-configure sending email for ``domain``: register it with Resend, write
+    the SPF/DKIM/DMARC records into Cloudflare, and trigger verification."""
+    try:
+        result = await email_setup_svc.configure_sender_dns(
+            db, company_id=company.id, domain=body.domain
+        )
+    except (EmailError, DnsError) as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+    return EmailSetupOut(
+        domain=result.domain,
+        status=result.status,
+        all_written=result.all_written,
+        records=[
+            EmailDnsRecordOut(record=r.record, type=r.type, name=r.name, ok=r.ok, error=r.error)
+            for r in result.records
+        ],
+    )
