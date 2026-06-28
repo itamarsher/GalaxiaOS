@@ -5,7 +5,7 @@ import { usePathname, useParams, useRouter, useSearchParams } from "next/navigat
 import { useEffect, useState, type ReactNode } from "react";
 import { api, type ChatChannel } from "@/lib/api";
 import { usePoll } from "@/lib/useApi";
-import { Avatar, channelDisplayName, founderIsMember } from "@/lib/chat";
+import { Avatar, channelDisplayName, founderIsMember, isCeoDm } from "@/lib/chat";
 
 // A Slack-style workspace. The left rail carries the workspace's "Spaces" (the
 // dashboard surfaces — Org, Budget, Tasks, …) plus the live collaboration:
@@ -45,9 +45,12 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
   const searchStr = search.toString();
   useEffect(() => { setNavOpen(false); }, [pathname, searchStr]);
 
-  // Slack splits the rail into Channels and Direct messages; we do the same.
+  // Slack splits the rail into Channels and Direct messages; we do the same. The
+  // CEO DM — the founder's standing line to steer the company — is pinned first.
   const channelList = convos.filter((c) => c.kind !== "direct");
-  const dmList = convos.filter((c) => c.kind === "direct");
+  const dmList = convos
+    .filter((c) => c.kind === "direct")
+    .sort((a, b) => Number(isCeoDm(b)) - Number(isCeoDm(a)));
 
   const chatLink = (c: ChatChannel) => {
     const active = onChat && activeChannel === c.id;

@@ -32,6 +32,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import (
     Agent,
+    AgentRun,
     ChatChannel,
     ChatMessage,
     ChatParticipant,
@@ -44,7 +45,18 @@ from app.models.enums import (
     AgentStatus,
     ChatChannelKind,
     ChatWaitStatus,
+    RunStatus,
+    RunTrigger,
     TaskStatus,
+)
+
+#: Task statuses that mean a DM is already being handled, so a fresh founder
+#: message coalesces into the open task instead of spawning a duplicate.
+_ACTIVE_DM_TASK_STATUSES = (
+    TaskStatus.queued,
+    TaskStatus.running,
+    TaskStatus.waiting_approval,
+    TaskStatus.auditing,
 )
 
 #: How the founder appears in rendered transcripts / participant lists.
@@ -639,6 +651,98 @@ async def founder_dm(
         agent_b_id=None,
         name=f"{label} ↔ founder",
     )
+
+
+async def ensure_ceo_dm(
+    db: AsyncSession, *, company_id: uuid.UUID
+) -> ChatChannel | None:
+    """The founder's direct line to the CEO, created on first use.
+
+    This is the founder's standing channel to steer the company: it exists from
+    launch and is the chat that opens by default, so the founder can always reach
+    the CEO to adjust the plan live. Returns ``None`` if the company has no CEO yet
+    (e.g. before the fleet is generated).
+    """
+    ceo = await db.scalar(
+        select(Agent).where(
+            Agent.company_id == company_id, Agent.role == AgentRole.ceo
+        )
+    )
+    if ceo is None:
+        return None
+    return await founder_dm(db, company_id=company_id, agent_id=ceo.id)
+
+
+async def spawn_dm_handler_task(
+    db: AsyncSession,
+    *,
+    company_id: uuid.UUID,
+    channel: ChatChannel,
+    agent_id: uuid.UUID,
+    founder_message: str,
+) -> uuid.UUID | None:
+    """Wake an idle agent to read & act on a founder DM (e.g. adjust the plan).
+
+    Founder DMs normally resume a *parked* agent through the reply-wait mechanic.
+    When the agent is idle there is no wait to satisfy — so the founder's message
+    would just sit unread. This creates a fresh task pointing the agent at the DM,
+    which is what lets the founder reach the CEO at any time to steer the company
+    live. The caller commits, then enqueues the returned id.
+
+    No-op when the agent isn't active, or when a task for this DM is already open
+    (so a burst of messages coalesces into the running task rather than piling up
+    duplicate tasks). Returns the task id to enqueue, or ``None``.
+    """
+    from app.runtime import breakers  # local import avoids a service↔runtime cycle
+
+    agent = await db.get(Agent, agent_id)
+    if agent is None or agent.status is not AgentStatus.active:
+        return None
+
+    already_open = await db.scalar(
+        select(Task.id)
+        .where(
+            Task.company_id == company_id,
+            Task.agent_id == agent_id,
+            Task.input["founder_dm_channel_id"].astext == str(channel.id),
+            Task.status.in_(_ACTIVE_DM_TASK_STATUSES),
+        )
+        .limit(1)
+    )
+    if already_open is not None:
+        return None
+
+    run = AgentRun(
+        company_id=company_id, trigger=RunTrigger.founder_command, status=RunStatus.running
+    )
+    db.add(run)
+    await db.flush()
+    run.root_run_id = run.id
+
+    goal = (
+        f"The founder sent you a direct message:\n\n"
+        f'"{preview_of(founder_message)}"\n\n'
+        f'Read the full thread first with `read_chat_channel` (channel "{channel.name}"). '
+        "Then act on what the founder is asking. If it changes priorities or the plan, "
+        "adjust accordingly — re-plan, (re-)dispatch or redirect initiatives, revise "
+        "objectives — within the approved budget and governance. Always reply to the founder "
+        "in this same DM with `message_teammate` (to: founder): if you changed something, "
+        "explain what and why; if it's a question, answer it. Then finish with `report_result`."
+    )
+    task = Task(
+        company_id=company_id,
+        run_id=run.id,
+        root_run_id=run.id,
+        agent_id=agent_id,
+        depth=0,
+        goal=goal,
+        input={"founder_dm_channel_id": str(channel.id)},
+        status=TaskStatus.queued,
+        loop_signature=breakers.loop_signature(agent_id, f"founder-dm {channel.id}"),
+    )
+    db.add(task)
+    await db.flush()
+    return task.id
 
 
 async def post_decision_dm(

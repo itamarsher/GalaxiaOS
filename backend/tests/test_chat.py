@@ -847,6 +847,122 @@ async def test_chat_activity_ignores_channels_agent_is_not_in(
     assert summary is None
 
 
+# ── Founder ⇄ CEO standing DM ─────────────────────────────────────────────────
+@requires_db
+async def test_ensure_ceo_dm_creates_idempotent_founder_ceo_thread(
+    session_factory, company_with_budget
+):
+    """The founder↔CEO DM is created once and reused — the standing steering line."""
+    company_id = company_with_budget
+    async with session_factory() as db:
+        db.add(Agent(company_id=company_id, role=AgentRole.ceo, name="Boss"))
+        await db.commit()
+
+    async with session_factory() as db:
+        dm = await chat.ensure_ceo_dm(db, company_id=company_id)
+        await db.commit()
+        assert dm is not None
+        assert dm.kind is ChatChannelKind.direct
+        # Founder is a participant of the DM.
+        agent_ids = {p.agent_id for p in await chat.participants(db, dm.id)}
+        assert None in agent_ids
+        dm_id = dm.id
+
+    # Calling again reuses the same thread (no duplicate DM).
+    async with session_factory() as db:
+        dm2 = await chat.ensure_ceo_dm(db, company_id=company_id)
+        await db.commit()
+        assert dm2.id == dm_id
+        count = await db.scalar(
+            select(func.count(ChatChannel.id)).where(
+                ChatChannel.company_id == company_id,
+                ChatChannel.kind == ChatChannelKind.direct,
+            )
+        )
+        assert count == 1
+
+
+@requires_db
+async def test_founder_dm_spawns_handler_task_and_coalesces(
+    session_factory, company_with_budget
+):
+    """Messaging an idle CEO spawns a task to act on it; a second message coalesces."""
+    company_id = company_with_budget
+    async with session_factory() as db:
+        ceo = Agent(company_id=company_id, role=AgentRole.ceo, name="Boss")
+        db.add(ceo)
+        await db.flush()
+        ceo_id = ceo.id
+        await db.commit()
+
+    async with session_factory() as db:
+        dm = await chat.ensure_ceo_dm(db, company_id=company_id)
+        await db.commit()
+        dm_id = dm.id
+
+    # Idle CEO → the founder's message spawns a queued handler task pointed at the DM.
+    async with session_factory() as db:
+        dm = await db.get(ChatChannel, dm_id)
+        task_id = await chat.spawn_dm_handler_task(
+            db,
+            company_id=company_id,
+            channel=dm,
+            agent_id=ceo_id,
+            founder_message="Shift focus to enterprise.",
+        )
+        await db.commit()
+    assert task_id is not None
+
+    async with session_factory() as db:
+        t = await db.get(Task, task_id)
+        assert t.agent_id == ceo_id
+        assert t.status is TaskStatus.queued
+        assert (t.input or {}).get("founder_dm_channel_id") == str(dm_id)
+        assert "enterprise" in t.goal.lower()
+
+    # A second message while that task is still open does NOT spawn a duplicate.
+    async with session_factory() as db:
+        dm = await db.get(ChatChannel, dm_id)
+        again = await chat.spawn_dm_handler_task(
+            db,
+            company_id=company_id,
+            channel=dm,
+            agent_id=ceo_id,
+            founder_message="Also trim spend.",
+        )
+        await db.commit()
+    assert again is None
+
+
+@requires_db
+async def test_founder_dm_does_not_spawn_for_paused_agent(
+    session_factory, company_with_budget
+):
+    """A paused agent isn't woken by a founder DM."""
+    company_id = company_with_budget
+    async with session_factory() as db:
+        from app.models.enums import AgentStatus
+
+        ceo = Agent(company_id=company_id, role=AgentRole.ceo, name="Boss", status=AgentStatus.paused)
+        db.add(ceo)
+        await db.flush()
+        ceo_id = ceo.id
+        await db.commit()
+
+    async with session_factory() as db:
+        dm = await chat.ensure_ceo_dm(db, company_id=company_id)
+        await db.commit()
+        dm_id = dm.id
+
+    async with session_factory() as db:
+        dm = await db.get(ChatChannel, dm_id)
+        task_id = await chat.spawn_dm_handler_task(
+            db, company_id=company_id, channel=dm, agent_id=ceo_id, founder_message="Hello?"
+        )
+        await db.commit()
+    assert task_id is None
+
+
 # ── Decision ⇄ chat consolidation ─────────────────────────────────────────────
 @requires_db
 async def test_request_decision_is_founder_dm_resumed_by_reply(

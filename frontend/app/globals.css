@@ -324,6 +324,25 @@ button.ghost:hover { background: var(--panel-2); filter: none; }
 }
 .composer button { margin-top: 0; flex-shrink: 0; }
 
+/* A decision that rides inline in the timeline: a normal message row whose body
+   is an action panel (kind + note + Approve/Reject), softly accented so it reads
+   as actionable without breaking the chat flow. */
+.decision-msg { background: color-mix(in srgb, var(--accent) 7%, transparent); }
+.decision-msg:hover { background: color-mix(in srgb, var(--accent) 10%, transparent); }
+.decision-panel {
+  margin-top: 4px; padding: 12px 14px;
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--border));
+  border-radius: var(--radius-sm); background: var(--panel-2);
+  display: flex; flex-direction: column; gap: 8px;
+}
+.decision-kind {
+  font-size: 12px; font-weight: 700; color: var(--accent-strong);
+  text-transform: uppercase; letter-spacing: 0.04em;
+}
+.decision-hint { margin: 0; font-size: 13px; }
+.decision-note { font-size: 14px; }
+.decision-panel .btnrow button { margin-top: 0; }
+
 h2 { font-size: clamp(18px, 5vw, 20px); margin: 0 0 12px; letter-spacing: -0.01em; }
 h3 { font-size: 15px; margin: 18px 0 8px; }
 h4 { font-size: 13px; color: var(--muted); margin: 14px 0 6px; text-transform: uppercase; letter-spacing: 0.06em; }

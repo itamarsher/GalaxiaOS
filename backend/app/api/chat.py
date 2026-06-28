@@ -17,7 +17,7 @@ from sqlalchemy import func, select
 
 from app.deps import CompanyDep, DbDep
 from app.models import Agent, ChatChannel, ChatMessage, ChatWait, DecisionRequest
-from app.models.enums import AgentRole, ChatWaitStatus, DecisionStatus
+from app.models.enums import AgentRole, ChatChannelKind, ChatWaitStatus, DecisionStatus
 from app.runtime.queue import enqueue_task
 from app.schemas import (
     ChatChannelCreateRequest,
@@ -138,6 +138,10 @@ async def _load_channel(db, company: CompanyDep, channel_id: uuid.UUID) -> ChatC
 
 @router.get("/channels", response_model=list[ChatChannelOut])
 async def list_channels(company: CompanyDep, db: DbDep):
+    # The founder's direct line to the CEO always exists (created on first use),
+    # so it's there to open by default and message at any time.
+    if await chat.ensure_ceo_dm(db, company_id=company.id) is not None:
+        await db.commit()
     channels = (
         await db.scalars(
             select(ChatChannel)
@@ -206,8 +210,29 @@ async def post_message(
         body=body.message,
         thread_id=body.thread_id,
     )
+
+    # If this is a 1:1 DM with an agent and the founder's message didn't resume a
+    # parked agent (none was waiting), wake that agent with a fresh task so it
+    # reads and acts on the message — e.g. the founder steering the CEO live. The
+    # spawn coalesces if a task is already handling the DM.
+    spawned: uuid.UUID | None = None
+    if not woken and channel.kind == ChatChannelKind.direct and body.thread_id is None:
+        agent_members = [
+            p.agent_id for p in await chat.participants(db, channel.id) if p.agent_id is not None
+        ]
+        if len(agent_members) == 1:
+            spawned = await chat.spawn_dm_handler_task(
+                db,
+                company_id=company.id,
+                channel=channel,
+                agent_id=agent_members[0],
+                founder_message=body.message,
+            )
+
     await db.commit()
     # Resume any agents that were waiting for this reply.
     for task_id in woken:
         await enqueue_task(task_id)
+    if spawned is not None:
+        await enqueue_task(spawned)
     return await _message_out(db, message)

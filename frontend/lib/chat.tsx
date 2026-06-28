@@ -9,6 +9,12 @@ export function founderIsMember(c: ChatChannel): boolean {
   return c.participants.some((p) => p.agent_id == null);
 }
 
+/** The founder's direct line to the CEO — the standing channel to steer the
+ *  company, opened by default. A DM whose agent participant is the CEO. */
+export function isCeoDm(c: ChatChannel): boolean {
+  return c.kind === "direct" && c.participants.some((p) => p.role === "ceo");
+}
+
 /** Slack-style display name: the bare channel name for channels; for a DM, the
  *  other members' names (so a founder↔agent thread reads as the agent, not as a
  *  raw "ceo agent ↔ founder" title). */
