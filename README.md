@@ -2,10 +2,19 @@
 
 > *"What's your mission? What's your budget? Launch."* — everything else is generated.
 
-A founder defines a **Mission**, **Constraints**, and **Budget**. ABOS generates and runs a fleet
-of AI agents (CEO, Growth, Research, Product, Finance, Governance) that operate the company
-autonomously, under a hard budget and a governance layer. The founder acts as a board member, not
-an operator.
+A founder defines a **Mission**, **Constraints**, and **Budget**. ABOS designs a company to fit
+that mission — generating a fleet of AI agents whose roles, responsibilities, and budgets are
+derived from what the business actually needs (e.g. CEO, Growth, Research, Product, Finance,
+Governance), guaranteeing the oversight roles, and reshaping as objectives evolve. The fleet
+operates the company autonomously, under a hard budget and a governance layer. The founder acts as
+a board member, not an operator.
+
+## Mission
+
+**Enable any person on the planet to own or create autonomous businesses.** The core product is
+**free and open-source** with a BYOK (bring-your-own-key) implementation — owning or creating an
+autonomous business shouldn't depend on a subscription or a gatekeeper. See [`docs/MISSION.md`](docs/MISSION.md)
+for the full statement and how we plan to sustain the open core.
 
 ## Architecture at a glance
 
