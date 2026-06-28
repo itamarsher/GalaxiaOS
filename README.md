@@ -38,12 +38,17 @@ See the full design in the plan referenced from the project history.
 - **Onboarding → launch**: mission → objectives/OKRs → generated agent fleet → launch.
 - **Budget OS**: every billable action (LLM + external) metered through one `CostMeter`
   chokepoint; per-category/per-agent rollups; runway forecasting; ROI-based pausing.
-- **Real external spend (Stripe Link)**: an optional payment-wallet seam lets an agent
-  mint a scoped, single-purchase Stripe Link credential (a Shared Payment Token, capped
-  at the quoted price) that a Stripe-enabled seller charges — the `card_checkout`
-  registrar exercises this end-to-end by buying a domain. Test-mode first
-  (`ABOS_STRIPE_TEST_MODE=true`) and off by default; the charge still flows through the
-  same `CostMeter` reserve→commit path, so the budget is reserved before any money moves.
+- **Real external spend (Stripe)**: optional payment seams give an agent real money,
+  two ways. (1) **Stripe Issuing** — a budget-controlled virtual card funds a registrar
+  account (Base44-style reseller model), then the agent buys real domains via the
+  `namecheap` API; authorizations are approved *programmatically* (no human per charge)
+  by the `/webhooks/stripe/issuing` real-time-auth webhook, which only clears spend
+  inside the company's remaining budget, and the registrar fails *before* the
+  irreversible call when the balance is short. (2) **Stripe Link** — an agent mints a
+  scoped, single-purchase Shared Payment Token a Stripe-enabled seller charges (the
+  `card_checkout` registrar). Both are test-mode first (`ABOS_STRIPE_TEST_MODE=true`),
+  off by default, live keys refused until you opt in, and metered through the same
+  `CostMeter` reserve→commit path so the budget is reserved before any money moves.
 - **Live runtime**: native agent loop, CEO-as-planner orchestration, circuit breakers,
   declarative policy engine, founder decision inbox.
 - **External-comms index & approval gate**: every outbound message the fleet sends

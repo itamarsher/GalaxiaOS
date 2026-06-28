@@ -55,6 +55,93 @@ async def test_namecheap_register_without_credentials_raises():
         await reg.register("acme.com")
 
 
+# ── Namecheap balance gate + add-funds (Issuing-funded path) ──────────────────
+
+
+def _creds(monkeypatch):
+    from app.integrations import namecheap as nc
+
+    for attr, val in {
+        "namecheap_api_user": "u",
+        "namecheap_api_key": "k",
+        "namecheap_username": "u",
+        "namecheap_client_ip": "1.2.3.4",
+    }.items():
+        monkeypatch.setattr(nc.settings, attr, val)
+
+
+async def test_namecheap_balance_and_add_funds_parse(monkeypatch):
+    import xml.etree.ElementTree as ET
+
+    from app.integrations.namecheap import NamecheapRegistrar
+
+    _creds(monkeypatch)
+    reg = NamecheapRegistrar()
+
+    async def _balance_xml(params):
+        return ET.fromstring(
+            '<ApiResponse Status="OK"><CommandResponse>'
+            '<UserGetBalancesResult Currency="USD" AvailableBalance="49.32"/>'
+            "</CommandResponse></ApiResponse>"
+        )
+
+    monkeypatch.setattr(reg, "_call", _balance_xml)
+    assert await reg.balance_cents() == 4932
+
+    async def _funds_xml(params):
+        assert params["Command"] == "namecheap.users.createaddfundsrequest"
+        assert params["Amount"] == "20.00"
+        return ET.fromstring(
+            '<ApiResponse Status="OK"><CommandResponse>'
+            '<CreateAddFundsResult TokenID="tok1" RedirectURL="https://pay.namecheap.com/tok1"/>'
+            "</CommandResponse></ApiResponse>"
+        )
+
+    monkeypatch.setattr(reg, "_call", _funds_xml)
+    url = await reg.create_add_funds_request(2000, "https://abos.example/return")
+    assert url == "https://pay.namecheap.com/tok1"
+
+
+async def test_namecheap_register_fails_before_create_when_underfunded(monkeypatch):
+    from app.integrations.namecheap import NamecheapRegistrar
+
+    _creds(monkeypatch)
+    monkeypatch.setattr(
+        "app.integrations.namecheap.settings.namecheap_contact",
+        {
+            f: "x"
+            for f in (
+                "FirstName",
+                "LastName",
+                "Address1",
+                "City",
+                "StateProvince",
+                "PostalCode",
+                "Country",
+                "Phone",
+                "EmailAddress",
+            )
+        },
+    )
+    monkeypatch.setattr("app.integrations.namecheap.settings.namecheap_precheck_balance", True)
+    reg = NamecheapRegistrar()
+
+    async def _broke():
+        return 100  # $1.00 — far under the ~$12 .com price
+
+    created = {"ran": False}
+
+    async def _should_not_run(params):
+        created["ran"] = True
+        raise AssertionError("create must not be called when underfunded")
+
+    monkeypatch.setattr(reg, "balance_cents", _broke)
+    monkeypatch.setattr(reg, "_call", _should_not_run)
+    with pytest.raises(RegistrarError, match="insufficient Namecheap balance"):
+        await reg.register("acme.com")
+    assert created["ran"] is False  # failed before the irreversible call
+
+
 # ── payment wallet + card-checkout registrar (Stripe Link) ────────────────────
 
 
