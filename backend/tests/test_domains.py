@@ -42,6 +42,9 @@ def test_registry_wiring():
     assert isinstance(get_registrar("rdap"), RdapRegistrar)
     # namecheap resolves (adapter constructed) but registering without creds raises.
     get_registrar("namecheap")
+    from app.integrations.card_checkout import CardCheckoutRegistrar
+
+    assert isinstance(get_registrar("card_checkout"), CardCheckoutRegistrar)
     with pytest.raises(ValueError):
         get_registrar("bogus")
 
@@ -50,6 +53,223 @@ async def test_namecheap_register_without_credentials_raises():
     reg = get_registrar("namecheap")
     with pytest.raises(RegistrarError):
         await reg.register("acme.com")
+
+
+# ── Namecheap balance gate + add-funds (Issuing-funded path) ──────────────────
+
+
+def _creds(monkeypatch):
+    from app.integrations import namecheap as nc
+
+    for attr, val in {
+        "namecheap_api_user": "u",
+        "namecheap_api_key": "k",
+        "namecheap_username": "u",
+        "namecheap_client_ip": "1.2.3.4",
+    }.items():
+        monkeypatch.setattr(nc.settings, attr, val)
+
+
+async def test_namecheap_balance_and_add_funds_parse(monkeypatch):
+    import xml.etree.ElementTree as ET
+
+    from app.integrations.namecheap import NamecheapRegistrar
+
+    _creds(monkeypatch)
+    reg = NamecheapRegistrar()
+
+    async def _balance_xml(params):
+        return ET.fromstring(
+            '<ApiResponse Status="OK"><CommandResponse>'
+            '<UserGetBalancesResult Currency="USD" AvailableBalance="49.32"/>'
+            "</CommandResponse></ApiResponse>"
+        )
+
+    monkeypatch.setattr(reg, "_call", _balance_xml)
+    assert await reg.balance_cents() == 4932
+
+    async def _funds_xml(params):
+        assert params["Command"] == "namecheap.users.createaddfundsrequest"
+        assert params["Amount"] == "20.00"
+        return ET.fromstring(
+            '<ApiResponse Status="OK"><CommandResponse>'
+            '<CreateAddFundsResult TokenID="tok1" RedirectURL="https://pay.namecheap.com/tok1"/>'
+            "</CommandResponse></ApiResponse>"
+        )
+
+    monkeypatch.setattr(reg, "_call", _funds_xml)
+    url = await reg.create_add_funds_request(2000, "https://abos.example/return")
+    assert url == "https://pay.namecheap.com/tok1"
+
+
+async def test_namecheap_register_fails_before_create_when_underfunded(monkeypatch):
+    from app.integrations.namecheap import NamecheapRegistrar
+
+    _creds(monkeypatch)
+    monkeypatch.setattr(
+        "app.integrations.namecheap.settings.namecheap_contact",
+        {
+            f: "x"
+            for f in (
+                "FirstName",
+                "LastName",
+                "Address1",
+                "City",
+                "StateProvince",
+                "PostalCode",
+                "Country",
+                "Phone",
+                "EmailAddress",
+            )
+        },
+    )
+    monkeypatch.setattr("app.integrations.namecheap.settings.namecheap_precheck_balance", True)
+    reg = NamecheapRegistrar()
+
+    async def _broke():
+        return 100  # $1.00 — far under the ~$12 .com price
+
+    created = {"ran": False}
+
+    async def _should_not_run(params):
+        created["ran"] = True
+        raise AssertionError("create must not be called when underfunded")
+
+    monkeypatch.setattr(reg, "balance_cents", _broke)
+    monkeypatch.setattr(reg, "_call", _should_not_run)
+    with pytest.raises(RegistrarError, match="insufficient Namecheap balance"):
+        await reg.register("acme.com")
+    assert created["ran"] is False  # failed before the irreversible call
+
+
+# ── payment wallet + card-checkout registrar (Stripe Link) ────────────────────
+
+
+def test_wallet_wiring():
+    from app.integrations.stripe_link import StripeLinkWallet
+    from app.integrations.wallet import get_wallet
+
+    # Default (none) wires no wallet, so capabilities report unsupported.
+    assert get_wallet("none") is None
+    assert isinstance(get_wallet("stripe_link"), StripeLinkWallet)
+    with pytest.raises(ValueError):
+        get_wallet("bogus")
+
+
+async def test_stripe_link_requires_config():
+    # Default settings carry no Stripe keys, so issuing fails loudly rather than
+    # fabricating a credential.
+    from app.integrations.stripe_link import StripeLinkWallet
+    from app.integrations.wallet import WalletError
+
+    with pytest.raises(WalletError):
+        await StripeLinkWallet().issue_token(
+            amount_cents=1200, currency="usd", merchant_name="m", merchant_url="", context="c"
+        )
+
+
+def test_live_key_refused_in_test_mode(monkeypatch):
+    # A live secret key must be refused while the test-mode guard is on, and
+    # accepted only when it is explicitly disabled.
+    from app.integrations import _stripe
+
+    monkeypatch.setattr(_stripe.settings, "stripe_secret_key", "sk_live_abc")
+    monkeypatch.setattr(_stripe.settings, "stripe_test_mode", True)
+    with pytest.raises(_stripe.StripeError):
+        _stripe._require_secret_key()
+    monkeypatch.setattr(_stripe.settings, "stripe_test_mode", False)
+    assert _stripe._require_secret_key() == "sk_live_abc"
+
+
+async def test_card_checkout_requires_wallet(monkeypatch):
+    from app.integrations.card_checkout import CardCheckoutRegistrar
+
+    async def _available(domain, *, timeout=4.0):
+        return True
+
+    monkeypatch.setattr("app.integrations.card_checkout.rdap_available", _available)
+    monkeypatch.setattr("app.integrations.card_checkout.get_wallet", lambda: None)
+    with pytest.raises(RegistrarError):
+        await CardCheckoutRegistrar().register("acme.com")
+
+
+async def test_card_checkout_charges_spt_and_registers(monkeypatch):
+    """The full agentic flow: mint an SPT, charge it, return the registration."""
+    from app.integrations.card_checkout import CardCheckoutRegistrar
+    from app.integrations.wallet import IssuedToken
+
+    captured = {}
+
+    class _StubWallet:
+        async def issue_token(
+            self, *, amount_cents, currency, merchant_name, merchant_url, context
+        ):
+            captured["amount_cents"] = amount_cents
+            return IssuedToken(
+                id="spt_test",
+                kind="shared_payment_token",
+                max_amount_cents=amount_cents,
+                currency=currency,
+                expires_at=0,
+            )
+
+        async def revoke(self, token_id):  # pragma: no cover - not hit on success
+            captured["revoked"] = token_id
+
+    async def _available(domain, *, timeout=4.0):
+        return True
+
+    async def _stripe_request(method, path, *, data=None):
+        captured["charge"] = (method, path, data)
+        # Amount charged must not exceed the SPT cap.
+        assert int(data["amount"]) <= captured["amount_cents"]
+        assert data["payment_method_data[shared_payment_granted_token]"] == "spt_test"
+        return {"id": "pi_test", "status": "succeeded", "amount_received": int(data["amount"])}
+
+    monkeypatch.setattr("app.integrations.card_checkout.rdap_available", _available)
+    monkeypatch.setattr("app.integrations.card_checkout.get_wallet", lambda: _StubWallet())
+    monkeypatch.setattr("app.integrations.card_checkout.stripe_request", _stripe_request)
+
+    reg = await CardCheckoutRegistrar().register("acme.com")
+    assert reg.domain == "acme.com"
+    assert reg.external_ref == "pi_test"
+    assert reg.price_cents == 1200  # .com common price
+    assert "revoked" not in captured  # successful charge: credential not revoked
+
+
+async def test_card_checkout_revokes_token_on_charge_failure(monkeypatch):
+    from app.integrations._stripe import StripeError
+    from app.integrations.card_checkout import CardCheckoutRegistrar
+    from app.integrations.wallet import IssuedToken
+
+    revoked = {}
+
+    class _StubWallet:
+        async def issue_token(self, **kw):
+            return IssuedToken(
+                id="spt_x",
+                kind="shared_payment_token",
+                max_amount_cents=kw["amount_cents"],
+                currency=kw["currency"],
+                expires_at=0,
+            )
+
+        async def revoke(self, token_id):
+            revoked["id"] = token_id
+
+    async def _available(domain, *, timeout=4.0):
+        return True
+
+    async def _failing_charge(method, path, *, data=None):
+        raise StripeError("card declined")
+
+    monkeypatch.setattr("app.integrations.card_checkout.rdap_available", _available)
+    monkeypatch.setattr("app.integrations.card_checkout.get_wallet", lambda: _StubWallet())
+    monkeypatch.setattr("app.integrations.card_checkout.stripe_request", _failing_charge)
+
+    with pytest.raises(RegistrarError):
+        await CardCheckoutRegistrar().register("acme.com")
+    assert revoked["id"] == "spt_x"  # failed charge frees the credential
 
 
 # ── metered purchase path (DB) ────────────────────────────────────────────────

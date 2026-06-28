@@ -150,6 +150,15 @@ export interface SiteLead {
   id: string; site_id: string | null; email: string;
   name: string | null; message: string | null; source: string | null; created_at: string;
 }
+export interface DomainQuote { domain: string; available: boolean; price_cents: number }
+export interface OwnedDomain {
+  id: string; domain: string; status: string;
+  site_id: string | null; last_error: string | null; created_at: string;
+}
+export interface DomainCapabilities { registrar: string; can_buy: boolean; can_connect: boolean; can_send_email: boolean }
+export interface EmailDnsRecord { record: string; type: string; name: string; ok: boolean; error: string | null }
+export interface EmailSetup { domain: string; status: string; all_written: boolean; records: EmailDnsRecord[] }
+export interface EmailStatus { domain: string; configured: boolean; status: string; pending: string[] }
 export interface AgentListing {
   id: string; name: string; role: string; description: string; provider: string; price_cents: number;
   trust: number | null; accuracy: number | null; roi: number | null; reliability: number | null;
@@ -273,6 +282,30 @@ export const api = {
   runway: (companyId: string) => req<Runway>(`/companies/${companyId}/runway`),
   recomputeRunway: (companyId: string) =>
     req<Runway>(`/companies/${companyId}/runway/recompute`, { method: "POST" }),
+
+  // Domains space — search availability, buy, and auto-associate to a site.
+  domainCapabilities: (companyId: string) =>
+    req<DomainCapabilities>(`/companies/${companyId}/domains/capabilities`),
+  domainSearch: (companyId: string, q: string) =>
+    req<DomainQuote[]>(`/companies/${companyId}/domains/search?q=${encodeURIComponent(q)}`),
+  domains: (companyId: string) => req<OwnedDomain[]>(`/companies/${companyId}/domains`),
+  buyDomain: (companyId: string, domain: string, siteId?: string) =>
+    req<OwnedDomain>(`/companies/${companyId}/domains/purchase`, {
+      method: "POST",
+      body: JSON.stringify({ domain, site_id: siteId ?? null }),
+    }),
+  associateDomain: (companyId: string, domainId: string, siteId: string) =>
+    req<OwnedDomain>(`/companies/${companyId}/domains/${domainId}/associate`, {
+      method: "POST",
+      body: JSON.stringify({ site_id: siteId }),
+    }),
+  setupDomainEmail: (companyId: string, domain: string) =>
+    req<EmailSetup>(`/companies/${companyId}/domains/email-setup`, {
+      method: "POST",
+      body: JSON.stringify({ domain }),
+    }),
+  domainEmailStatus: (companyId: string, domain: string) =>
+    req<EmailStatus>(`/companies/${companyId}/domains/email-status?domain=${encodeURIComponent(domain)}`),
 
   sites: (companyId: string) => req<Site[]>(`/companies/${companyId}/sites`),
   siteLeads: (companyId: string, siteId?: string) =>

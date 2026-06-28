@@ -161,6 +161,64 @@ class SiteLeadOut(ORMModel):
     created_at: datetime
 
 
+# ── Domains space ────────────────────────────────────────────────────────────
+class DomainQuoteOut(BaseModel):
+    domain: str
+    available: bool
+    price_cents: int
+
+
+class DomainOut(ORMModel):
+    id: uuid.UUID
+    domain: str
+    status: str
+    site_id: uuid.UUID | None = None
+    last_error: str | None = None
+    created_at: datetime
+
+
+class DomainCapabilitiesOut(BaseModel):
+    registrar: str
+    can_buy: bool
+    can_connect: bool
+    can_send_email: bool
+
+
+class DomainPurchaseRequest(BaseModel):
+    domain: str
+    site_id: uuid.UUID | None = None
+
+
+class DomainAssociateRequest(BaseModel):
+    site_id: uuid.UUID
+
+
+class EmailSetupRequest(BaseModel):
+    domain: str
+
+
+class EmailDnsRecordOut(BaseModel):
+    record: str
+    type: str
+    name: str
+    ok: bool
+    error: str | None = None
+
+
+class EmailSetupOut(BaseModel):
+    domain: str
+    status: str
+    all_written: bool
+    records: list[EmailDnsRecordOut]
+
+
+class EmailStatusOut(BaseModel):
+    domain: str
+    configured: bool
+    status: str
+    pending: list[str]
+
+
 class GenerationEvent(BaseModel):
     ts: float
     label: str

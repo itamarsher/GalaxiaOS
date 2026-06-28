@@ -62,6 +62,28 @@ class NamecheapRegistrar:
             )
         return creds
 
+    async def _call(self, params: dict[str, str]) -> ET.Element:
+        """GET the Namecheap API and return the parsed, status-checked root.
+
+        Raises :class:`RegistrarError` on a network error, non-XML body, or a
+        non-OK API status (surfacing the vendor error messages).
+        """
+        url = _SANDBOX_URL if settings.namecheap_sandbox else _PROD_URL
+        try:
+            async with httpx.AsyncClient(timeout=settings.rdap_timeout_seconds * 3) as client:
+                resp = await client.get(url, params=params)
+                resp.raise_for_status()
+        except httpx.HTTPError as exc:
+            raise RegistrarError(f"Namecheap request failed: {exc}") from exc
+        try:
+            root = ET.fromstring(resp.text)
+        except ET.ParseError as exc:
+            raise RegistrarError(f"Namecheap returned non-XML: {exc}") from exc
+        if root.attrib.get("Status") != "OK":
+            errors = [e.text or "" for e in root.iter() if _local(e.tag) == "Error"]
+            raise RegistrarError(f"Namecheap error: {'; '.join(errors) or 'unknown'}")
+        return root
+
     async def check(self, domain: str) -> DomainQuote:
         if not _pricing.is_registrable(domain):
             return DomainQuote(domain=domain, available=False, price_cents=0)
@@ -69,6 +91,52 @@ class NamecheapRegistrar:
         if available is not True:
             return DomainQuote(domain=domain, available=False, price_cents=0)
         return DomainQuote(domain=domain, available=True, price_cents=_pricing.price_cents(domain))
+
+    async def balance_cents(self) -> int:
+        """Available account balance in cents (``namecheap.users.getBalances``).
+
+        The Namecheap API spends from this balance; checking it first lets a
+        purchase fail loudly *before* the irreversible create call.
+        """
+        params = self._require_credentials()
+        params["Command"] = "namecheap.users.getBalances"
+        root = await self._call(params)
+        # Parse by attribute (not a guessed element name): the result element
+        # carries an ``AvailableBalance`` attribute.
+        for el in root.iter():
+            raw = el.attrib.get("AvailableBalance")
+            if raw is not None:
+                try:
+                    return round(float(raw) * 100)
+                except ValueError as exc:
+                    raise RegistrarError(f"Namecheap returned a bad balance: {raw!r}") from exc
+        raise RegistrarError("Namecheap response missing AvailableBalance")
+
+    async def create_add_funds_request(self, amount_cents: int, return_url: str) -> str:
+        """Start a credit-card top-up and return the hosted ``RedirectURL``.
+
+        Namecheap funds an account through a hosted page where the card is
+        entered (its API never charges a raw card); this returns that URL so a
+        Stripe Issuing card can fund the balance the registrar then draws down.
+        """
+        params = self._require_credentials()
+        params.update(
+            {
+                "Command": "namecheap.users.createaddfundsrequest",
+                "Username": params["UserName"],
+                "PaymentType": "Creditcard",
+                "Amount": f"{amount_cents / 100:.2f}",
+                "ReturnURL": return_url,
+            }
+        )
+        root = await self._call(params)
+        # The result element carries a ``RedirectURL`` attribute (hosted card-entry
+        # page); match on the attribute rather than a guessed element name.
+        for el in root.iter():
+            url = el.attrib.get("RedirectURL")
+            if url:
+                return url
+        raise RegistrarError("Namecheap add-funds response missing RedirectURL")
 
     async def register(self, domain: str) -> DomainRegistration:
         params = self._require_credentials()
@@ -79,6 +147,17 @@ class NamecheapRegistrar:
                 f"Namecheap contact fields missing: {', '.join(missing_contact)} "
                 "(set ABOS_NAMECHEAP_CONTACT as JSON)."
             )
+
+        # Fail before the irreversible create when the balance can't cover it.
+        if settings.namecheap_precheck_balance:
+            need = _pricing.price_cents(domain)
+            available = await self.balance_cents()
+            if available < need:
+                raise RegistrarError(
+                    f"insufficient Namecheap balance: ${available / 100:.2f} available, "
+                    f"need ~${need / 100:.2f} for {domain} — top up the account "
+                    "(create_add_funds_request) before registering."
+                )
 
         params.update({"Command": "namecheap.domains.create", "DomainName": domain, "Years": "1"})
         for role in _CONTACT_ROLES:

@@ -68,18 +68,26 @@ async def get_plaintext_key(
     return envelope.open_secret(sealed)
 
 
+async def has_active_key(db: AsyncSession, *, company_id: uuid.UUID, provider: str) -> bool:
+    """True if the company has an active key for ``provider`` (no decryption)."""
+    row = await db.scalar(
+        select(ApiKey.id).where(
+            ApiKey.company_id == company_id,
+            ApiKey.provider == provider,
+            ApiKey.status == ApiKeyStatus.active,
+        )
+    )
+    return row is not None
+
+
 async def list_keys(db: AsyncSession, *, company_id: uuid.UUID) -> list[ApiKey]:
     rows = await db.scalars(
-        select(ApiKey).where(
-            ApiKey.company_id == company_id, ApiKey.status == ApiKeyStatus.active
-        )
+        select(ApiKey).where(ApiKey.company_id == company_id, ApiKey.status == ApiKeyStatus.active)
     )
     return list(rows)
 
 
-async def revoke_key(
-    db: AsyncSession, *, company_id: uuid.UUID, key_id: uuid.UUID
-) -> bool:
+async def revoke_key(db: AsyncSession, *, company_id: uuid.UUID, key_id: uuid.UUID) -> bool:
     """Revoke a single active key (so the founder can remove/rotate it). Tenant-scoped.
 
     Returns ``False`` if there's no active key with that id for the company (already

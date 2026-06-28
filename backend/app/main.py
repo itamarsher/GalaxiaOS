@@ -23,6 +23,7 @@ from app.api import (
     copilot,
     decisions,
     dev,  # TEMP dev-only endpoints — remove before launch
+    domains,
     events,
     files,
     governance,
@@ -32,6 +33,7 @@ from app.api import (
     metrics,
     onboarding,
     public,
+    stripe_webhooks,
 )
 from app.config import settings
 from app.db import SessionLocal
@@ -104,6 +106,7 @@ def create_app() -> FastAPI:
 
     app.include_router(auth.router)
     app.include_router(public.router)
+    app.include_router(stripe_webhooks.router)
     app.include_router(onboarding.router)
     app.include_router(apikeys.router)
     app.include_router(integrations.router)
@@ -113,6 +116,7 @@ def create_app() -> FastAPI:
     app.include_router(artifacts.router)
     app.include_router(companies.router)
     app.include_router(companies.mine_router)
+    app.include_router(domains.router)
     app.include_router(budget.router)
     app.include_router(governance.router)
     app.include_router(metrics.router)

@@ -20,6 +20,7 @@ const SPACES = [
   ["budget", "Budget"],
   ["tasks", "Tasks"],
   ["reports", "Reports"],
+  ["domains", "Domains"],
   ["governance", "Governance"],
   ["communications", "Comms"],
   ["memory", "Memory"],
