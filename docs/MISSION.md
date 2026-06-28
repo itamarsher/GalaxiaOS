@@ -45,14 +45,18 @@ implementation. That is the product. It does not become a paid tier.
 To keep the core free and open, paid features will (probably) come later, built
 *around* the open core rather than gating it:
 
-1. **Agents marketplace** — let anyone publish their agents and start making
+1. **Hosted service** — a low monthly subscription for a managed,
+   run-it-for-you ABOS, so you don't have to operate the infrastructure
+   yourself. **Self-hosting always stays free** — you pay only to skip the ops,
+   never to unlock the product.
+2. **Agents marketplace** — let anyone publish their agents and start making
    money from them. (The governance/reputation system already tracks per-agent
    trust, accuracy, ROI, and reliability — the future marketplace trust signal.)
-2. **Importing existing businesses** — bring a real, already-operating business
+3. **Importing existing businesses** — bring a real, already-operating business
    onto ABOS, not just greenfield launches.
-3. **Investing in autonomous businesses** — let people back the autonomous
+4. **Investing in autonomous businesses** — let people back the autonomous
    businesses others have launched.
-4. **Compliance & enterprise features** — the controls larger organizations need
+5. **Compliance & enterprise features** — the controls larger organizations need
    to run this safely at scale.
 
 These are how we fund the mission — not the mission itself. The mission is to put
