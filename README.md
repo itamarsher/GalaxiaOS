@@ -38,6 +38,12 @@ See the full design in the plan referenced from the project history.
 - **Onboarding → launch**: mission → objectives/OKRs → generated agent fleet → launch.
 - **Budget OS**: every billable action (LLM + external) metered through one `CostMeter`
   chokepoint; per-category/per-agent rollups; runway forecasting; ROI-based pausing.
+- **Real external spend (Stripe Link)**: an optional payment-wallet seam lets an agent
+  mint a scoped, single-purchase Stripe Link credential (a Shared Payment Token, capped
+  at the quoted price) that a Stripe-enabled seller charges — the `card_checkout`
+  registrar exercises this end-to-end by buying a domain. Test-mode first
+  (`ABOS_STRIPE_TEST_MODE=true`) and off by default; the charge still flows through the
+  same `CostMeter` reserve→commit path, so the budget is reserved before any money moves.
 - **Live runtime**: native agent loop, CEO-as-planner orchestration, circuit breakers,
   declarative policy engine, founder decision inbox.
 - **External-comms index & approval gate**: every outbound message the fleet sends

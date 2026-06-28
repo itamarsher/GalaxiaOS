@@ -9,6 +9,9 @@ directly. Selection is driven by ``settings.domain_registrar`` (env
 - ``rdap`` — real availability via RDAP; purchase is simulated (no paid vendor).
 - ``namecheap`` — real availability + REAL purchase via the Namecheap API
   (credential-gated; verify in sandbox first).
+- ``card_checkout`` — real availability + a REAL Stripe charge against an agent's
+  Stripe Link credential (``ABOS_PAYMENT_WALLET=stripe_link``); test-mode first.
+  The registration record is sandboxed until a live registrar order API is wired.
 """
 
 from __future__ import annotations
@@ -39,4 +42,8 @@ def get_registrar(name: str | None = None) -> DomainRegistrar | None:
         from app.integrations.namecheap import NamecheapRegistrar
 
         return NamecheapRegistrar()
+    if key == "card_checkout":
+        from app.integrations.card_checkout import CardCheckoutRegistrar
+
+        return CardCheckoutRegistrar()
     raise ValueError(f"unknown domain registrar: {key!r}")

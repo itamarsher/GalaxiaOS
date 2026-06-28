@@ -148,7 +148,7 @@ class Settings(BaseSettings):
     model_strategic: str = Field(default="claude-opus-4-8")
 
     # External integrations
-    domain_registrar: str = "simulated"  # simulated | rdap | namecheap
+    domain_registrar: str = "simulated"  # simulated | rdap | namecheap | card_checkout
     rdap_timeout_seconds: float = 4.0
     # Namecheap (only used when domain_registrar == "namecheap")
     namecheap_sandbox: bool = True
@@ -158,6 +158,24 @@ class Settings(BaseSettings):
     namecheap_client_ip: str = ""
     # Registrant contact as JSON, e.g. ABOS_NAMECHEAP_CONTACT='{"FirstName":...}'
     namecheap_contact: dict = Field(default_factory=dict)
+
+    # Payment wallet — an agent's scoped access to real external spend.
+    payment_wallet: str = "none"  # none | stripe_link
+    stripe_secret_key: str = ""
+    stripe_api_version: str = "2026-04-22.preview"  # SPT preview API
+    # Hard guard: refuse a live key (sk_live_…) unless this is explicitly False,
+    # so a stray live key can never move real money by accident.
+    stripe_test_mode: bool = True
+    stripe_timeout_seconds: float = 20.0
+    stripe_currency: str = "usd"
+    # Stripe Link agent wallet (only used when payment_wallet == "stripe_link")
+    stripe_link_network_business_profile: str = ""  # seller profile the SPT is scoped to
+    stripe_link_payment_method: str = ""  # wallet-backed PaymentMethod id (link-cli)
+    stripe_link_return_url: str = ""
+    stripe_link_token_ttl_seconds: int = 600  # SPT validity window
+    # Card-checkout registrar (only used when domain_registrar == "card_checkout")
+    card_checkout_merchant_name: str = "ABOS Domains"
+    card_checkout_merchant_url: str = ""
     # Site hosting + DNS (landing pages and connecting bought domains) are
     # bring-your-own-key: credentials are per-company (Cloudflare) configured in
     # Settings, never global env vars. With no saved key the capability resolves to
