@@ -8,11 +8,14 @@ great company never get the chance — not for lack of ideas, but for lack of
 access. ABOS exists to remove that barrier.
 
 A founder defines a **Mission**, **Constraints**, and a **Budget**. ABOS
-generates and runs a fleet of AI agents — CEO, Growth, Research, Product,
-Finance, Governance — that operate the company autonomously under a hard budget
-and a governance layer. The founder acts as a board member, not an operator.
-The goal is simple: *what's your mission, what's your budget, launch* — and
-everything else is generated.
+*designs the company to fit that mission* — generating a fleet of AI agents
+whose roles, responsibilities, and budgets are derived from what this specific
+business needs, not stamped from a fixed template. One mission might need a
+heavy growth function; another, deep research or product work. The fleet is
+generated, and it keeps reshaping itself as the business and its objectives
+evolve. The founder acts as a board member, not an operator. The goal is simple:
+*what's your mission, what's your budget, launch* — and everything else is
+generated.
 
 ## Principles
 
