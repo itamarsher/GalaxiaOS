@@ -162,6 +162,10 @@ class NativeBackend:
         tools = list(TOOL_SPECS) + mcp_specs
         messages = self._resume_or_seed(task)
         await self._inject_audit_feedback(ctx, task, messages)
+        # Watermark for the "catch up on new chat" nudge, carried across steps so
+        # each new batch of channel activity is surfaced once (on resume and while
+        # running). Seeded from the persisted value and advanced as we nudge.
+        chat_seen = task.chat_seen_at
         model = _model_for(agent, provider, trust)
         # Size the per-step output budget to the model's real ceiling (bounded by
         # ``max_response_tokens``) rather than a fixed small cap, so a large
@@ -172,6 +176,7 @@ class NativeBackend:
 
         for _ in range(settings.max_steps_per_task):
             messages = await self._maybe_compact(ctx, task, provider, api_key, model, messages)
+            chat_seen = await self._maybe_nudge_chat(ctx, agent, task, messages, chat_seen)
             resp = await ctx.cost_meter.run_llm(
                 provider,
                 api_key=api_key,
@@ -236,6 +241,13 @@ class NativeBackend:
             # replaying, so the first resumed provider call can't fail on a
             # malformed history (see ``sanitize_messages``).
             resumed = sanitize_messages(load_messages(task.transcript))
+            # Invariant: the message history carries only the conversation
+            # (user/assistant turns). The system prompt is passed out-of-band on
+            # every call (``system=`` — see the providers) and rebuilt fresh each
+            # run, so it must never live in the replayed history — that would
+            # duplicate it into the context window and confuse the agent. Drop any
+            # stray non-conversation turn defensively.
+            resumed = [m for m in resumed if m.role in ("user", "assistant")]
             if resumed:
                 return resumed
         return [Message(role="user", content=f"Begin: {task.goal}")]
@@ -312,6 +324,54 @@ class NativeBackend:
         compacted = [recap, *tail]
         await self._save_transcript(ctx, task, compacted)
         return compacted
+
+    @staticmethod
+    def _append_user_note(messages: list[Message], text: str) -> None:
+        """Surface a transient note to the agent on its next turn.
+
+        Attached to the trailing ``user`` turn (after any tool_result blocks) so the
+        history keeps alternating roles cleanly; falls back to a fresh ``user`` turn
+        only if the last turn isn't a user one (shouldn't happen at a step boundary).
+        """
+        if messages and messages[-1].role == "user":
+            last = messages[-1]
+            if isinstance(last.content, str):
+                last.content = f"{last.content}\n\n{text}"
+            else:
+                last.content = [*last.content, TextBlock(text=text)]
+        else:
+            messages.append(Message(role="user", content=text))
+
+    async def _maybe_nudge_chat(
+        self,
+        ctx: RuntimeContext,
+        agent: Agent,
+        task: Task,
+        messages: list[Message],
+        chat_seen,
+    ):
+        """Nudge the agent to catch up on new chat in its channels, once per batch.
+
+        Runs at every step boundary, so it fires both when a parked task resumes
+        (messages that arrived while it was away) and while a task is actively
+        running (a teammate posts mid-task). The per-task watermark advances each
+        time so the same activity isn't surfaced twice; it returns the new watermark
+        for the caller to carry into the next step.
+        """
+        async with ctx.session_factory() as db:
+            await set_tenant(db, task.company_id)
+            summary, newest = await chat.chat_activity_for_agent(
+                db, company_id=task.company_id, agent_id=agent.id, since=chat_seen
+            )
+            if newest is not None and newest != chat_seen:
+                row = await db.get(Task, task.id)
+                if row is not None:
+                    row.chat_seen_at = newest
+                    await db.commit()
+                chat_seen = newest
+        if summary:
+            self._append_user_note(messages, summary)
+        return chat_seen
 
     async def _save_transcript(
         self, ctx: RuntimeContext, task: Task, messages: list[Message]

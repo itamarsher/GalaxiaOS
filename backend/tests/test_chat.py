@@ -8,6 +8,8 @@ to the agent without re-posting the original message.
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 from sqlalchemy import func, select
 
 from app.models import (
@@ -767,6 +769,82 @@ async def test_extend_chat_thread(session_factory, company_with_budget):
         session_factory, agent=agent, task=task, message="resumed", thread="alpha"
     )
     assert "paused" not in out_ok.observation.lower()
+
+
+# ── "Catch up on new chat" nudge watermark ────────────────────────────────────
+@requires_db
+async def test_chat_activity_nudges_only_about_others_since_watermark(
+    session_factory, company_with_budget
+):
+    """The nudge lists new messages from teammates in the agent's channels, once."""
+    company_id = company_with_budget
+    me, my_task = await _agent_and_task(session_factory, company_id, name="Me")
+    mate, mate_task = await _agent_and_task(
+        session_factory, company_id, role=AgentRole.research, name="Mate"
+    )
+    async with session_factory() as db:
+        await chat.create_channel(
+            db, company_id=company_id, name="war-room",
+            created_by_agent_id=me.id, member_agent_ids=[mate.id],
+        )
+        await db.commit()
+
+    # My own earlier post sets the baseline; with since=None nothing is surfaced
+    # (the loop just records the watermark on a fresh task without flooding it).
+    await _post(session_factory, agent=me, task=my_task, message="mine")
+    async with session_factory() as db:
+        summary, baseline = await chat.chat_activity_for_agent(
+            db, company_id=company_id, agent_id=me.id, since=None
+        )
+        assert summary is None
+        assert baseline is not None
+
+    # A teammate then posts (incl. in a thread) — that's what should be surfaced.
+    await _post(session_factory, agent=mate, task=mate_task, message="theirs")
+    await _post(session_factory, agent=mate, task=mate_task, message="in thread", thread="alpha")
+
+    async with session_factory() as db:
+        summary, newest = await chat.chat_activity_for_agent(
+            db, company_id=company_id, agent_id=me.id, since=baseline
+        )
+    assert summary is not None
+    assert "war-room" in summary
+    assert "alpha" in summary  # the thread is named
+    assert "read_chat_channel" in summary
+    assert newest is not None
+
+    # After advancing the watermark to `newest`, there's nothing new to surface.
+    async with session_factory() as db:
+        summary2, _ = await chat.chat_activity_for_agent(
+            db, company_id=company_id, agent_id=me.id, since=newest
+        )
+    assert summary2 is None
+
+
+@requires_db
+async def test_chat_activity_ignores_channels_agent_is_not_in(
+    session_factory, company_with_budget
+):
+    """An agent is only nudged about channels it belongs to."""
+    company_id = company_with_budget
+    me, _ = await _agent_and_task(session_factory, company_id, name="Me")
+    other, other_task = await _agent_and_task(
+        session_factory, company_id, role=AgentRole.research, name="Other"
+    )
+    # A channel `me` is NOT a member of.
+    async with session_factory() as db:
+        await chat.create_channel(
+            db, company_id=company_id, name="not-mine", created_by_agent_id=other.id
+        )
+        await db.commit()
+    await _post(session_factory, agent=other, task=other_task, channel="not-mine", message="hello")
+
+    async with session_factory() as db:
+        summary, _ = await chat.chat_activity_for_agent(
+            db, company_id=company_id, agent_id=me.id,
+            since=datetime(2000, 1, 1, tzinfo=timezone.utc),
+        )
+    assert summary is None
 
 
 # ── Decision ⇄ chat consolidation ─────────────────────────────────────────────

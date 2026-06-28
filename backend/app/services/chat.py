@@ -25,6 +25,7 @@ side). Callers are responsible for committing and then enqueuing the woken ids.
 from __future__ import annotations
 
 import uuid
+from datetime import datetime
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -185,6 +186,98 @@ async def get_or_create_thread(
     db.add(thread)
     await db.flush()
     return thread
+
+
+async def chat_activity_for_agent(
+    db: AsyncSession,
+    *,
+    company_id: uuid.UUID,
+    agent_id: uuid.UUID,
+    since: datetime | None,
+) -> tuple[str | None, datetime | None]:
+    """New collaboration-channel activity this agent hasn't been told about yet.
+
+    Returns ``(summary, newest_ts)``: a short nudge listing the channels (and
+    threads) carrying messages newer than ``since`` from someone other than this
+    agent, plus the newest message timestamp across the agent's channels (the value
+    to advance the watermark to). ``summary`` is ``None`` when nothing is new — and,
+    when ``since`` is ``None``, the caller just records ``newest_ts`` as the baseline
+    without nudging, so a fresh task isn't flooded with backlog. Scoped to
+    ``channel`` conversations the agent is a member of; 1:1 DMs already deliver
+    replies through the wait mechanic.
+    """
+    channel_ids = (
+        await db.scalars(
+            select(ChatParticipant.channel_id)
+            .join(ChatChannel, ChatChannel.id == ChatParticipant.channel_id)
+            .where(
+                ChatParticipant.company_id == company_id,
+                ChatParticipant.agent_id == agent_id,
+                ChatChannel.kind == ChatChannelKind.channel,
+                ChatChannel.archived.is_(False),
+            )
+        )
+    ).all()
+    if not channel_ids:
+        return None, since
+
+    newest_ts = await db.scalar(
+        select(func.max(ChatMessage.created_at)).where(
+            ChatMessage.channel_id.in_(channel_ids)
+        )
+    )
+    if newest_ts is None:
+        return None, since
+    if since is None:
+        # First step: establish the baseline silently, don't replay backlog.
+        return None, newest_ts
+
+    rows = (
+        await db.scalars(
+            select(ChatMessage)
+            .where(
+                ChatMessage.channel_id.in_(channel_ids),
+                ChatMessage.created_at > since,
+                (ChatMessage.sender_agent_id.is_(None))
+                | (ChatMessage.sender_agent_id != agent_id),
+            )
+            .order_by(ChatMessage.created_at.asc())
+        )
+    ).all()
+    if not rows:
+        return None, newest_ts
+
+    tally: dict[uuid.UUID, dict] = {}
+    for m in rows:
+        entry = tally.setdefault(m.channel_id, {"count": 0, "threads": set()})
+        entry["count"] += 1
+        if m.thread_id is not None:
+            entry["threads"].add(m.thread_id)
+
+    lines: list[str] = []
+    for channel_id, info in tally.items():
+        channel = await db.get(ChatChannel, channel_id)
+        if channel is None:
+            continue
+        extra = ""
+        if info["threads"]:
+            titles = []
+            for thread_id in info["threads"]:
+                thread = await db.get(ChatThread, thread_id)
+                if thread is not None:
+                    titles.append(thread.title)
+            if titles:
+                extra = f" (incl. thread(s): {', '.join(titles)})"
+        lines.append(f"- #{channel.name}: {info['count']} new message(s){extra}")
+
+    if not lines:
+        return None, newest_ts
+    summary = (
+        "📨 New chat activity in your channels since you last looked. Consider catching "
+        "up before you continue — read_chat_channel (and read_chat_thread for a "
+        "sub-initiative) — and reply where a teammate needs you:\n" + "\n".join(lines)
+    )
+    return summary, newest_ts
 
 
 async def threads_for_channel(
