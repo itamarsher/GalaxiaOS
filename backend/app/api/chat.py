@@ -25,6 +25,7 @@ from app.schemas import (
     ChatMessageOut,
     ChatParticipantOut,
     ChatPostRequest,
+    ChatThreadOut,
     DecisionOut,
 )
 from app.services import chat
@@ -64,6 +65,19 @@ async def _channel_out(db, channel: ChatChannel) -> ChatChannelOut:
         out.last_message_at = last.created_at
         label = await chat.sender_label(db, last)
         out.last_message_preview = f"{label}: {last.body[:120]}"
+
+    # Open threads (sub-conversations) so the founder can browse and reply into them.
+    threads_out: list[ChatThreadOut] = []
+    for th in await chat.threads_for_channel(db, channel_id=channel.id):
+        item = ChatThreadOut.model_validate(th)
+        item.message_count = await chat.message_count(
+            db, channel_id=channel.id, thread_id=th.id
+        )
+        trecent = await chat.messages(db, channel_id=channel.id, thread_id=th.id, limit=1)
+        if trecent:
+            item.last_message_at = trecent[-1].created_at
+        threads_out.append(item)
+    out.threads = threads_out
 
     # Agents parked waiting for a reply here — the founder's "needs you" signal.
     waiting = (
@@ -171,9 +185,11 @@ async def list_messages(
     channel_id: uuid.UUID,
     db: DbDep,
     limit: int = Query(default=200, le=500),
+    thread_id: uuid.UUID | None = Query(default=None),
 ):
+    """Messages in the channel's main timeline, or in one thread (``thread_id``)."""
     channel = await _load_channel(db, company, channel_id)
-    msgs = await chat.messages(db, channel_id=channel.id, limit=limit)
+    msgs = await chat.messages(db, channel_id=channel.id, thread_id=thread_id, limit=limit)
     return [await _message_out(db, m) for m in msgs]
 
 
@@ -188,6 +204,7 @@ async def post_message(
         channel_id=channel.id,
         sender_agent_id=None,  # the founder is replying
         body=body.message,
+        thread_id=body.thread_id,
     )
     await db.commit()
     # Resume any agents that were waiting for this reply.

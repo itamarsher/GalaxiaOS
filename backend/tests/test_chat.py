@@ -15,6 +15,7 @@ from app.models import (
     AgentRun,
     ChatChannel,
     ChatMessage,
+    ChatThread,
     ChatWait,
     DecisionRequest,
     Task,
@@ -360,19 +361,24 @@ async def _set_budget(session_factory, channel_id, budget: int) -> None:
         await db.commit()
 
 
-async def _post(session_factory, *, agent, task, channel="war-room", message="hi", ctx=None):
+async def _post(session_factory, *, agent, task, channel="war-room", message="hi", thread=None, ctx=None):
     ctx = ctx or FakeCtx()
+    args = {"channel": channel, "message": message}
+    if thread is not None:
+        args["thread"] = thread
     async with session_factory() as db:
         out = await execute_tool(
-            db,
-            ctx,
-            agent=agent,
-            task=task,
-            name="send_chat_message",
-            args={"channel": channel, "message": message},
+            db, ctx, agent=agent, task=task, name="send_chat_message", args=args
         )
         await db.commit()
     return out, ctx
+
+
+async def _set_thread_budget(session_factory, thread_id, budget: int) -> None:
+    async with session_factory() as db:
+        th = await db.get(ChatThread, thread_id)
+        th.message_budget = budget
+        await db.commit()
 
 
 @requires_db
@@ -568,6 +574,199 @@ async def test_extend_chat_channel_is_ceo_only(session_factory, company_with_bud
         await db.commit()
     assert out.is_error
     assert "Only the CEO" in out.observation
+
+
+# ── Threads: parallel sub-initiatives inside a channel ───────────────────────
+@requires_db
+async def test_send_to_thread_creates_isolated_subconversation(
+    session_factory, company_with_budget
+):
+    """A thread message lands in its own sub-conversation, not the main timeline."""
+    company_id = company_with_budget
+    agent, task = await _agent_and_task(session_factory, company_id, name="Grow")
+    async with session_factory() as db:
+        channel = await chat.create_channel(
+            db, company_id=company_id, name="war-room", created_by_agent_id=agent.id
+        )
+        await db.commit()
+        channel_id = channel.id
+
+    await _post(session_factory, agent=agent, task=task, message="top-level")
+    await _post(session_factory, agent=agent, task=task, message="in thread", thread="pricing")
+
+    async with session_factory() as db:
+        thread = await chat.find_thread_by_title(db, channel_id=channel_id, title="pricing")
+        assert thread is not None
+        # Main timeline holds only the top-level message; the thread holds its own.
+        main = await chat.messages(db, channel_id=channel_id, thread_id=None)
+        assert [m.body for m in main] == ["top-level"]
+        tmsgs = await chat.messages(db, channel_id=channel_id, thread_id=thread.id)
+        assert [m.body for m in tmsgs] == ["in thread"]
+        assert tmsgs[0].thread_id == thread.id
+
+    # read_chat_channel shows the main timeline and lists the thread (with a preview),
+    # pointing the reader at read_chat_thread to drill in.
+    async with session_factory() as db:
+        out = await execute_tool(
+            db, FakeCtx(), agent=agent, task=task,
+            name="read_chat_channel", args={"channel": "war-room"},
+        )
+    assert "top-level" in out.observation
+    assert "pricing" in out.observation  # thread is listed by title
+    assert "read_chat_thread" in out.observation  # how to open it
+
+    # read_chat_thread drills into the sub-conversation.
+    async with session_factory() as db:
+        out = await execute_tool(
+            db, FakeCtx(), agent=agent, task=task,
+            name="read_chat_thread", args={"channel": "war-room", "thread": "pricing"},
+        )
+    assert "in thread" in out.observation
+
+
+@requires_db
+async def test_thread_wait_is_isolated_from_other_scopes(session_factory, company_with_budget):
+    """An agent waiting in a thread is woken only by a reply in that same thread."""
+    company_id = company_with_budget
+    waiter, waiter_task = await _agent_and_task(
+        session_factory, company_id, role=AgentRole.growth, name="Grow"
+    )
+    other, other_task = await _agent_and_task(
+        session_factory, company_id, role=AgentRole.research, name="Res"
+    )
+    async with session_factory() as db:
+        await chat.create_channel(
+            db, company_id=company_id, name="collab", created_by_agent_id=waiter.id
+        )
+        await db.commit()
+
+    # Waiter asks inside thread "alpha" and parks.
+    async with session_factory() as db:
+        await execute_tool(
+            db, FakeCtx(), agent=waiter, task=waiter_task, name="send_chat_message",
+            args={
+                "channel": "collab", "message": "Q in alpha?",
+                "thread": "alpha", "wait_for_reply": True,
+            },
+        )
+        await db.commit()
+
+    # A message on the main timeline must NOT wake the thread waiter.
+    _, ctx_main = await _post(
+        session_factory, agent=other, task=other_task, channel="collab", message="unrelated"
+    )
+    assert waiter_task.id not in ctx_main.enqueued
+    async with session_factory() as db:
+        row = await db.get(Task, waiter_task.id)
+        assert row.status is TaskStatus.waiting_approval
+
+    # A reply inside thread "alpha" DOES wake it.
+    _, ctx_alpha = await _post(
+        session_factory, agent=other, task=other_task,
+        channel="collab", message="answer", thread="alpha",
+    )
+    assert waiter_task.id in ctx_alpha.enqueued
+    async with session_factory() as db:
+        row = await db.get(Task, waiter_task.id)
+        assert row.status is TaskStatus.queued
+
+
+@requires_db
+async def test_thread_has_its_own_budget_and_escalates_independently(
+    session_factory, company_with_budget
+):
+    """A runaway thread escalates on its own without pausing the rest of the channel."""
+    company_id = company_with_budget
+    ceo, _ = await _agent_and_task(session_factory, company_id, role=AgentRole.ceo, name="Boss")
+    agent, task = await _agent_and_task(session_factory, company_id, name="Grow")
+    async with session_factory() as db:
+        channel = await chat.create_channel(
+            db, company_id=company_id, name="war-room", created_by_agent_id=agent.id
+        )
+        await db.commit()
+        channel_id = channel.id
+
+    await _post(session_factory, agent=agent, task=task, message="start", thread="alpha")
+    async with session_factory() as db:
+        thread = await chat.find_thread_by_title(db, channel_id=channel_id, title="alpha")
+        thread_id = thread.id
+    await _set_thread_budget(session_factory, thread_id, 1)
+
+    # The main timeline is unaffected — the channel itself isn't throttled.
+    out_main, _ = await _post(session_factory, agent=agent, task=task, message="channel ok")
+    assert not out_main.is_error
+    assert "paused" not in out_main.observation.lower()
+
+    # The next post in the thread hits the thread's budget and escalates the thread.
+    out, ctx = await _post(
+        session_factory, agent=agent, task=task, message="more", thread="alpha"
+    )
+    assert "paused" in out.observation.lower()
+    async with session_factory() as db:
+        thread = await db.get(ChatThread, thread_id)
+        assert thread.escalation_pending is True
+        channel = await db.get(ChatChannel, channel_id)
+        assert channel.escalation_pending is False  # the channel stays open
+        review = await db.scalar(
+            select(Task).where(
+                Task.company_id == company_id,
+                Task.agent_id == ceo.id,
+                Task.parent_task_id == task.id,
+            )
+        )
+        assert review is not None
+        assert (review.input or {}).get("chat_escalation_thread_id") == str(thread_id)
+        assert "alpha" in review.goal
+        assert review.id in ctx.enqueued
+
+
+@requires_db
+async def test_extend_chat_thread(session_factory, company_with_budget):
+    """The CEO extends a specific thread, leaving the rest of the channel untouched."""
+    company_id = company_with_budget
+    ceo, ceo_task = await _agent_and_task(
+        session_factory, company_id, role=AgentRole.ceo, name="Boss"
+    )
+    agent, task = await _agent_and_task(session_factory, company_id, name="Grow")
+    async with session_factory() as db:
+        channel = await chat.create_channel(
+            db, company_id=company_id, name="war-room", created_by_agent_id=agent.id
+        )
+        await db.commit()
+        channel_id = channel.id
+
+    await _post(session_factory, agent=agent, task=task, message="start", thread="alpha")
+    async with session_factory() as db:
+        thread_id = (
+            await chat.find_thread_by_title(db, channel_id=channel_id, title="alpha")
+        ).id
+    await _set_thread_budget(session_factory, thread_id, 1)
+    out_blocked, _ = await _post(
+        session_factory, agent=agent, task=task, message="more", thread="alpha"
+    )
+    assert "paused" in out_blocked.observation.lower()
+
+    # CEO grants the thread 3 more messages.
+    async with session_factory() as db:
+        out = await execute_tool(
+            db, FakeCtx(), agent=ceo, task=ceo_task, name="extend_chat_channel",
+            args={"channel": "war-room", "thread": "alpha", "additional_messages": 3},
+        )
+        await db.commit()
+    assert not out.is_error
+    assert "3 more" in out.observation
+
+    async with session_factory() as db:
+        thread = await db.get(ChatThread, thread_id)
+        assert thread.escalation_pending is False
+        current = await chat.message_count(db, channel_id=channel_id, thread_id=thread_id)
+        assert thread.message_budget == current + 3
+
+    # The agent can post into the thread again.
+    out_ok, _ = await _post(
+        session_factory, agent=agent, task=task, message="resumed", thread="alpha"
+    )
+    assert "paused" not in out_ok.observation.lower()
 
 
 # ── Decision ⇄ chat consolidation ─────────────────────────────────────────────

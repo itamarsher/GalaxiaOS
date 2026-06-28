@@ -99,13 +99,20 @@ export interface ChatTurn { who: "you" | "agent"; text: string }
 // (sender/participant) is the founder.
 export interface ChatParticipant { agent_id: string | null; name: string; role: string | null }
 export interface ChatMessage {
-  id: string; channel_id: string; sender_agent_id: string | null;
+  id: string; channel_id: string; thread_id: string | null; sender_agent_id: string | null;
   sender_name: string | null; sender_role: string | null; is_founder: boolean;
   body: string; created_at: string;
+}
+// A named sub-conversation inside a channel (a parallel sub-initiative).
+export interface ChatThread {
+  id: string; channel_id: string; title: string; archived: boolean; created_at: string;
+  message_count: number; last_message_at: string | null;
+  message_budget: number; escalation_pending: boolean;
 }
 export interface ChatChannel {
   id: string; name: string; purpose: string | null; kind: string; archived: boolean;
   created_at: string; participants: ChatParticipant[]; message_count: number;
+  threads: ChatThread[];
   last_message_at: string | null; last_message_preview: string | null;
   waiting_agents: string[]; pending_decision: Decision | null;
 }
@@ -299,12 +306,15 @@ export const api = {
       method: "POST",
       body: JSON.stringify(body),
     }),
-  chatMessages: (companyId: string, channelId: string) =>
-    req<ChatMessage[]>(`/companies/${companyId}/chat/channels/${channelId}/messages`),
-  postChatMessage: (companyId: string, channelId: string, message: string) =>
+  chatMessages: (companyId: string, channelId: string, threadId?: string) =>
+    req<ChatMessage[]>(
+      `/companies/${companyId}/chat/channels/${channelId}/messages` +
+        (threadId ? `?thread_id=${threadId}` : ""),
+    ),
+  postChatMessage: (companyId: string, channelId: string, message: string, threadId?: string) =>
     req<ChatMessage>(`/companies/${companyId}/chat/channels/${channelId}/messages`, {
       method: "POST",
-      body: JSON.stringify({ message }),
+      body: JSON.stringify({ message, thread_id: threadId ?? null }),
     }),
 
   decisions: (companyId: string, onlyPending = true) =>

@@ -150,8 +150,11 @@ work overlaps another role's (a dependency, a shared decision, a handoff, or a q
 can answer), take it to them yourself rather than waiting to be coordinated from the top. DM one
 teammate (or the founder) with `message_teammate`; for a topic that spans several roles, open or
 reuse a shared channel with `start_chat_channel` and discuss it in the open with `send_chat_message`
-so every owner of that work can weigh in. Catch up before you post with `list_chat_channels` and
-`read_chat_channel`. When you genuinely need an answer before you can proceed, send with
+so every owner of that work can weigh in. When a channel's initiative has several sub-strands running
+at once, keep them apart by giving `send_chat_message` a `thread` topic — each named thread is its
+own focused sub-conversation, so the team can multitask on parallel sub-initiatives of the channel
+without the messages colliding (read one with `read_chat_thread`). Catch up before you post with
+`list_chat_channels` and `read_chat_channel`. When you genuinely need an answer before you can proceed, send with
 `wait_for_reply=true` — your task PAUSES until a teammate or the founder replies, then resumes with
 their reply delivered to you (the same way a founder decision pauses and resumes a task). Prefer
 asking the owner and waiting over guessing; leave `wait_for_reply` off for FYIs and status updates.

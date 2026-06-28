@@ -62,6 +62,39 @@ class ChatChannel(Base, PKMixin, TenantMixin, TimestampMixin):
     escalation_pending: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
 
+class ChatThread(Base, PKMixin, TenantMixin, TimestampMixin):
+    """A named sub-conversation inside a channel — a focused sub-initiative.
+
+    Channels coordinate a whole initiative; a thread carves out one strand of it
+    (e.g. ``#q3-launch`` with threads ``pricing-page`` and ``press-outreach``) so
+    several agents can multitask on parallel sub-topics without their messages
+    colliding in one timeline. A thread inherits the channel's membership; its
+    messages and reply-waits are scoped to it (``ChatMessage.thread_id`` /
+    ``ChatWait.thread_id``), and so is the loop guard — each thread carries its own
+    ``message_budget``/``escalation_pending`` so a runaway strand escalates on its
+    own without pausing the rest of the channel.
+    """
+
+    __tablename__ = "chat_threads"
+
+    channel_id: Mapped[uuid.UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("chat_channels.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    # Short topic the agents address the thread by (unique-ish within a channel).
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    # Who opened it; NULL = the founder.
+    created_by_agent_id: Mapped[uuid.UUID | None] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("agents.id", ondelete="SET NULL"), nullable=True
+    )
+    archived: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    # Per-thread loop guard, mirroring ChatChannel (see app.runtime.tools.chat).
+    message_budget: Mapped[int] = mapped_column(Integer, default=10, nullable=False)
+    escalation_pending: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+
+
 class ChatParticipant(Base, PKMixin, TenantMixin, TimestampMixin):
     __tablename__ = "chat_participants"
     __table_args__ = (
@@ -92,6 +125,14 @@ class ChatMessage(Base, PKMixin, TenantMixin, TimestampMixin):
         nullable=False,
         index=True,
     )
+    # The sub-conversation this message belongs to; NULL = the channel's main
+    # timeline (a top-level message). Replies inside a thread carry its id.
+    thread_id: Mapped[uuid.UUID | None] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("chat_threads.id", ondelete="CASCADE"),
+        nullable=True,
+        index=True,
+    )
     # The author; NULL = the founder.
     sender_agent_id: Mapped[uuid.UUID | None] = mapped_column(
         PGUUID(as_uuid=True), ForeignKey("agents.id", ondelete="SET NULL"), nullable=True
@@ -115,6 +156,15 @@ class ChatWait(Base, PKMixin, TenantMixin, TimestampMixin):
         PGUUID(as_uuid=True),
         ForeignKey("chat_channels.id", ondelete="CASCADE"),
         nullable=False,
+        index=True,
+    )
+    # Scope of the wait: a specific thread, or NULL for the channel's main
+    # timeline. A reply only satisfies a wait in the same scope, so an agent
+    # parked in one sub-initiative isn't woken by chatter in another.
+    thread_id: Mapped[uuid.UUID | None] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("chat_threads.id", ondelete="CASCADE"),
+        nullable=True,
         index=True,
     )
     task_id: Mapped[uuid.UUID] = mapped_column(
