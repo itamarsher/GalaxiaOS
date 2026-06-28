@@ -211,6 +211,13 @@ class EmailSetupOut(BaseModel):
     records: list[EmailDnsRecordOut]
 
 
+class EmailStatusOut(BaseModel):
+    domain: str
+    configured: bool
+    status: str
+    pending: list[str]
+
+
 class GenerationEvent(BaseModel):
     ts: float
     label: str

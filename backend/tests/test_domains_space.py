@@ -86,6 +86,30 @@ async def test_purchase_buys_metered_and_records_unconnected(
 
 
 @requires_db
+async def test_purchase_auto_kicks_email_setup_best_effort(
+    session_factory, company_with_budget, monkeypatch
+):
+    monkeypatch.setattr(domains_svc, "get_registrar", lambda: _StubRegistrar())
+    called = {}
+
+    async def _fake_setup(db, *, company_id, domain):
+        called["domain"] = domain
+        # Even if email setup blows up, the purchase must still succeed.
+        raise domains_svc.EmailError("no key")
+
+    monkeypatch.setattr(domains_svc.email_setup_svc, "configure_sender_dns", _fake_setup)
+    async with session_factory() as db:
+        sd = await domains_svc.purchase(
+            db,
+            company_id=company_with_budget,
+            domain="acme.com",
+            meter=CostMeter(session_factory),
+        )
+    assert sd.domain == "acme.com"  # purchase succeeded despite email setup failing
+    assert called["domain"] == "acme.com"  # …and email setup was auto-attempted
+
+
+@requires_db
 async def test_purchase_refuses_unavailable_domain(
     session_factory, company_with_budget, monkeypatch
 ):

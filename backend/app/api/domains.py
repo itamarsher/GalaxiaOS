@@ -25,6 +25,7 @@ from app.schemas import (
     EmailDnsRecordOut,
     EmailSetupOut,
     EmailSetupRequest,
+    EmailStatusOut,
 )
 from app.services import domains as domains_svc
 from app.services import email_setup as email_setup_svc
@@ -111,4 +112,13 @@ async def email_setup(company: CompanyDep, db: DbDep, body: EmailSetupRequest):
             EmailDnsRecordOut(record=r.record, type=r.type, name=r.name, ok=r.ok, error=r.error)
             for r in result.records
         ],
+    )
+
+
+@router.get("/email-status", response_model=EmailStatusOut)
+async def email_status(company: CompanyDep, db: DbDep, domain: str = ""):
+    """Live Resend verification status for ``domain`` — safe to poll."""
+    res = await email_setup_svc.email_status(db, company_id=company.id, domain=domain)
+    return EmailStatusOut(
+        domain=res.domain, configured=res.configured, status=res.status, pending=res.pending
     )

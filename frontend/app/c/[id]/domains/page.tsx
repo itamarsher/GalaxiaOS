@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useParams } from "next/navigation";
-import { api, fmtUsd, type DomainQuote, type EmailSetup, type OwnedDomain } from "@/lib/api";
+import { api, fmtUsd, type DomainQuote, type EmailSetup, type EmailStatus, type OwnedDomain } from "@/lib/api";
 import { usePoll } from "@/lib/useApi";
 
 // SiteConnectStatus → a short, human label. "live" is the happy end state.
@@ -22,6 +22,13 @@ export default function DomainsPage() {
   const [error, setError] = useState<string | null>(null);
   const [emailBusy, setEmailBusy] = useState<string | null>(null);
   const [emailResult, setEmailResult] = useState<Record<string, EmailSetup>>({});
+  // The domain whose Resend verification we're actively polling (until verified).
+  const [pollDomain, setPollDomain] = useState<string | null>(null);
+  const emailStatus = usePoll(
+    () => (pollDomain ? api.domainEmailStatus(id, pollDomain) : Promise.resolve(null)),
+    pollDomain ? 5000 : 0,
+    [id, pollDomain],
+  );
 
   const setupEmail = async (domain: string) => {
     setEmailBusy(domain);
@@ -29,6 +36,7 @@ export default function DomainsPage() {
     try {
       const res = await api.setupDomainEmail(id, domain);
       setEmailResult((m) => ({ ...m, [domain]: res }));
+      setPollDomain(domain); // track verification from here on
     } catch (e) {
       setError(String(e instanceof Error ? e.message : e));
     } finally {
@@ -56,9 +64,11 @@ export default function DomainsPage() {
     setBuying(domain);
     setError(null);
     try {
-      await api.buyDomain(id, domain); // buys + auto-associates to the latest site
+      await api.buyDomain(id, domain); // buys + auto-associates + auto email setup
       setResults((rs) => rs?.filter((r) => r.domain !== domain) ?? null);
       owned.reload();
+      setPollDomain(domain); // email setup auto-runs on the backend; track verification
+
     } catch (e) {
       setError(String(e instanceof Error ? e.message : e));
     } finally {
@@ -136,6 +146,8 @@ export default function DomainsPage() {
         {owned.data && owned.data.length > 0 ? (
           owned.data.map((d: OwnedDomain) => {
             const em = emailResult[d.domain];
+            const liveEmail =
+              pollDomain === d.domain && emailStatus.data?.configured ? emailStatus.data : null;
             return (
               <div key={d.id} style={{ borderBottom: "1px solid var(--line, #eee)", padding: "6px 0" }}>
                 <div className="kv" style={{ border: 0, padding: 0 }}>
@@ -158,12 +170,18 @@ export default function DomainsPage() {
                     <span className={`pill${d.status === "live" ? " live" : ""}`}>{statusLabel(d.status)}</span>
                   </span>
                 </div>
-                {em && (
+                {em && em.records.some((r) => !r.ok) && (
                   <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
-                    Email DNS {em.all_written ? "written" : "partially written"} · Resend status:{" "}
-                    <strong>{em.status}</strong>
-                    {em.records.some((r) => !r.ok) && (
-                      <span> — {em.records.filter((r) => !r.ok).map((r) => `${r.type} ${r.name}`).join(", ")} failed</span>
+                    Some email DNS records couldn’t be written:{" "}
+                    {em.records.filter((r) => !r.ok).map((r) => `${r.type} ${r.name}`).join(", ")}
+                  </div>
+                )}
+                {liveEmail && (
+                  <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
+                    Email:{" "}
+                    <strong>{liveEmail.status === "verified" ? "verified ✓" : liveEmail.status}</strong>
+                    {liveEmail.status !== "verified" && liveEmail.pending.length > 0 && (
+                      <span> · checking DNS… ({liveEmail.pending.length} record{liveEmail.pending.length > 1 ? "s" : ""} pending)</span>
                     )}
                   </div>
                 )}

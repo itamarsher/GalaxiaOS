@@ -31,6 +31,7 @@ class ResendRecord:
     value: str  # record content
     priority: int | None  # MX only
     ttl: str | None
+    status: str  # per-record verification, e.g. "not_started" | "verified"
 
 
 @dataclass(frozen=True)
@@ -50,6 +51,7 @@ def _to_record(raw: dict) -> ResendRecord:
         value=str(raw.get("value") or ""),
         priority=int(priority) if priority not in (None, "") else None,
         ttl=str(raw["ttl"]) if raw.get("ttl") not in (None, "") else None,
+        status=str(raw.get("status") or "not_started"),
     )
 
 
@@ -88,13 +90,20 @@ class ResendDomains:
             raise EmailError(f"Resend domains error: {message}")
         return body
 
-    async def create_or_get(self, name: str) -> ResendDomain:
-        """Return the existing Resend domain for ``name`` or create it (with records)."""
+    async def find(self, name: str) -> ResendDomain | None:
+        """Return the existing Resend domain for ``name`` (with records), or None."""
         listing = await self._request("GET", "")
         for raw in listing.get("data") or []:
             if str(raw.get("name", "")).lower() == name.lower() and raw.get("id"):
                 # The list view omits records; fetch the full object for them.
                 return await self.get(str(raw["id"]))
+        return None
+
+    async def create_or_get(self, name: str) -> ResendDomain:
+        """Return the existing Resend domain for ``name`` or create it (with records)."""
+        existing = await self.find(name)
+        if existing is not None:
+            return existing
         created = await self._request("POST", "", json={"name": name})
         return _to_domain(created)
 

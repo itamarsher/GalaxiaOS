@@ -25,31 +25,25 @@ def test_fqdn_normalizes_relative_absolute_and_apex():
 
 # ── orchestration (stubbed Resend + DNS) ──────────────────────────────────────
 
-_RECORDS = [
-    ResendRecord(
-        record="SPF",
-        type="MX",
-        name="send",
-        value="feedback-smtp.example.com",
-        priority=10,
-        ttl="Auto",
-    ),
-    ResendRecord(
+
+def _rec(**kw):
+    base = dict(
         record="SPF",
         type="TXT",
         name="send",
-        value="v=spf1 include:amazonses.com ~all",
+        value="v",
         priority=None,
         ttl="Auto",
-    ),
-    ResendRecord(
-        record="DKIM",
-        type="CNAME",
-        name="resend._domainkey",
-        value="x.dkim.amazonses.com",
-        priority=None,
-        ttl="Auto",
-    ),
+        status="not_started",
+    )
+    base.update(kw)
+    return ResendRecord(**base)
+
+
+_RECORDS = [
+    _rec(record="SPF", type="MX", name="send", value="feedback-smtp.example.com", priority=10),
+    _rec(record="SPF", type="TXT", name="send", value="v=spf1 include:amazonses.com ~all"),
+    _rec(record="DKIM", type="CNAME", name="resend._domainkey", value="x.dkim.amazonses.com"),
 ]
 
 
@@ -146,3 +140,37 @@ async def test_configure_reports_partial_failures(monkeypatch):
     assert result.all_written is False
     failed = [r for r in result.records if not r.ok]
     assert len(failed) == 1 and failed[0].type == "CNAME" and "zone busy" in failed[0].error
+
+
+# ── status poll ───────────────────────────────────────────────────────────────
+
+
+async def test_email_status_reports_not_configured_without_key(monkeypatch):
+    async def _no_key(db, *, company_id, provider):
+        return None
+
+    monkeypatch.setattr(svc.apikeys, "get_plaintext_key", _no_key)
+    res = await svc.email_status(None, company_id=None, domain="acme.com")
+    assert res.configured is False and res.status == "not_configured"
+
+
+async def test_email_status_lists_pending_records(monkeypatch):
+    async def _key(db, *, company_id, provider):
+        return "re_test"
+
+    monkeypatch.setattr(svc.apikeys, "get_plaintext_key", _key)
+
+    records = [
+        _rec(type="TXT", name="send", status="verified"),
+        _rec(type="CNAME", name="resend._domainkey", status="not_started"),
+    ]
+
+    class _Resend:
+        async def find(self, name):
+            return ResendDomain(id="d1", name=name, status="pending", records=records)
+
+    monkeypatch.setattr(svc, "ResendDomains", lambda key: _Resend())
+    res = await svc.email_status(None, company_id=None, domain="acme.com")
+    assert res.configured is True and res.status == "pending"
+    # Only the unverified record is pending, as an FQDN.
+    assert res.pending == ["resend._domainkey.acme.com"]

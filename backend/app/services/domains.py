@@ -24,10 +24,12 @@ from app.config import settings
 from app.db import SessionLocal
 from app.integrations.base import DomainQuote, RegistrarError
 from app.integrations.dns import DnsError
+from app.integrations.email import EmailError
 from app.integrations.registry import get_registrar
 from app.models import Site, SiteDomain
 from app.models.enums import SiteConnectStatus
 from app.runtime.cost_meter import CostMeter
+from app.services import email_setup as email_setup_svc
 from app.services import sites as sites_svc
 
 # When the founder types a bare name (no dot), quote it across a few common TLDs.
@@ -172,7 +174,23 @@ async def purchase(
     if site is not None:
         sd = await _connect(db, sd)
     await db.commit()
+
+    await _maybe_setup_email(db, company_id=company_id, domain=domain)
     return sd
+
+
+async def _maybe_setup_email(db: AsyncSession, *, company_id: uuid.UUID, domain: str) -> None:
+    """Best-effort: once a domain is bought, auto-configure sending email for it.
+
+    Runs only when both prerequisites are in place (a Resend key and Cloudflare) —
+    :func:`email_setup_svc.configure_sender_dns` raises otherwise, which we swallow
+    so a missing prerequisite never fails the purchase. The founder can still run it
+    by hand from the Domains space, and the status endpoint reports progress.
+    """
+    try:
+        await email_setup_svc.configure_sender_dns(db, company_id=company_id, domain=domain)
+    except (EmailError, DnsError):
+        pass
 
 
 async def associate(

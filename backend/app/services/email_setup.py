@@ -53,6 +53,14 @@ class EmailSetupResult:
         return all(r.ok for r in self.records)
 
 
+@dataclass(frozen=True)
+class EmailStatusResult:
+    domain: str
+    configured: bool  # a Resend key is attached for this company
+    status: str  # Resend domain status (or "not_configured"/"not_started"/"error")
+    pending: list[str]  # record FQDNs Resend hasn't verified yet
+
+
 def fqdn(name: str, domain: str) -> str:
     """Normalize a Resend record name to an absolute host under ``domain``.
 
@@ -118,3 +126,28 @@ async def configure_sender_dns(
         pass
     refreshed = await resend.get(rd.id)
     return EmailSetupResult(domain=domain, status=refreshed.status, records=results)
+
+
+async def email_status(
+    db: AsyncSession, *, company_id: uuid.UUID, domain: str
+) -> EmailStatusResult:
+    """Live Resend verification status for ``domain`` — cheap enough to poll.
+
+    Never raises: a missing key reports ``not_configured``, an unregistered domain
+    ``not_started``, and a transient Resend error ``error`` — so a polling client
+    can render progress without handling exceptions every tick.
+    """
+    domain = domain.strip().lower().rstrip(".")
+    key = await apikeys.get_plaintext_key(db, company_id=company_id, provider=_RESEND_KEY_PROVIDER)
+    if not key:
+        return EmailStatusResult(
+            domain=domain, configured=False, status="not_configured", pending=[]
+        )
+    try:
+        rd = await ResendDomains(key).find(domain)
+    except EmailError:
+        return EmailStatusResult(domain=domain, configured=True, status="error", pending=[])
+    if rd is None:
+        return EmailStatusResult(domain=domain, configured=True, status="not_started", pending=[])
+    pending = [fqdn(r.name, domain) for r in rd.records if r.status != "verified"]
+    return EmailStatusResult(domain=domain, configured=True, status=rd.status, pending=pending)
