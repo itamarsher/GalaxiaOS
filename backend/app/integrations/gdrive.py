@@ -6,7 +6,7 @@ founder connects their own Google account (Settings), and ABOS stores the
 resulting ``client_id`` / ``client_secret`` / ``refresh_token`` envelope-encrypted
 (same store as every other BYO secret). At call time the refresh token is
 exchanged for a short-lived access token (cached until it nears expiry), so files
-are written into the founder's own ``My Drive`` under ``.abos/<company>/…`` and
+are written into the founder's own ``My Drive`` under ``.galaxia/<company>/…`` and
 remain theirs — readable, auditable, and exportable for due diligence without ABOS
 in the loop.
 

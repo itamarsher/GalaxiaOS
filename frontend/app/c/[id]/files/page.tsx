@@ -6,7 +6,7 @@ import { api, type CompanyFile } from "@/lib/api";
 import { usePoll } from "@/lib/useApi";
 
 // Category → human label + the order we group them in (mirrors the Drive taxonomy
-// under .abos/<company>/). "communications" is the auto-archived outbound comms log.
+// under .galaxia/<company>/). "communications" is the auto-archived outbound comms log.
 const CATEGORIES: [string, string][] = [
   ["artifact", "Artifacts"],
   ["financial", "Financials"],
@@ -36,7 +36,7 @@ export default function FilesPage() {
     <div>
       <h2>Files</h2>
       <p className="muted">
-        The company&apos;s external file store (your Google Drive, under <code>.abos/</code>). Every
+        The company&apos;s external file store (your Google Drive, under <code>.galaxia/</code>). Every
         deliverable, financial record, data-room document, guideline and received file the agents
         retain — organized for audits and due diligence. Connect Drive in Settings to enable it.
       </p>

@@ -1,4 +1,4 @@
-// Minimal typed API client for the ABOS backend.
+// Minimal typed API client for the GalaxiaOS backend.
 
 // Resolve the API base URL. NEXT_PUBLIC_* is inlined at BUILD time, so this is
 // fixed when the bundle is built. Render auto-wires it from the API service's

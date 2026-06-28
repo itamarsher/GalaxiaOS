@@ -1,6 +1,6 @@
 :root {
   /* ── Brand palette ──
-     Deep midnight base with the ABOS logo's indigo as the accent, so the app
+     Deep midnight base with the GalaxiaOS logo's indigo as the accent, so the app
      and the mark share one signature colour. The white-on-indigo of the logo
      carries through to buttons and active states (white text on indigo). */
   --bg: #0d1320;
@@ -155,7 +155,7 @@ button.ghost:hover { background: var(--panel-2); filter: none; }
   image-rendering: pixelated;
 }
 
-/* Landing hero: the logo sits beside the ABOS wordmark. */
+/* Landing hero: the logo sits beside the GalaxiaOS wordmark. */
 .brand-hero { display: flex; align-items: center; gap: 14px; margin-bottom: 6px; }
 .brand-hero h1 { margin: 0; }
 .brand-hero-logo {

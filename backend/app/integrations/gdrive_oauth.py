@@ -10,7 +10,7 @@ exchange — server-side, using the deployment secret — for a long-lived
 ``refresh_token`` stored per-company. The founder never touches the Cloud Console.
 
 Least privilege: we request only ``drive.file`` (files the app creates), which is
-all ABOS needs to file documents under ``.abos/<company>/…`` and read them back.
+all ABOS needs to file documents under ``.galaxia/<company>/…`` and read them back.
 
 Everything that shapes a request/response is a pure, unit-testable helper
 (:func:`authorize_url`, :func:`redirect_uri`, :func:`exchange_form`,

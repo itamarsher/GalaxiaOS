@@ -4,7 +4,7 @@ A :class:`FileProvider` is the third decoupling seam alongside ``LLMProvider``
 (which vendor answers) and ``AgentBackend`` (how an agent runs): it abstracts
 *where the company's files live*. Today the only adapter is Google Drive
 (:class:`~app.integrations.gdrive.GoogleDriveFileProvider`), writing into the
-founder's personal Drive under ``.abos/<company>/…``; tomorrow it could be S3,
+founder's personal Drive under ``.galaxia/<company>/…``; tomorrow it could be S3,
 Dropbox, or a SharePoint site without touching the runtime, the service layer, or
 the agent tools.
 
@@ -35,7 +35,7 @@ class FolderRef:
     """A resolved folder in the store: its provider id and human-readable path."""
 
     folder_id: str
-    path: str  # e.g. ".abos/Acme/Financials"
+    path: str  # e.g. ".galaxia/Acme/Financials"
 
 
 @dataclass(frozen=True)

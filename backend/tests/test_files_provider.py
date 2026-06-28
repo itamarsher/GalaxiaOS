@@ -332,7 +332,7 @@ def test_company_folder_name_is_unique_for_same_named_companies():
 def test_category_path_uses_root_and_category_folder():
     c = _Company("Acme")
     path = files_svc.category_path(c, FileCategory.financial)
-    assert path[0] == ".abos"
+    assert path[0] == ".galaxia"
     assert path[1] == f"Acme ({str(c.id)[:8]})"
     assert path[2] == "Financials"
 
@@ -458,7 +458,7 @@ async def test_archive_files_into_category_folder_and_indexes():
         content=b"x",
         description="DD doc",
     )
-    folder = f".abos/{files_svc.company_folder_name(company)}/Data Room"
+    folder = f".galaxia/{files_svc.company_folder_name(company)}/Data Room"
     assert row.folder_path == folder
     assert row.name == "cap table.md"  # extension added
     assert row.external_id == "file-folder-1-cap table.md"
@@ -511,4 +511,4 @@ async def test_safe_archive_files_when_provider_present(monkeypatch):
         content="To: a@b.com\nSubject: Hello\n\nhi",
     )
     assert out is not None
-    assert out.folder_path == f".abos/{files_svc.company_folder_name(company)}/Communications"
+    assert out.folder_path == f".galaxia/{files_svc.company_folder_name(company)}/Communications"

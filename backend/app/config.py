@@ -310,8 +310,8 @@ class Settings(BaseSettings):
     # Credentials are per-company, bring-your-own (connected in Settings), never a
     # global env var; with none saved the file capability resolves to None and the
     # tools report it's unsupported (never faked). This only names the top-level
-    # folder created in the founder's Drive: ``.abos/<company>/<category>/…``.
-    gdrive_root_folder: str = ".abos"
+    # folder created in the founder's Drive: ``.galaxia/<company>/<category>/…``.
+    gdrive_root_folder: str = ".galaxia"
 
     # Issue-tracker seam (the Platform agent files bug/feature issues here);
     # "simulated" is offline and deterministic.

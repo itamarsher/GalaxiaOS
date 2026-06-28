@@ -3,7 +3,7 @@ import type { Metadata, Viewport } from "next";
 import type { ReactNode } from "react";
 import localFont from "next/font/local";
 
-// Inter — the same typeface as the ABOS logo. Bundled locally (next/font/local)
+// Inter — the same typeface as the GalaxiaOS logo. Bundled locally (next/font/local)
 // so production builds need no network, and exposed as a CSS variable that
 // globals.css applies to the whole app.
 const inter = localFont({
@@ -14,9 +14,9 @@ const inter = localFont({
 });
 
 export const metadata: Metadata = {
-  title: "ABOS — Autonomous Business Operating System",
+  title: "GalaxiaOS — Autonomous Business Operating System",
   description: "What's your mission? What's your budget? Launch.",
-  icons: { icon: "/abos-logo.png", apple: "/abos-logo.png" },
+  icons: { icon: "/galaxiaos-logo.png", apple: "/galaxiaos-logo.png" },
 };
 
 export const viewport: Viewport = {
