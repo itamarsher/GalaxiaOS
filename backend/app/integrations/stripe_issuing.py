@@ -10,9 +10,9 @@ budget, so no human signs off each charge.
 Card creation goes through ``POST /v1/issuing/cards`` with hard
 ``spending_controls`` (a monthly cap, optional allowed merchant categories), and
 the owning company is stamped into the card's metadata so the webhook can find
-the budget to gate against. Test-mode first (``ABOS_STRIPE_TEST_MODE=true``); the
-live-key guard in :mod:`app.integrations._stripe` blocks ``sk_live_`` keys until
-you opt in. It has not been exercised against the live API in this repo.
+the budget to gate against. Whatever ``ABOS_STRIPE_SECRET_KEY`` is set to (test or
+live) is used as-is; with a live key, real cards are issued and real money moves,
+bounded by the per-card ``spending_controls`` and the budget gate.
 """
 
 from __future__ import annotations

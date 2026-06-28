@@ -168,17 +168,16 @@ async def test_stripe_link_requires_config():
         )
 
 
-def test_live_key_refused_in_test_mode(monkeypatch):
-    # A live secret key must be refused while the test-mode guard is on, and
-    # accepted only when it is explicitly disabled.
+def test_live_key_is_used_as_is(monkeypatch):
+    # The test-mode guard has been removed: a live key is accepted and used.
     from app.integrations import _stripe
 
     monkeypatch.setattr(_stripe.settings, "stripe_secret_key", "sk_live_abc")
-    monkeypatch.setattr(_stripe.settings, "stripe_test_mode", True)
+    assert _stripe._require_secret_key() == "sk_live_abc"
+    # A missing key still fails clearly.
+    monkeypatch.setattr(_stripe.settings, "stripe_secret_key", "")
     with pytest.raises(_stripe.StripeError):
         _stripe._require_secret_key()
-    monkeypatch.setattr(_stripe.settings, "stripe_test_mode", False)
-    assert _stripe._require_secret_key() == "sk_live_abc"
 
 
 async def test_card_checkout_requires_wallet(monkeypatch):

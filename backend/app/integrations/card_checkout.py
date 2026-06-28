@@ -9,9 +9,8 @@ a Shared Payment Token minted by the agent's Stripe Link wallet
 flow Stripe designed for agents paying merchants.
 
 - Availability is real (RDAP, free).
-- The charge is a real Stripe ``PaymentIntent``. In test mode
-  (``ABOS_STRIPE_TEST_MODE=true``, the default) it uses Stripe test keys and
-  moves no real money.
+- The charge is a real Stripe ``PaymentIntent`` — with a live key
+  (``ABOS_STRIPE_SECRET_KEY``) it moves real money; the budget is reserved first.
 - Because no production registrar API accepts a raw card per call, the
   registration *record* is sandboxed (like the ``rdap`` registrar) once payment
   succeeds; wiring a live registrar order API is the one remaining step before
