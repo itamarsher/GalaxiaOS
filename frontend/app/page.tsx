@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { api, fmtUsd, type Company, type GenerationProgress, type InvestmentReview, type Preview } from "@/lib/api";
+import { CloudflareCard, GoogleDriveCard } from "@/lib/connectors";
 
 type Step = "loading" | "auth" | "businesses" | "mission" | "key" | "generating" | "review";
 interface ChatTurn { who: "user" | "bot"; text: string }
@@ -277,6 +278,20 @@ export default function Home() {
           <button disabled={busy || !apiKey} onClick={submitKeyAndGenerate}>
             Generate organization
           </button>
+        </div>
+      )}
+
+      {step === "key" && companyId && (
+        <div>
+          <div className="step" style={{ marginTop: 18 }}>Optional · Connect your tools</div>
+          <p className="muted" style={{ fontSize: 13, margin: "4px 0 10px" }}>
+            Hook up hosting and a file store now, or skip and do it later in Settings — neither is
+            required to generate or launch your organization.
+          </p>
+          <CloudflareCard companyId={companyId} />
+          {/* Popup mode keeps this onboarding wizard intact across Google's consent
+              round-trip instead of navigating the whole page away. */}
+          <GoogleDriveCard companyId={companyId} popup />
         </div>
       )}
 
