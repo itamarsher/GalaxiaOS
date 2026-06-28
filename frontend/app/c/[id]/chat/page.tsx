@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useParams, useSearchParams } from "next/navigation";
-import { api, decisionKindLabel, type ChatChannel, type ChatMessage } from "@/lib/api";
+import { api, decisionKindLabel, type ChatChannel, type ChatMessage, type ChatThread } from "@/lib/api";
 import { usePoll } from "@/lib/useApi";
 import { Markdown } from "@/lib/markdown";
 
@@ -81,11 +81,25 @@ function Thread({
   channel: ChatChannel;
   onChanged: () => void;
 }) {
-  const messages = usePoll(() => api.chatMessages(companyId, channel.id), 4000, [channel.id]);
+  // null = the channel's main timeline; otherwise a thread id (sub-initiative).
+  const [activeThread, setActiveThread] = useState<string | null>(null);
+  const threads = channel.threads ?? [];
+  // Drop the open thread if it disappears (e.g. closed) between polls.
+  useEffect(() => {
+    if (activeThread && !threads.some((t) => t.id === activeThread)) setActiveThread(null);
+  }, [activeThread, threads]);
+  const current = threads.find((t) => t.id === activeThread) ?? null;
+
+  const messages = usePoll(
+    () => api.chatMessages(companyId, channel.id, activeThread ?? undefined),
+    4000,
+    [channel.id, activeThread],
+  );
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const msgs = messages.data ?? [];
-  const decision = channel.pending_decision;
+  // Decisions live on the channel's main timeline, not inside a sub-thread.
+  const decision = activeThread ? null : channel.pending_decision;
 
   const send = async () => {
     const text = input.trim();
@@ -93,7 +107,7 @@ function Thread({
     setInput("");
     setBusy(true);
     try {
-      await api.postChatMessage(companyId, channel.id, text);
+      await api.postChatMessage(companyId, channel.id, text, activeThread ?? undefined);
       messages.reload();
       onChanged();
     } finally {
@@ -119,13 +133,24 @@ function Thread({
   return (
     <div className="card" style={{ marginTop: 0 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
-        <strong>{channelTitle(channel)}</strong>
+        <strong>
+          {channelTitle(channel)}
+          {current && <span className="muted"> › {current.title}</span>}
+        </strong>
         <span className="muted" style={{ fontSize: 12 }}>
           {channel.participants.map((p) => p.role ?? p.name).join(", ")}
         </span>
       </div>
-      {channel.purpose && (
+      {channel.purpose && !current && (
         <p className="muted" style={{ marginTop: 4 }}>{channel.purpose}</p>
+      )}
+
+      {threads.length > 0 && (
+        <ThreadBar
+          threads={threads}
+          active={activeThread}
+          onPick={(id) => setActiveThread(id)}
+        />
       )}
 
       <div className="chat" style={{ margin: "12px 0", maxHeight: 420, overflowY: "auto" }}>
@@ -150,7 +175,13 @@ function Thread({
 
       <div className="chatbar">
         <input
-          placeholder={decision ? "Add a note (optional), then Approve/Reject…" : "Reply…"}
+          placeholder={
+            decision
+              ? "Add a note (optional), then Approve/Reject…"
+              : current
+                ? `Reply in ${current.title}…`
+                : "Reply…"
+          }
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && !decision && send()}
@@ -165,6 +196,46 @@ function Thread({
           <button onClick={send} disabled={busy || !input.trim()}>Send</button>
         )}
       </div>
+    </div>
+  );
+}
+
+// Tabs to switch between the channel's main timeline and its threads. Each thread
+// is a parallel sub-initiative; a "waiting" badge marks one paused for CEO review.
+function ThreadBar({
+  threads,
+  active,
+  onPick,
+}: {
+  threads: ChatThread[];
+  active: string | null;
+  onPick: (id: string | null) => void;
+}) {
+  const chip = (selected: boolean): React.CSSProperties => ({
+    fontSize: 12,
+    padding: "2px 10px",
+    borderRadius: 999,
+    cursor: "pointer",
+    border: "1px solid var(--border, #ccc)",
+    background: selected ? "var(--accent, #2563eb)" : "transparent",
+    color: selected ? "#fff" : "inherit",
+  });
+  return (
+    <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 8 }}>
+      <button style={{ ...chip(active === null), marginTop: 0 }} onClick={() => onPick(null)}>
+        Main
+      </button>
+      {threads.map((t) => (
+        <button
+          key={t.id}
+          style={{ ...chip(active === t.id), marginTop: 0 }}
+          onClick={() => onPick(t.id)}
+          title={`${t.message_count} message(s)`}
+        >
+          {t.title}
+          {t.escalation_pending && <span className="status pending"> · waiting</span>}
+        </button>
+      ))}
     </div>
   );
 }

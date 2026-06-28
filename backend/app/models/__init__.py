@@ -12,7 +12,13 @@ from app.models.budget import (
     RunwaySnapshot,
     SpendEntry,
 )
-from app.models.chat import ChatChannel, ChatMessage, ChatParticipant, ChatWait
+from app.models.chat import (
+    ChatChannel,
+    ChatMessage,
+    ChatParticipant,
+    ChatThread,
+    ChatWait,
+)
 from app.models.comms import ExternalMessage
 from app.models.company import Company
 from app.models.crm import CrmActivity, CrmContact, CrmDeal
@@ -72,6 +78,7 @@ __all__ = [
     "ExternalMessage",
     "ChatChannel",
     "ChatParticipant",
+    "ChatThread",
     "ChatMessage",
     "ChatWait",
 ]

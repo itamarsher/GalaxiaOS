@@ -46,6 +46,36 @@ def test_render_agent_system_fills_all_slots() -> None:
         assert slot not in rendered
 
 
+def test_prompt_instructs_distributed_collaboration() -> None:
+    """Agents are told to collaborate peer-to-peer, not funnel everything via the CEO."""
+    rendered = render_agent_system(
+        role_desc="You are the Growth agent.",
+        agent_directive=None,
+        playbook=None,
+        mission="m",
+        goal="g",
+        memory="x",
+        metrics="y",
+    )
+    # Channel/DM tools are surfaced...
+    assert "message_teammate" in rendered
+    assert "start_chat_channel" in rendered
+    # ...and framed as direct peer collaboration rather than CEO-mediated routing.
+    assert "don't funnel everything through the CEO" in rendered
+
+
+def test_prompt_guards_against_infinite_chat_loops() -> None:
+    """The loop prompt tells agents to converge and not ping-pong replies forever."""
+    rendered = render_agent_system(
+        role_desc="r", agent_directive=None, playbook=None,
+        mission="m", goal="g", memory="x", metrics="y",
+    )
+    assert "Keep conversations finite" in rendered
+    # No acknowledgement-only replies, and conversations are allowed to just end.
+    assert "do NOT reply" in rendered
+    assert "a conversation ends when someone" in rendered
+
+
 def test_file_store_block_reflects_connection_state() -> None:
     base = dict(
         role_desc="r", agent_directive=None, playbook=None, mission="m",

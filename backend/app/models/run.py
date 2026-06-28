@@ -7,8 +7,9 @@
 from __future__ import annotations
 
 import uuid
+from datetime import datetime
 
-from sqlalchemy import Enum, ForeignKey, Integer, String, Text
+from sqlalchemy import DateTime, Enum, ForeignKey, Integer, String, Text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column
@@ -61,3 +62,8 @@ class Task(Base, PKMixin, TenantMixin, TimestampMixin):
     )
     cost_cents: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     loop_signature: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    # Watermark for the "new chat to catch up on" nudge: the timestamp of the most
+    # recent chat message this task has already been told about. Advanced as the
+    # loop surfaces unread channel activity, so each new batch nudges exactly once —
+    # on resume (messages that arrived while parked) and during a running task.
+    chat_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

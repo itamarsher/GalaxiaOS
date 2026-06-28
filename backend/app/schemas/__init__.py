@@ -466,12 +466,28 @@ class ChatParticipantOut(BaseModel):
 class ChatMessageOut(ORMModel):
     id: uuid.UUID
     channel_id: uuid.UUID
+    thread_id: uuid.UUID | None = None  # None = the channel's main timeline
     sender_agent_id: uuid.UUID | None = None  # None = the founder
     sender_name: str | None = None  # joined at read time
     sender_role: str | None = None
     is_founder: bool = False
     body: str
     created_at: datetime
+
+
+class ChatThreadOut(ORMModel):
+    """A named sub-conversation inside a channel (a parallel sub-initiative)."""
+
+    id: uuid.UUID
+    channel_id: uuid.UUID
+    title: str
+    archived: bool = False
+    created_at: datetime
+    message_count: int = 0
+    last_message_at: datetime | None = None
+    # Per-thread loop guard, mirroring the channel's.
+    message_budget: int = 10
+    escalation_pending: bool = False
 
 
 class ChatChannelOut(ORMModel):
@@ -483,6 +499,12 @@ class ChatChannelOut(ORMModel):
     created_at: datetime
     participants: list[ChatParticipantOut] = Field(default_factory=list)
     message_count: int = 0
+    # Open threads (sub-conversations) in this channel, newest first.
+    threads: list[ChatThreadOut] = Field(default_factory=list)
+    # Loop guard: messages allowed before the next CEO review, and whether posting
+    # is currently paused because that review is open (see app.runtime.tools.chat).
+    message_budget: int = 10
+    escalation_pending: bool = False
     last_message_at: datetime | None = None
     last_message_preview: str | None = None
     # Names of agents currently parked waiting for a reply in this channel — the
@@ -503,6 +525,8 @@ class ChatChannelCreateRequest(BaseModel):
 
 class ChatPostRequest(BaseModel):
     message: str = Field(min_length=1)
+    # Reply into a specific thread (sub-conversation); omit for the main timeline.
+    thread_id: uuid.UUID | None = None
 
 
 # ── Memory / Copilot ─────────────────────────────────────────────────────────

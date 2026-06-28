@@ -8,17 +8,24 @@ The fleet (and the founder) talk here. Two shapes of conversation, both backed b
 
 A participant or message author with ``agent_id IS NULL`` is **the founder**.
 
+A channel can also hold **threads** (:class:`app.models.chat.ChatThread`): named
+sub-conversations for parallel sub-initiatives. Every message and reply-wait
+carries a ``thread_id`` (NULL = the channel's main timeline), and the helpers
+below take a ``thread_id`` so the same machinery serves both — a reply only
+satisfies a wait in the *same* scope, keeping sub-initiatives independent.
+
 The heart of the module is :func:`post_message`: every new message — whoever
-sends it — satisfies any *other* participant's pending :class:`ChatWait` in that
-channel and re-queues their parked task. That is what lets an agent block on a
-reply the same way it blocks on a founder decision (see ``app.runtime.tools.chat``
-for the agent side and ``app.api.chat`` for the founder side). Callers are
-responsible for committing and then enqueuing the returned woken task ids.
+sends it — satisfies any *other* participant's pending :class:`ChatWait` in the
+same channel-and-thread and re-queues their parked task. That is what lets an
+agent block on a reply the same way it blocks on a founder decision (see
+``app.runtime.tools.chat`` for the agent side and ``app.api.chat`` for the founder
+side). Callers are responsible for committing and then enqueuing the woken ids.
 """
 
 from __future__ import annotations
 
 import uuid
+from datetime import datetime
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -28,13 +35,29 @@ from app.models import (
     ChatChannel,
     ChatMessage,
     ChatParticipant,
+    ChatThread,
     ChatWait,
     Task,
 )
-from app.models.enums import ChatChannelKind, ChatWaitStatus, TaskStatus
+from app.models.enums import (
+    AgentRole,
+    AgentStatus,
+    ChatChannelKind,
+    ChatWaitStatus,
+    TaskStatus,
+)
 
 #: How the founder appears in rendered transcripts / participant lists.
 FOUNDER_LABEL = "Founder"
+
+#: Sentinel for "no thread filter" (count/read across the whole channel), kept
+#: distinct from ``thread_id=None`` which means "the channel's main timeline".
+_ALL_THREADS = object()
+
+
+def _thread_match(column, thread_id: uuid.UUID | None):
+    """A WHERE clause matching a thread scope (``None`` → the main timeline)."""
+    return column.is_(None) if thread_id is None else column == thread_id
 
 
 # ── Participants ──────────────────────────────────────────────────────────────
@@ -120,6 +143,154 @@ async def find_channel_by_name(
     )
 
 
+# ── Threads (named sub-conversations within a channel) ────────────────────────
+async def find_thread_by_title(
+    db: AsyncSession, *, channel_id: uuid.UUID, title: str
+) -> ChatThread | None:
+    """Resolve a non-archived thread by case-insensitive title (newest wins)."""
+    return await db.scalar(
+        select(ChatThread)
+        .where(
+            ChatThread.channel_id == channel_id,
+            func.lower(ChatThread.title) == title.strip().lower(),
+            ChatThread.archived.is_(False),
+        )
+        .order_by(ChatThread.created_at.desc())
+        .limit(1)
+    )
+
+
+async def get_or_create_thread(
+    db: AsyncSession,
+    *,
+    company_id: uuid.UUID,
+    channel_id: uuid.UUID,
+    title: str,
+    created_by_agent_id: uuid.UUID | None = None,
+) -> ChatThread:
+    """Find (or open) a named thread in a channel — addressed by its title.
+
+    Threads are created on first use (the agent just names one in
+    ``send_chat_message``), matching how a human starts a thread by replying under
+    a topic. A reused title lands in the same continuous thread.
+    """
+    existing = await find_thread_by_title(db, channel_id=channel_id, title=title)
+    if existing is not None:
+        return existing
+    thread = ChatThread(
+        company_id=company_id,
+        channel_id=channel_id,
+        title=title.strip()[:255] or "thread",
+        created_by_agent_id=created_by_agent_id,
+    )
+    db.add(thread)
+    await db.flush()
+    return thread
+
+
+async def chat_activity_for_agent(
+    db: AsyncSession,
+    *,
+    company_id: uuid.UUID,
+    agent_id: uuid.UUID,
+    since: datetime | None,
+) -> tuple[str | None, datetime | None]:
+    """New collaboration-channel activity this agent hasn't been told about yet.
+
+    Returns ``(summary, newest_ts)``: a short nudge listing the channels (and
+    threads) carrying messages newer than ``since`` from someone other than this
+    agent, plus the newest message timestamp across the agent's channels (the value
+    to advance the watermark to). ``summary`` is ``None`` when nothing is new — and,
+    when ``since`` is ``None``, the caller just records ``newest_ts`` as the baseline
+    without nudging, so a fresh task isn't flooded with backlog. Scoped to
+    ``channel`` conversations the agent is a member of; 1:1 DMs already deliver
+    replies through the wait mechanic.
+    """
+    channel_ids = (
+        await db.scalars(
+            select(ChatParticipant.channel_id)
+            .join(ChatChannel, ChatChannel.id == ChatParticipant.channel_id)
+            .where(
+                ChatParticipant.company_id == company_id,
+                ChatParticipant.agent_id == agent_id,
+                ChatChannel.kind == ChatChannelKind.channel,
+                ChatChannel.archived.is_(False),
+            )
+        )
+    ).all()
+    if not channel_ids:
+        return None, since
+
+    newest_ts = await db.scalar(
+        select(func.max(ChatMessage.created_at)).where(
+            ChatMessage.channel_id.in_(channel_ids)
+        )
+    )
+    if newest_ts is None:
+        return None, since
+    if since is None:
+        # First step: establish the baseline silently, don't replay backlog.
+        return None, newest_ts
+
+    rows = (
+        await db.scalars(
+            select(ChatMessage)
+            .where(
+                ChatMessage.channel_id.in_(channel_ids),
+                ChatMessage.created_at > since,
+                (ChatMessage.sender_agent_id.is_(None))
+                | (ChatMessage.sender_agent_id != agent_id),
+            )
+            .order_by(ChatMessage.created_at.asc())
+        )
+    ).all()
+    if not rows:
+        return None, newest_ts
+
+    tally: dict[uuid.UUID, dict] = {}
+    for m in rows:
+        entry = tally.setdefault(m.channel_id, {"count": 0, "threads": set()})
+        entry["count"] += 1
+        if m.thread_id is not None:
+            entry["threads"].add(m.thread_id)
+
+    lines: list[str] = []
+    for channel_id, info in tally.items():
+        channel = await db.get(ChatChannel, channel_id)
+        if channel is None:
+            continue
+        extra = ""
+        if info["threads"]:
+            titles = []
+            for thread_id in info["threads"]:
+                thread = await db.get(ChatThread, thread_id)
+                if thread is not None:
+                    titles.append(thread.title)
+            if titles:
+                extra = f" (incl. thread(s): {', '.join(titles)})"
+        lines.append(f"- #{channel.name}: {info['count']} new message(s){extra}")
+
+    if not lines:
+        return None, newest_ts
+    summary = (
+        "📨 New chat activity in your channels since you last looked. Consider catching "
+        "up before you continue — read_chat_channel (and read_chat_thread for a "
+        "sub-initiative) — and reply where a teammate needs you:\n" + "\n".join(lines)
+    )
+    return summary, newest_ts
+
+
+async def threads_for_channel(
+    db: AsyncSession, *, channel_id: uuid.UUID, include_archived: bool = False
+) -> list[ChatThread]:
+    """The channel's threads, newest first."""
+    stmt = select(ChatThread).where(ChatThread.channel_id == channel_id)
+    if not include_archived:
+        stmt = stmt.where(ChatThread.archived.is_(False))
+    rows = await db.scalars(stmt.order_by(ChatThread.created_at.desc()))
+    return list(rows.all())
+
+
 async def get_or_create_direct(
     db: AsyncSession,
     *,
@@ -169,16 +340,20 @@ async def post_message(
     channel_id: uuid.UUID,
     sender_agent_id: uuid.UUID | None,
     body: str,
+    thread_id: uuid.UUID | None = None,
 ) -> tuple[ChatMessage, list[uuid.UUID]]:
     """Append a message and satisfy any *other* participant's pending wait.
 
     Returns ``(message, woken_task_ids)``. The caller must commit, then enqueue
     each woken task id so the parked agents resume and pick up the reply. A wait is
     never satisfied by its own author's message, so an agent isn't woken by itself.
+    Only waits in the *same* scope (``thread_id``) are satisfied, so a reply in one
+    sub-initiative doesn't wake an agent parked in another.
     """
     message = ChatMessage(
         company_id=company_id,
         channel_id=channel_id,
+        thread_id=thread_id,
         sender_agent_id=sender_agent_id,
         body=body,
     )
@@ -193,6 +368,7 @@ async def post_message(
         await db.scalars(
             select(ChatWait).where(
                 ChatWait.channel_id == channel_id,
+                _thread_match(ChatWait.thread_id, thread_id),
                 ChatWait.status == ChatWaitStatus.pending,
             )
         )
@@ -214,17 +390,176 @@ async def post_message(
     return message, woken
 
 
-async def messages(
-    db: AsyncSession, *, channel_id: uuid.UUID, limit: int = 100
-) -> list[ChatMessage]:
-    """The most recent ``limit`` messages in a channel, oldest-first for display."""
-    rows = (
+async def message_count(
+    db: AsyncSession, *, channel_id: uuid.UUID, thread_id=_ALL_THREADS
+) -> int:
+    """How many messages a conversation holds — the value the loop guard caps.
+
+    Defaults to the whole channel (all threads). Pass ``thread_id`` to scope to one
+    conversation: ``None`` counts the channel's main timeline, a thread id counts
+    that thread — each is throttled independently.
+    """
+    stmt = select(func.count(ChatMessage.id)).where(ChatMessage.channel_id == channel_id)
+    if thread_id is not _ALL_THREADS:
+        stmt = stmt.where(_thread_match(ChatMessage.thread_id, thread_id))
+    return int(await db.scalar(stmt) or 0)
+
+
+async def wake_channel_waiters(
+    db: AsyncSession,
+    *,
+    channel_id: uuid.UUID,
+    thread_id: uuid.UUID | None = None,
+    exclude_agent_id: uuid.UUID | None = None,
+) -> list[uuid.UUID]:
+    """Satisfy and re-queue every pending wait in a channel without posting.
+
+    Used when the discussion is throttled or closed: an agent parked waiting for a
+    reply must not be stranded just because posting was paused, so its wait is
+    satisfied (it resumes, finds whatever was already said, and carries on). The
+    caller commits, then enqueues the returned task ids. ``exclude_agent_id`` keeps
+    a given agent parked (e.g. the one that just hit the cap).
+    """
+    waits = (
         await db.scalars(
-            select(ChatMessage)
-            .where(ChatMessage.channel_id == channel_id)
-            .order_by(ChatMessage.created_at.desc())
-            .limit(limit)
+            select(ChatWait).where(
+                ChatWait.channel_id == channel_id,
+                _thread_match(ChatWait.thread_id, thread_id),
+                ChatWait.status == ChatWaitStatus.pending,
+            )
         )
+    ).all()
+    woken: list[uuid.UUID] = []
+    for wait in waits:
+        if exclude_agent_id is not None and wait.agent_id == exclude_agent_id:
+            continue
+        wait.status = ChatWaitStatus.satisfied
+        task = await db.get(Task, wait.task_id)
+        if task is not None and task.status in (
+            TaskStatus.waiting_approval,
+            TaskStatus.running,
+        ):
+            task.status = TaskStatus.queued
+            woken.append(task.id)
+    await db.flush()
+    return woken
+
+
+async def escalate_channel_to_ceo(
+    db: AsyncSession,
+    *,
+    channel: ChatChannel,
+    thread: ChatThread | None = None,
+    attempted_by: Agent,
+    attempted_body: str,
+    run_id: uuid.UUID,
+    root_run_id: uuid.UUID,
+    parent_task_id: uuid.UUID | None,
+    depth: int,
+) -> tuple[uuid.UUID | None, list[uuid.UUID]]:
+    """Pause a conversation that hit its message budget and wake the CEO to rule on it.
+
+    The loop guard's escalation path, for a channel or one of its threads (``thread``):
+    flips that conversation's ``escalation_pending`` so further posts are held,
+    creates a CEO review task (the CEO extends it or ends it with
+    ``extend_chat_channel``), and wakes any agents parked waiting in the *same* scope
+    so the pause can't strand them. Returns ``(ceo_task_id, woken_task_ids)`` for the
+    caller to enqueue; ``ceo_task_id`` is ``None`` when there is no active CEO to
+    escalate to (the caller then lets the post through rather than deadlock).
+    """
+    from app.runtime import breakers  # local import avoids a service↔runtime cycle
+
+    ceo = await db.scalar(
+        select(Agent).where(
+            Agent.company_id == channel.company_id,
+            Agent.role == AgentRole.ceo,
+            Agent.status == AgentStatus.active,
+        )
+    )
+    if ceo is None:
+        return None, []
+
+    # The conversation unit is the thread when one is given, else the channel; both
+    # carry the same budget fields, so the guard reads/writes either uniformly.
+    target = thread if thread is not None else channel
+    thread_id = thread.id if thread is not None else None
+    target.escalation_pending = True
+    await db.flush()
+
+    recent = await messages(db, channel_id=channel.id, thread_id=thread_id, limit=10)
+    lines = [render_message(m, await sender_label(db, m)) for m in recent]
+    transcript = "\n".join(lines)
+    count = await message_count(db, channel_id=channel.id, thread_id=thread_id)
+    purpose = f" — {channel.purpose}" if channel.purpose else ""
+    where = f'#{channel.name}{purpose}, thread "{thread.title}"' if thread else f"#{channel.name}{purpose}"
+    thread_arg = f'\n- Pass thread "{thread.title}" so you extend/end this thread, not the channel.' if thread else ""
+    end_target = "thread" if thread else "channel"
+    goal = (
+        f"A team chat discussion in {where} has reached its "
+        f"{target.message_budget}-message limit and is PAUSED for your review. This guard "
+        "keeps collaboration distributed across the team while making sure two agents can't "
+        "get stuck in an endless back-and-forth.\n\n"
+        f"{count} messages so far. Most recent:\n{transcript}\n\n"
+        f'{attempted_by.name} ({attempted_by.role.value}) was about to post: "{preview_of(attempted_body)}"\n\n'
+        "Judge whether this is productive collaboration worth continuing or an unproductive "
+        "loop that should stop, then decide:\n"
+        f'- To let it continue, call `extend_chat_channel` with channel "{channel.name}" and '
+        "`additional_messages` set to how many more messages to allow before the next review "
+        "(e.g. 10 for a focused topic, more for a big initiative).\n"
+        f'- To end it, call `extend_chat_channel` with channel "{channel.name}" and '
+        f"`additional_messages` 0 — that closes the {end_target}."
+        f"{thread_arg}\n"
+        "Then finish with `report_result`."
+    )
+    review = Task(
+        company_id=channel.company_id,
+        run_id=run_id,
+        root_run_id=root_run_id,
+        agent_id=ceo.id,
+        parent_task_id=parent_task_id,
+        depth=depth,
+        goal=goal,
+        input={
+            "chat_escalation_channel_id": str(channel.id),
+            "chat_escalation_thread_id": str(thread.id) if thread else None,
+        },
+        status=TaskStatus.queued,
+        loop_signature=breakers.loop_signature(
+            ceo.id, f"chat-escalation {channel.id}/{thread_id} b{target.message_budget}"
+        ),
+    )
+    db.add(review)
+    await db.flush()
+    # Don't strand the agent that just hit the cap — it stays parked on its own send
+    # (it will deliver whatever lands once the CEO rules); free everyone else in scope.
+    woken = await wake_channel_waiters(
+        db, channel_id=channel.id, thread_id=thread_id, exclude_agent_id=attempted_by.id
+    )
+    return review.id, woken
+
+
+def preview_of(body: str) -> str:
+    """A short single-line preview of a message body for the CEO review goal."""
+    return (body or "").strip()[:200]
+
+
+async def messages(
+    db: AsyncSession,
+    *,
+    channel_id: uuid.UUID,
+    thread_id=_ALL_THREADS,
+    limit: int = 100,
+) -> list[ChatMessage]:
+    """The most recent ``limit`` messages, oldest-first for display.
+
+    Defaults to the whole channel; pass ``thread_id=None`` for just the main
+    timeline (top-level messages) or a thread id for that sub-conversation.
+    """
+    stmt = select(ChatMessage).where(ChatMessage.channel_id == channel_id)
+    if thread_id is not _ALL_THREADS:
+        stmt = stmt.where(_thread_match(ChatMessage.thread_id, thread_id))
+    rows = (
+        await db.scalars(stmt.order_by(ChatMessage.created_at.desc()).limit(limit))
     ).all()
     return list(reversed(rows))
 
@@ -232,9 +567,10 @@ async def messages(
 async def replies_for_wait(
     db: AsyncSession, *, wait: ChatWait, limit: int = 50
 ) -> list[ChatMessage]:
-    """Messages that satisfied a wait: later posts from anyone but the waiter."""
+    """Messages that satisfied a wait: later posts in the same scope from anyone else."""
     stmt = select(ChatMessage).where(
         ChatMessage.channel_id == wait.channel_id,
+        _thread_match(ChatMessage.thread_id, wait.thread_id),
         ChatMessage.created_at >= wait.created_at,
     )
     if wait.agent_id is not None:
@@ -246,10 +582,15 @@ async def replies_for_wait(
 
 
 async def pending_wait_for_task(
-    db: AsyncSession, *, task_id: uuid.UUID, channel_id: uuid.UUID
+    db: AsyncSession,
+    *,
+    task_id: uuid.UUID,
+    channel_id: uuid.UUID,
+    thread_id: uuid.UUID | None = None,
 ) -> ChatWait | None:
-    """The live (pending/satisfied) wait this task holds on a channel, if any.
+    """The live (pending/satisfied) wait this task holds on a conversation, if any.
 
+    Scoped to the channel-and-thread so a resume in one thread finds the right wait.
     Used on resume so a re-run ``send_chat_message`` delivers the reply instead of
     re-posting — the chat analog of a one-shot approval grant.
     """
@@ -258,6 +599,7 @@ async def pending_wait_for_task(
         .where(
             ChatWait.task_id == task_id,
             ChatWait.channel_id == channel_id,
+            _thread_match(ChatWait.thread_id, thread_id),
             ChatWait.status.in_((ChatWaitStatus.pending, ChatWaitStatus.satisfied)),
         )
         .order_by(ChatWait.created_at.desc())

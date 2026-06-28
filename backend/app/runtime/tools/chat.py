@@ -73,7 +73,11 @@ SPECS: list[ToolSpec] = [
     ),
     ToolSpec(
         name="read_chat_channel",
-        description="Read the recent messages in a chat channel by name.",
+        description=(
+            "Read a chat channel by name: its recent top-level messages and a list of "
+            "the open threads (sub-conversations) inside it. Use read_chat_thread to "
+            "drill into a specific thread."
+        ),
         input_schema={
             "type": "object",
             "properties": {
@@ -83,22 +87,47 @@ SPECS: list[ToolSpec] = [
         },
     ),
     ToolSpec(
+        name="read_chat_thread",
+        description=(
+            "Read the recent messages in one thread (a named sub-conversation) inside a "
+            "channel — use this to catch up on a specific sub-initiative before posting to it."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "channel": {"type": "string", "description": "The channel name."},
+                "thread": {"type": "string", "description": "The thread's topic/title."},
+            },
+            "required": ["channel", "thread"],
+        },
+    ),
+    ToolSpec(
         name="send_chat_message",
         description=(
-            "Post a message to a chat channel by name. Set wait_for_reply=true to "
-            "PAUSE your task until another participant (an agent or the founder) "
-            "replies — their reply comes back to you so you can continue with it. "
-            "Use waiting when you genuinely need an answer before proceeding; "
-            "otherwise leave it false and check back later with read_chat_channel."
+            "Post a message to a chat channel by name. To work on a specific sub-initiative "
+            "of the channel, set `thread` to a short topic — your message goes into that "
+            "named thread (created on first use), so several agents can multitask on parallel "
+            "sub-topics without their messages colliding; leave `thread` off to post to the "
+            "channel's main timeline. Set wait_for_reply=true to PAUSE your task until another "
+            "participant replies IN THAT SAME THREAD — their reply comes back to you so you can "
+            "continue with it. Use waiting when you genuinely need an answer before proceeding; "
+            "otherwise leave it false and check back later with read_chat_channel/read_chat_thread."
         ),
         input_schema={
             "type": "object",
             "properties": {
                 "channel": {"type": "string", "description": "The channel name."},
                 "message": {"type": "string"},
+                "thread": {
+                    "type": "string",
+                    "description": (
+                        "Optional sub-initiative topic. Posts into (and opens, if new) a named "
+                        "thread in the channel. Omit to post to the channel's main timeline."
+                    ),
+                },
                 "wait_for_reply": {
                     "type": "boolean",
-                    "description": "Pause this task until someone replies (default false).",
+                    "description": "Pause this task until someone replies in this thread (default false).",
                 },
             },
             "required": ["channel", "message"],
@@ -127,6 +156,40 @@ SPECS: list[ToolSpec] = [
                 },
             },
             "required": ["to", "message"],
+        },
+    ),
+    ToolSpec(
+        name="extend_chat_channel",
+        description=(
+            "CEO only. Rule on a chat channel (or one of its threads) that hit its message "
+            "limit and is paused for your review (you're woken with a task when this happens). "
+            "Set additional_messages to how many MORE messages to allow before the next review "
+            "— this resumes the discussion — or 0 to END it, which closes it. If the paused "
+            "discussion is a thread, pass `thread` so you extend/end that sub-conversation "
+            "rather than the whole channel. Let productive collaboration keep going; stop an "
+            "unproductive back-and-forth."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "channel": {"type": "string", "description": "The channel name."},
+                "thread": {
+                    "type": "string",
+                    "description": "The thread's topic, when the paused discussion is a thread (omit for the channel).",
+                },
+                "additional_messages": {
+                    "type": "integer",
+                    "description": (
+                        "How many more messages to allow before the next review; 0 to end "
+                        "the discussion and close the channel or thread."
+                    ),
+                },
+                "reason": {
+                    "type": "string",
+                    "description": "Optional brief note posted into the channel with your decision.",
+                },
+            },
+            "required": ["channel", "additional_messages"],
         },
     ),
 ]
@@ -208,6 +271,57 @@ async def _park(db, task: Task) -> None:
     task.status = TaskStatus.waiting_approval  # keep the in-memory copy consistent
 
 
+async def _guard_against_loop(
+    db, ctx, *, agent: Agent, task: Task, channel, thread, body: str, where: str
+) -> ToolOutcome | None:
+    """Loop guard for distributed collaboration: cap a conversation's back-and-forth.
+
+    Operates on the conversation unit — a ``thread`` when given, else the channel
+    (both carry the same budget fields). Returns a blocking :class:`ToolOutcome`
+    (leaving the message unposted) when that conversation is paused for CEO review
+    or has just hit its message budget; returns ``None`` to let the post proceed.
+    Hitting the budget escalates to the CEO — who extends or ends it with
+    ``extend_chat_channel`` — so a healthy strand keeps going while a runaway one is
+    caught. The CEO (the overseer) and founder DMs are never throttled.
+    """
+    target = thread if thread is not None else channel
+    thread_id = thread.id if thread is not None else None
+    if target.escalation_pending:
+        return ToolOutcome(
+            observation=(
+                f"{where} is paused: it hit its message limit and the CEO is reviewing "
+                "whether the discussion should continue. Hold off — you'll be able to post "
+                "again if they extend it."
+            )
+        )
+    if await chat.message_count(db, channel_id=channel.id, thread_id=thread_id) < target.message_budget:
+        return None
+    ceo_task_id, woken = await chat.escalate_channel_to_ceo(
+        db,
+        channel=channel,
+        thread=thread,
+        attempted_by=agent,
+        attempted_body=body,
+        run_id=task.run_id,
+        root_run_id=task.root_run_id,
+        parent_task_id=task.id,
+        depth=(task.depth or 0) + 1,
+    )
+    if ceo_task_id is None:
+        # No active CEO to rule on it — let the post through rather than deadlock.
+        return None
+    await ctx.enqueue_task(ceo_task_id)
+    for task_id in woken:
+        await ctx.enqueue_task(task_id)
+    return ToolOutcome(
+        observation=(
+            f"{where} reached its {target.message_budget}-message limit, so I escalated to "
+            "the CEO to decide whether the discussion should continue. It's paused until they "
+            "rule on it — you'll be able to post again if they extend it."
+        )
+    )
+
+
 async def _post_and_maybe_wait(
     db,
     ctx,
@@ -217,16 +331,27 @@ async def _post_and_maybe_wait(
     channel,
     body: str,
     wait: bool,
+    thread=None,
     context_label: str | None = None,
+    throttle: bool = False,
 ) -> ToolOutcome:
-    """Shared send path for channels, DMs, and founder escalations.
+    """Shared send path for channels, threads, DMs, and founder escalations.
 
-    ``context_label`` overrides how the place is named in observations (so a
-    founder escalation reads naturally instead of as a ``#channel`` post).
+    ``thread`` posts into a named sub-conversation of the channel (its waits and
+    loop guard are scoped to it). ``context_label`` overrides how the place is named
+    in observations (so a founder escalation reads naturally instead of as a
+    ``#channel`` post). ``throttle`` applies the anti-loop message budget (channels,
+    threads, and agent↔agent DMs); it stays off for founder DMs, where a human paces
+    the thread.
     """
-    where = context_label or f"#{channel.name}"
+    thread_id = thread.id if thread is not None else None
+    where = context_label or (
+        f"#{channel.name} › {thread.title}" if thread is not None else f"#{channel.name}"
+    )
     if wait:
-        existing = await chat.pending_wait_for_task(db, task_id=task.id, channel_id=channel.id)
+        existing = await chat.pending_wait_for_task(
+            db, task_id=task.id, channel_id=channel.id, thread_id=thread_id
+        )
         if existing is not None and existing.status is ChatWaitStatus.satisfied:
             # Resume after a reply arrived: deliver it, don't re-post the message.
             replies = await chat.replies_for_wait(db, wait=existing)
@@ -240,18 +365,28 @@ async def _post_and_maybe_wait(
             )
             return ToolOutcome(observation=clip(obs, _MAX_CHARS))
         if existing is not None and existing.status is ChatWaitStatus.pending:
-            # Already parked on this channel; keep waiting (don't double-post).
+            # Already parked here; keep waiting (don't double-post).
             await _park(db, task)
             await db.flush()
             return ToolOutcome(observation=f"Still waiting for a reply in {where}.", park=True)
 
-    # First call: actually post the message (and wake anyone waiting on this channel).
+    # Loop guard: cap a runaway back-and-forth before posting (the CEO is exempt —
+    # they're the overseer who rules on whether a throttled discussion continues).
+    if throttle and agent.role is not AgentRole.ceo:
+        blocked = await _guard_against_loop(
+            db, ctx, agent=agent, task=task, channel=channel, thread=thread, body=body, where=where
+        )
+        if blocked is not None:
+            return blocked
+
+    # First call: actually post the message (and wake anyone waiting in this scope).
     _, woken = await chat.post_message(
         db,
         company_id=task.company_id,
         channel_id=channel.id,
         sender_agent_id=agent.id,
         body=body,
+        thread_id=thread_id,
     )
     for task_id in woken:
         await ctx.enqueue_task(task_id)
@@ -263,6 +398,7 @@ async def _post_and_maybe_wait(
         ChatWait(
             company_id=task.company_id,
             channel_id=channel.id,
+            thread_id=thread_id,
             task_id=task.id,
             agent_id=agent.id,
             status=ChatWaitStatus.pending,
@@ -328,7 +464,9 @@ async def _list_chat_channels(db, ctx, *, agent: Agent, task: Task, args: dict) 
             last = f" — last: {label}: {recent[-1].body[:60]}"
         kind = "DM" if ch.kind.value == "direct" else "channel"
         purpose = f" ({ch.purpose[:80]})" if ch.purpose else ""
-        lines.append(f"- #{ch.name} [{kind}] members: {', '.join(members)}{purpose}{last}")
+        open_threads = await chat.threads_for_channel(db, channel_id=ch.id)
+        threads = f" [{len(open_threads)} thread(s)]" if open_threads else ""
+        lines.append(f"- #{ch.name} [{kind}] members: {', '.join(members)}{purpose}{threads}{last}")
     return ToolOutcome(observation=clip("Chat channels:\n" + "\n".join(lines), _MAX_CHARS))
 
 
@@ -372,11 +510,74 @@ async def _read_chat_channel(db, ctx, *, agent: Agent, task: Task, args: dict) -
             observation=f"No channel named {name!r}. Use list_chat_channels to see what exists.",
             is_error=True,
         )
-    msgs = await chat.messages(db, channel_id=channel.id, limit=50)
+    # Main timeline only — thread replies are read with read_chat_thread.
+    msgs = await chat.messages(db, channel_id=channel.id, thread_id=None, limit=50)
+    sections = []
+    if msgs:
+        sections.append(await _render_messages(db, msgs))
+    else:
+        sections.append("(no top-level messages yet)")
+
+    open_threads = await chat.threads_for_channel(db, channel_id=channel.id)
+    if open_threads:
+        tlines = []
+        for th in open_threads:
+            n = await chat.message_count(db, channel_id=channel.id, thread_id=th.id)
+            recent = await chat.messages(db, channel_id=channel.id, thread_id=th.id, limit=1)
+            last = ""
+            if recent:
+                label = await chat.sender_label(db, recent[-1])
+                last = f" — last: {label}: {recent[-1].body[:50]}"
+            tlines.append(f"  • {th.title} ({n} msg){last}")
+        sections.append(
+            "Threads (read one with read_chat_thread):\n" + "\n".join(tlines)
+        )
+    return ToolOutcome(observation=clip(f"#{channel.name}:\n" + "\n\n".join(sections), _MAX_CHARS))
+
+
+async def _read_chat_thread(db, ctx, *, agent: Agent, task: Task, args: dict) -> ToolOutcome:
+    name = str(args.get("channel") or "").strip()
+    title = str(args.get("thread") or "").strip()
+    channel = await chat.find_channel_by_name(db, company_id=task.company_id, name=name)
+    if channel is None:
+        return ToolOutcome(
+            observation=f"No channel named {name!r}. Use list_chat_channels to see what exists.",
+            is_error=True,
+        )
+    thread = await chat.find_thread_by_title(db, channel_id=channel.id, title=title)
+    if thread is None:
+        return ToolOutcome(
+            observation=(
+                f"No thread {title!r} in #{channel.name}. Read the channel to see its open "
+                "threads, or start one by sending a message with that thread topic."
+            ),
+            is_error=True,
+        )
+    msgs = await chat.messages(db, channel_id=channel.id, thread_id=thread.id, limit=50)
     if not msgs:
-        return ToolOutcome(observation=f"#{channel.name} has no messages yet.")
+        return ToolOutcome(observation=f"#{channel.name} › {thread.title} has no messages yet.")
     rendered = await _render_messages(db, msgs)
-    return ToolOutcome(observation=clip(f"#{channel.name}:\n{rendered}", _MAX_CHARS))
+    return ToolOutcome(
+        observation=clip(f"#{channel.name} › {thread.title}:\n{rendered}", _MAX_CHARS)
+    )
+
+
+async def _resolve_send_thread(db, *, agent: Agent, channel, args: dict):
+    """Resolve the optional ``thread`` arg to a ChatThread (creating it), or ``None``.
+
+    Returns ``(thread_or_None, error_or_None)``.
+    """
+    title = str(args.get("thread") or "").strip()
+    if not title:
+        return None, None
+    thread = await chat.get_or_create_thread(
+        db,
+        company_id=channel.company_id,
+        channel_id=channel.id,
+        title=title,
+        created_by_agent_id=agent.id,
+    )
+    return thread, None
 
 
 async def _send_chat_message(db, ctx, *, agent: Agent, task: Task, args: dict) -> ToolOutcome:
@@ -393,14 +594,19 @@ async def _send_chat_message(db, ctx, *, agent: Agent, task: Task, args: dict) -
             ),
             is_error=True,
         )
+    thread, error = await _resolve_send_thread(db, agent=agent, channel=channel, args=args)
+    if error is not None:
+        return ToolOutcome(observation=error, is_error=True)
     return await _post_and_maybe_wait(
         db,
         ctx,
         agent=agent,
         task=task,
         channel=channel,
+        thread=thread,
         body=body,
         wait=bool(args.get("wait_for_reply")),
+        throttle=True,
     )
 
 
@@ -433,13 +639,102 @@ async def _message_teammate(db, ctx, *, agent: Agent, task: Task, args: dict) ->
         channel=channel,
         body=body,
         wait=bool(args.get("wait_for_reply")),
+        # Throttle agent↔agent DMs (recipient is an agent); never a founder DM,
+        # where the human paces the thread.
+        throttle=recipient_id is not None,
     )
+
+
+async def _extend_chat_channel(db, ctx, *, agent: Agent, task: Task, args: dict) -> ToolOutcome:
+    if agent.role is not AgentRole.ceo:
+        return ToolOutcome(
+            observation="Only the CEO can extend or end a chat discussion.", is_error=True
+        )
+    name = str(args.get("channel") or "").strip()
+    channel = await chat.find_channel_by_name(db, company_id=task.company_id, name=name)
+    if channel is None:
+        return ToolOutcome(
+            observation=f"No active channel named {name!r}. It may already be closed.",
+            is_error=True,
+        )
+    # Operate on the named thread when given, else the channel itself.
+    title = str(args.get("thread") or "").strip()
+    thread = None
+    if title:
+        thread = await chat.find_thread_by_title(db, channel_id=channel.id, title=title)
+        if thread is None:
+            return ToolOutcome(
+                observation=f"No active thread {title!r} in #{channel.name}. It may already be closed.",
+                is_error=True,
+            )
+    target = thread if thread is not None else channel
+    thread_id = thread.id if thread is not None else None
+    label = f"#{channel.name} › {thread.title}" if thread is not None else f"#{channel.name}"
+    unit = "thread" if thread is not None else "discussion"
+
+    try:
+        more = int(args.get("additional_messages"))
+    except (TypeError, ValueError):
+        return ToolOutcome(
+            observation="Set additional_messages to a whole number (0 ends the discussion).",
+            is_error=True,
+        )
+    reason = str(args.get("reason") or "").strip()
+
+    if more > 0:
+        note = f"📈 CEO extended this {unit} — {more} more message(s) before the next review."
+        if reason:
+            note += f" {reason}"
+        _, woken = await chat.post_message(
+            db,
+            company_id=task.company_id,
+            channel_id=channel.id,
+            sender_agent_id=agent.id,
+            body=note,
+            thread_id=thread_id,
+        )
+        # Allow `more` messages beyond everything now in this conversation (the note
+        # included), and lift the pause so the team can carry on.
+        target.message_budget = (
+            await chat.message_count(db, channel_id=channel.id, thread_id=thread_id) + more
+        )
+        target.escalation_pending = False
+        await db.flush()
+        for task_id in woken:
+            await ctx.enqueue_task(task_id)
+        return ToolOutcome(
+            observation=(
+                f"Extended {label}: {more} more message(s) allowed before the next review. "
+                "The team can keep collaborating there."
+            )
+        )
+
+    # additional_messages <= 0: end the discussion and close the channel/thread.
+    note = f"🛑 CEO ended this {unit}; it is now closed."
+    if reason:
+        note += f" {reason}"
+    _, woken = await chat.post_message(
+        db,
+        company_id=task.company_id,
+        channel_id=channel.id,
+        sender_agent_id=agent.id,
+        body=note,
+        thread_id=thread_id,
+    )
+    target.escalation_pending = False
+    target.archived = True
+    await db.flush()
+    for task_id in woken:
+        await ctx.enqueue_task(task_id)
+    return ToolOutcome(observation=f"Closed {label}. The discussion is ended.")
 
 
 HANDLERS = {
     "list_chat_channels": _list_chat_channels,
     "start_chat_channel": _start_chat_channel,
     "read_chat_channel": _read_chat_channel,
+    "read_chat_thread": _read_chat_thread,
     "send_chat_message": _send_chat_message,
     "message_teammate": _message_teammate,
+    "extend_chat_channel": _extend_chat_channel,
 }
