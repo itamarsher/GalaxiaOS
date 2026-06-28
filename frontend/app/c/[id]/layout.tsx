@@ -40,8 +40,8 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
       <aside className="sidebar">
         <span className="brand">
           {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src="/abos-logo.png" alt="" className="brand-logo" width={26} height={26} />
-          ABOS
+          <img src="/galaxiaos-logo.png" alt="" className="brand-logo" width={26} height={26} />
+          GalaxiaOS
         </span>
 
         <div>

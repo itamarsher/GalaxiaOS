@@ -188,8 +188,8 @@ export default function Home() {
     <div className="wrap">
       <div className="brand-hero">
         {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img src="/abos-logo.png" alt="ABOS logo" className="brand-hero-logo" width={56} height={56} />
-        <h1>ABOS</h1>
+        <img src="/galaxiaos-logo.png" alt="GalaxiaOS logo" className="brand-hero-logo" width={56} height={56} />
+        <h1>GalaxiaOS</h1>
       </div>
       <p className="sub">What&apos;s your mission? What&apos;s your budget? Launch.</p>
 

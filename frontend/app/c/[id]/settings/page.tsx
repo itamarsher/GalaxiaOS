@@ -5,7 +5,7 @@ import { useParams } from "next/navigation";
 import { api, type ApiKey, type Company, type McpServer } from "@/lib/api";
 import { usePoll } from "@/lib/useApi";
 
-// The two keys ABOS understands today: the BYOK LLM provider key (required to
+// The two keys GalaxiaOS understands today: the BYOK LLM provider key (required to
 // run) and an optional GitHub token (lets the platform agent file real issues).
 const SLOTS: { provider: string; label: string; hint: string; placeholder: string }[] = [
   {
@@ -194,7 +194,7 @@ function GoogleDriveCard({ companyId }: { companyId: string }) {
       <p className="muted" style={{ fontSize: 13, margin: "6px 0 0" }}>
         Your agents file every deliverable, financial record, data-room document, brand
         guideline and received file into your own Drive under <code>.abos/&lt;company&gt;/…</code> —
-        ready for audits and due diligence. Connect with one click; ABOS only ever touches
+        ready for audits and due diligence. Connect with one click; GalaxiaOS only ever touches
         the files it creates.
       </p>
 

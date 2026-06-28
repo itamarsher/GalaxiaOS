@@ -106,7 +106,7 @@ function Playbook({ companyId }: { companyId: string }) {
   };
 
   const reset = async () => {
-    if (!window.confirm("Reset the playbook to the ABOS default? Your customizations will be lost.")) return;
+    if (!window.confirm("Reset the playbook to the GalaxiaOS default? Your customizations will be lost.")) return;
     setBusy(true); setErr(null);
     try {
       await api.updatePlaybook(companyId, "");
@@ -124,7 +124,7 @@ function Playbook({ companyId }: { companyId: string }) {
       <div className="step" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <span>Company playbook (global system prompt)</span>
         <span className={`status ${pb.data?.customized ? "active" : "pending"}`}>
-          {pb.data?.customized ? "Customized" : "ABOS default"}
+          {pb.data?.customized ? "Customized" : "GalaxiaOS default"}
         </span>
       </div>
       <p className="muted" style={{ fontSize: 13, margin: "6px 0 0" }}>
