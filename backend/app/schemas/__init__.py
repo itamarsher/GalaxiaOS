@@ -483,6 +483,10 @@ class ChatChannelOut(ORMModel):
     created_at: datetime
     participants: list[ChatParticipantOut] = Field(default_factory=list)
     message_count: int = 0
+    # Loop guard: messages allowed before the next CEO review, and whether posting
+    # is currently paused because that review is open (see app.runtime.tools.chat).
+    message_budget: int = 10
+    escalation_pending: bool = False
     last_message_at: datetime | None = None
     last_message_preview: str | None = None
     # Names of agents currently parked waiting for a reply in this channel — the

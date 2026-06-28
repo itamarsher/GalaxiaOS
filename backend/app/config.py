@@ -243,6 +243,15 @@ class Settings(BaseSettings):
     # same task before it is auto-accepted, so an audit↔redo loop can't run forever.
     max_audit_rounds: int = 2
 
+    # Chat collaboration loop: agents discuss shared topics in mutual channels,
+    # which keeps collaboration distributed instead of routing everything through
+    # the CEO. To stop two agents from ping-ponging replies forever, a channel is
+    # allowed this many messages before the next post escalates to the CEO, who
+    # decides whether the discussion continues and grants the next allowance (see
+    # ``app.runtime.tools.chat``). The CEO is exempt — they are the overseer, never
+    # throttled — and founder DMs (where a human paces the thread) are never capped.
+    chat_message_budget: int = 10
+
     # Failure-retry loop: when a delegated task fails unexpectedly, it lands in
     # ``auditing`` and the CEO is woken to decide whether the failure looks
     # transient (worth re-running) or persistent (abandon it). This caps how many

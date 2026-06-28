@@ -22,6 +22,7 @@ from sqlalchemy import (
     Boolean,
     Enum,
     ForeignKey,
+    Integer,
     String,
     Text,
     UniqueConstraint,
@@ -49,6 +50,16 @@ class ChatChannel(Base, PKMixin, TenantMixin, TimestampMixin):
         PGUUID(as_uuid=True), ForeignKey("agents.id", ondelete="SET NULL"), nullable=True
     )
     archived: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    # Loop guard for distributed collaboration: how many messages this channel may
+    # hold before the next post escalates to the CEO. The CEO raises it when they
+    # decide a discussion should keep going (``extend_chat_channel``), so a healthy
+    # back-and-forth continues while a runaway one is caught. Founder DMs are never
+    # throttled. See ``app.runtime.tools.chat`` for enforcement.
+    message_budget: Mapped[int] = mapped_column(Integer, default=10, nullable=False)
+    # True while a CEO review of this channel is open: the budget was hit and the
+    # next post is paused until the CEO extends the discussion or ends it. Cleared
+    # when the CEO resolves the escalation.
+    escalation_pending: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
 
 class ChatParticipant(Base, PKMixin, TenantMixin, TimestampMixin):

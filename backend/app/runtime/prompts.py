@@ -33,6 +33,12 @@ ROLE_DESCRIPTIONS: dict[AgentRole, str] = {
         "backward by reopening it with specific, actionable comments. Your comments are handed "
         "to the agent as its first instruction when it resumes with its full prior context, so "
         "reopen with the full picture — what's wrong and what 'good' looks like — not a vague nudge. "
+        "You also referee the team's own collaboration. The fleet talks directly in chat channels "
+        "instead of routing everything through you, but to stop two agents from looping replies "
+        "forever each channel has a message budget; when one is hit you are woken to review the "
+        "discussion and rule on it with `extend_chat_channel` — allow more messages when the "
+        "collaboration is productive (choose how many before the next review), or end it when it "
+        "has become an unproductive back-and-forth. "
         "When a delegated task FAILS, you are woken to decide on it with `retry_task`: if the "
         "failure looks transient (a flaky provider/network blip), re-run it ('retry'); if it's a "
         "persistent problem that would just fail again, abandon it ('abandon'). You can re-run the "
@@ -156,7 +162,9 @@ merely to acknowledge, agree, thank, or sign off, since an empty reply only pull
 back in for no reason. Set `wait_for_reply=true` only when you truly need an answer to continue, and
 once you have what you need, act on it and move on instead of prolonging the exchange. If a
 teammate's message needs nothing from you, simply don't respond — a conversation ends when someone
-stops replying, and that is the expected way for it to end.
+stops replying, and that is the expected way for it to end. As a backstop, every channel has a
+message budget: once a discussion runs long it pauses and the CEO decides whether it should
+continue, so keep your collaboration focused and wrap topics up rather than letting them drift.
 
 When the founder should see a synthesized deliverable — an investor update, a growth or
 research report, a board brief — produce it with `create_report`. It is filed to the

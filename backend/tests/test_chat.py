@@ -352,6 +352,224 @@ async def test_message_teammate_creates_direct_channel(session_factory, company_
         assert again == 1
 
 
+# ── Loop guard: message budget + CEO escalation ───────────────────────────────
+async def _set_budget(session_factory, channel_id, budget: int) -> None:
+    async with session_factory() as db:
+        ch = await db.get(ChatChannel, channel_id)
+        ch.message_budget = budget
+        await db.commit()
+
+
+async def _post(session_factory, *, agent, task, channel="war-room", message="hi", ctx=None):
+    ctx = ctx or FakeCtx()
+    async with session_factory() as db:
+        out = await execute_tool(
+            db,
+            ctx,
+            agent=agent,
+            task=task,
+            name="send_chat_message",
+            args={"channel": channel, "message": message},
+        )
+        await db.commit()
+    return out, ctx
+
+
+@requires_db
+async def test_channel_throttle_escalates_to_ceo(session_factory, company_with_budget):
+    """Once a channel hits its message budget, the next post pauses it and wakes the CEO."""
+    company_id = company_with_budget
+    ceo, _ = await _agent_and_task(session_factory, company_id, role=AgentRole.ceo, name="Boss")
+    agent, task = await _agent_and_task(session_factory, company_id, name="Grow")
+
+    async with session_factory() as db:
+        channel = await chat.create_channel(
+            db, company_id=company_id, name="war-room", created_by_agent_id=agent.id
+        )
+        await db.commit()
+        channel_id = channel.id
+    await _set_budget(session_factory, channel_id, 2)
+
+    # Two posts fit under the budget.
+    out1, _ = await _post(session_factory, agent=agent, task=task, message="one")
+    out2, _ = await _post(session_factory, agent=agent, task=task, message="two")
+    assert not out1.is_error and not out2.is_error
+
+    # The third hits the cap: blocked, escalated, channel paused.
+    out3, ctx = await _post(session_factory, agent=agent, task=task, message="three")
+    assert not out3.is_error
+    assert "CEO" in out3.observation and "paused" in out3.observation.lower()
+
+    async with session_factory() as db:
+        ch = await db.get(ChatChannel, channel_id)
+        assert ch.escalation_pending is True
+        # Only the two under-budget messages were posted; "three" was not.
+        msgs = await chat.messages(db, channel_id=channel_id)
+        assert [m.body for m in msgs] == ["one", "two"]
+        # A CEO review task was created and enqueued (parented to the blocked post).
+        review = await db.scalar(
+            select(Task).where(
+                Task.company_id == company_id,
+                Task.agent_id == ceo.id,
+                Task.parent_task_id == task.id,
+            )
+        )
+        assert review is not None
+        assert "war-room" in review.goal
+        assert (review.input or {}).get("chat_escalation_channel_id") == str(channel_id)
+        assert review.id in ctx.enqueued
+
+    # While the review is open, further posts are held without re-escalating.
+    out4, ctx4 = await _post(session_factory, agent=agent, task=task, message="four")
+    assert "paused" in out4.observation.lower()
+    async with session_factory() as db:
+        # Still exactly one CEO review task (no duplicate escalation).
+        count = await db.scalar(
+            select(func.count(Task.id)).where(
+                Task.company_id == company_id,
+                Task.agent_id == ceo.id,
+                Task.parent_task_id == task.id,
+            )
+        )
+        assert count == 1
+
+
+@requires_db
+async def test_ceo_is_exempt_from_throttle(session_factory, company_with_budget):
+    """The CEO referees the throttle, so their own posts are never capped."""
+    company_id = company_with_budget
+    ceo, ceo_task = await _agent_and_task(
+        session_factory, company_id, role=AgentRole.ceo, name="Boss"
+    )
+
+    async with session_factory() as db:
+        channel = await chat.create_channel(
+            db, company_id=company_id, name="war-room", created_by_agent_id=ceo.id
+        )
+        await db.commit()
+        channel_id = channel.id
+    await _set_budget(session_factory, channel_id, 1)
+
+    # Post past the budget as the CEO — every one goes through, nothing escalates.
+    for body in ("a", "b", "c"):
+        out, _ = await _post(session_factory, agent=ceo, task=ceo_task, message=body)
+        assert not out.is_error
+    async with session_factory() as db:
+        ch = await db.get(ChatChannel, channel_id)
+        assert ch.escalation_pending is False
+        msgs = await chat.messages(db, channel_id=channel_id)
+        assert [m.body for m in msgs] == ["a", "b", "c"]
+
+
+@requires_db
+async def test_extend_chat_channel_resumes_discussion(session_factory, company_with_budget):
+    """The CEO grants more messages; the channel un-pauses and posting works again."""
+    company_id = company_with_budget
+    ceo, ceo_task = await _agent_and_task(
+        session_factory, company_id, role=AgentRole.ceo, name="Boss"
+    )
+    agent, task = await _agent_and_task(session_factory, company_id, name="Grow")
+
+    async with session_factory() as db:
+        channel = await chat.create_channel(
+            db, company_id=company_id, name="war-room", created_by_agent_id=agent.id
+        )
+        await db.commit()
+        channel_id = channel.id
+    await _set_budget(session_factory, channel_id, 1)
+
+    await _post(session_factory, agent=agent, task=task, message="one")
+    out_blocked, _ = await _post(session_factory, agent=agent, task=task, message="two")
+    assert "paused" in out_blocked.observation.lower()
+
+    # CEO extends the discussion by 3 messages.
+    async with session_factory() as db:
+        out = await execute_tool(
+            db,
+            FakeCtx(),
+            agent=ceo,
+            task=ceo_task,
+            name="extend_chat_channel",
+            args={"channel": "war-room", "additional_messages": 3},
+        )
+        await db.commit()
+    assert not out.is_error
+    assert "3 more" in out.observation
+
+    async with session_factory() as db:
+        ch = await db.get(ChatChannel, channel_id)
+        assert ch.escalation_pending is False
+        # Budget now allows 3 messages beyond everything posted so far (incl. the note).
+        current = await chat.message_count(db, channel_id=channel_id)
+        assert ch.message_budget == current + 3
+
+    # The agent can post again.
+    out_ok, _ = await _post(session_factory, agent=agent, task=task, message="resumed")
+    assert not out_ok.is_error
+    assert "paused" not in out_ok.observation.lower()
+
+
+@requires_db
+async def test_extend_chat_channel_zero_closes_it(session_factory, company_with_budget):
+    """additional_messages=0 ends the discussion and archives the channel."""
+    company_id = company_with_budget
+    ceo, ceo_task = await _agent_and_task(
+        session_factory, company_id, role=AgentRole.ceo, name="Boss"
+    )
+    agent, task = await _agent_and_task(session_factory, company_id, name="Grow")
+
+    async with session_factory() as db:
+        channel = await chat.create_channel(
+            db, company_id=company_id, name="war-room", created_by_agent_id=agent.id
+        )
+        await db.commit()
+        channel_id = channel.id
+    await _set_budget(session_factory, channel_id, 1)
+    await _post(session_factory, agent=agent, task=task, message="one")
+    await _post(session_factory, agent=agent, task=task, message="two")  # escalates
+
+    async with session_factory() as db:
+        out = await execute_tool(
+            db,
+            FakeCtx(),
+            agent=ceo,
+            task=ceo_task,
+            name="extend_chat_channel",
+            args={"channel": "war-room", "additional_messages": 0, "reason": "Going in circles."},
+        )
+        await db.commit()
+    assert not out.is_error
+    assert "Closed" in out.observation
+
+    async with session_factory() as db:
+        ch = await db.get(ChatChannel, channel_id)
+        assert ch.archived is True
+        # Archived channels are no longer resolvable by name (closed to new posts).
+        assert await chat.find_channel_by_name(db, company_id=company_id, name="war-room") is None
+
+
+@requires_db
+async def test_extend_chat_channel_is_ceo_only(session_factory, company_with_budget):
+    company_id = company_with_budget
+    agent, task = await _agent_and_task(session_factory, company_id, name="Grow")
+    async with session_factory() as db:
+        await chat.create_channel(
+            db, company_id=company_id, name="war-room", created_by_agent_id=agent.id
+        )
+        await db.commit()
+        out = await execute_tool(
+            db,
+            FakeCtx(),
+            agent=agent,
+            task=task,
+            name="extend_chat_channel",
+            args={"channel": "war-room", "additional_messages": 5},
+        )
+        await db.commit()
+    assert out.is_error
+    assert "Only the CEO" in out.observation
+
+
 # ── Decision ⇄ chat consolidation ─────────────────────────────────────────────
 @requires_db
 async def test_request_decision_is_founder_dm_resumed_by_reply(

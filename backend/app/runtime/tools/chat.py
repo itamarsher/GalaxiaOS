@@ -129,6 +129,34 @@ SPECS: list[ToolSpec] = [
             "required": ["to", "message"],
         },
     ),
+    ToolSpec(
+        name="extend_chat_channel",
+        description=(
+            "CEO only. Rule on a chat channel that hit its message limit and is paused for "
+            "your review (you're woken with a task when this happens). Set "
+            "additional_messages to how many MORE messages to allow before the next review — "
+            "this resumes the discussion — or 0 to END it, which closes the channel. Let "
+            "productive cross-team collaboration keep going; stop an unproductive back-and-forth."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "channel": {"type": "string", "description": "The channel name."},
+                "additional_messages": {
+                    "type": "integer",
+                    "description": (
+                        "How many more messages to allow before the next review; 0 to end "
+                        "the discussion and close the channel."
+                    ),
+                },
+                "reason": {
+                    "type": "string",
+                    "description": "Optional brief note posted into the channel with your decision.",
+                },
+            },
+            "required": ["channel", "additional_messages"],
+        },
+    ),
 ]
 
 
@@ -208,6 +236,53 @@ async def _park(db, task: Task) -> None:
     task.status = TaskStatus.waiting_approval  # keep the in-memory copy consistent
 
 
+async def _guard_against_loop(
+    db, ctx, *, agent: Agent, task: Task, channel, body: str, where: str
+) -> ToolOutcome | None:
+    """Loop guard for distributed collaboration: cap a channel's back-and-forth.
+
+    Returns a blocking :class:`ToolOutcome` (and leaves the message unposted) when
+    the channel is paused for CEO review or has just hit its message budget;
+    returns ``None`` to let the post proceed. Hitting the budget escalates to the
+    CEO — who extends or ends the discussion with ``extend_chat_channel`` — so a
+    healthy cross-team thread keeps going while a runaway one is caught. The CEO
+    (the overseer) and founder DMs are never throttled; see the callers below.
+    """
+    if channel.escalation_pending:
+        return ToolOutcome(
+            observation=(
+                f"{where} is paused: it hit its message limit and the CEO is reviewing "
+                "whether the discussion should continue. Hold off — you'll be able to post "
+                "again if they extend it."
+            )
+        )
+    if await chat.message_count(db, channel_id=channel.id) < channel.message_budget:
+        return None
+    ceo_task_id, woken = await chat.escalate_channel_to_ceo(
+        db,
+        channel=channel,
+        attempted_by=agent,
+        attempted_body=body,
+        run_id=task.run_id,
+        root_run_id=task.root_run_id,
+        parent_task_id=task.id,
+        depth=(task.depth or 0) + 1,
+    )
+    if ceo_task_id is None:
+        # No active CEO to rule on it — let the post through rather than deadlock.
+        return None
+    await ctx.enqueue_task(ceo_task_id)
+    for task_id in woken:
+        await ctx.enqueue_task(task_id)
+    return ToolOutcome(
+        observation=(
+            f"{where} reached its {channel.message_budget}-message limit, so I escalated to "
+            "the CEO to decide whether the discussion should continue. It's paused until they "
+            "rule on it — you'll be able to post again if they extend it."
+        )
+    )
+
+
 async def _post_and_maybe_wait(
     db,
     ctx,
@@ -218,11 +293,14 @@ async def _post_and_maybe_wait(
     body: str,
     wait: bool,
     context_label: str | None = None,
+    throttle: bool = False,
 ) -> ToolOutcome:
     """Shared send path for channels, DMs, and founder escalations.
 
     ``context_label`` overrides how the place is named in observations (so a
     founder escalation reads naturally instead of as a ``#channel`` post).
+    ``throttle`` applies the anti-loop message budget (channels and agent↔agent
+    DMs); it stays off for founder DMs, where a human paces the thread.
     """
     where = context_label or f"#{channel.name}"
     if wait:
@@ -244,6 +322,15 @@ async def _post_and_maybe_wait(
             await _park(db, task)
             await db.flush()
             return ToolOutcome(observation=f"Still waiting for a reply in {where}.", park=True)
+
+    # Loop guard: cap a runaway back-and-forth before posting (the CEO is exempt —
+    # they're the overseer who rules on whether a throttled discussion continues).
+    if throttle and agent.role is not AgentRole.ceo:
+        blocked = await _guard_against_loop(
+            db, ctx, agent=agent, task=task, channel=channel, body=body, where=where
+        )
+        if blocked is not None:
+            return blocked
 
     # First call: actually post the message (and wake anyone waiting on this channel).
     _, woken = await chat.post_message(
@@ -401,6 +488,7 @@ async def _send_chat_message(db, ctx, *, agent: Agent, task: Task, args: dict) -
         channel=channel,
         body=body,
         wait=bool(args.get("wait_for_reply")),
+        throttle=True,
     )
 
 
@@ -433,7 +521,75 @@ async def _message_teammate(db, ctx, *, agent: Agent, task: Task, args: dict) ->
         channel=channel,
         body=body,
         wait=bool(args.get("wait_for_reply")),
+        # Throttle agent↔agent DMs (recipient is an agent); never a founder DM,
+        # where the human paces the thread.
+        throttle=recipient_id is not None,
     )
+
+
+async def _extend_chat_channel(db, ctx, *, agent: Agent, task: Task, args: dict) -> ToolOutcome:
+    if agent.role is not AgentRole.ceo:
+        return ToolOutcome(
+            observation="Only the CEO can extend or end a chat discussion.", is_error=True
+        )
+    name = str(args.get("channel") or "").strip()
+    channel = await chat.find_channel_by_name(db, company_id=task.company_id, name=name)
+    if channel is None:
+        return ToolOutcome(
+            observation=f"No active channel named {name!r}. It may already be closed.",
+            is_error=True,
+        )
+    try:
+        more = int(args.get("additional_messages"))
+    except (TypeError, ValueError):
+        return ToolOutcome(
+            observation="Set additional_messages to a whole number (0 ends the discussion).",
+            is_error=True,
+        )
+    reason = str(args.get("reason") or "").strip()
+
+    if more > 0:
+        note = f"📈 CEO extended this discussion — {more} more message(s) before the next review."
+        if reason:
+            note += f" {reason}"
+        _, woken = await chat.post_message(
+            db,
+            company_id=task.company_id,
+            channel_id=channel.id,
+            sender_agent_id=agent.id,
+            body=note,
+        )
+        # Allow `more` messages beyond everything now in the channel (the note included),
+        # and lift the pause so the team can carry on.
+        channel.message_budget = await chat.message_count(db, channel_id=channel.id) + more
+        channel.escalation_pending = False
+        await db.flush()
+        for task_id in woken:
+            await ctx.enqueue_task(task_id)
+        return ToolOutcome(
+            observation=(
+                f"Extended #{channel.name}: {more} more message(s) allowed before the next "
+                "review. The team can keep collaborating there."
+            )
+        )
+
+    # additional_messages <= 0: end the discussion and close the channel.
+    note = "🛑 CEO ended this discussion; the channel is now closed."
+    if reason:
+        note += f" {reason}"
+    _, woken = await chat.post_message(
+        db,
+        company_id=task.company_id,
+        channel_id=channel.id,
+        sender_agent_id=agent.id,
+        body=note,
+    )
+    channel.escalation_pending = False
+    channel.archived = True
+    await db.flush()
+    for task_id in woken:
+        await ctx.enqueue_task(task_id)
+    return ToolOutcome(observation=f"Closed #{channel.name}. The discussion is ended.")
 
 
 HANDLERS = {
@@ -442,4 +598,5 @@ HANDLERS = {
     "read_chat_channel": _read_chat_channel,
     "send_chat_message": _send_chat_message,
     "message_teammate": _message_teammate,
+    "extend_chat_channel": _extend_chat_channel,
 }

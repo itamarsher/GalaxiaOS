@@ -31,7 +31,13 @@ from app.models import (
     ChatWait,
     Task,
 )
-from app.models.enums import ChatChannelKind, ChatWaitStatus, TaskStatus
+from app.models.enums import (
+    AgentRole,
+    AgentStatus,
+    ChatChannelKind,
+    ChatWaitStatus,
+    TaskStatus,
+)
 
 #: How the founder appears in rendered transcripts / participant lists.
 FOUNDER_LABEL = "Founder"
@@ -212,6 +218,132 @@ async def post_message(
             woken.append(task.id)
     await db.flush()
     return message, woken
+
+
+async def message_count(db: AsyncSession, *, channel_id: uuid.UUID) -> int:
+    """How many messages a channel holds — the value the loop guard caps."""
+    return int(
+        await db.scalar(
+            select(func.count(ChatMessage.id)).where(ChatMessage.channel_id == channel_id)
+        )
+        or 0
+    )
+
+
+async def wake_channel_waiters(
+    db: AsyncSession, *, channel_id: uuid.UUID, exclude_agent_id: uuid.UUID | None = None
+) -> list[uuid.UUID]:
+    """Satisfy and re-queue every pending wait in a channel without posting.
+
+    Used when the discussion is throttled or closed: an agent parked waiting for a
+    reply must not be stranded just because posting was paused, so its wait is
+    satisfied (it resumes, finds whatever was already said, and carries on). The
+    caller commits, then enqueues the returned task ids. ``exclude_agent_id`` keeps
+    a given agent parked (e.g. the one that just hit the cap).
+    """
+    waits = (
+        await db.scalars(
+            select(ChatWait).where(
+                ChatWait.channel_id == channel_id,
+                ChatWait.status == ChatWaitStatus.pending,
+            )
+        )
+    ).all()
+    woken: list[uuid.UUID] = []
+    for wait in waits:
+        if exclude_agent_id is not None and wait.agent_id == exclude_agent_id:
+            continue
+        wait.status = ChatWaitStatus.satisfied
+        task = await db.get(Task, wait.task_id)
+        if task is not None and task.status in (
+            TaskStatus.waiting_approval,
+            TaskStatus.running,
+        ):
+            task.status = TaskStatus.queued
+            woken.append(task.id)
+    await db.flush()
+    return woken
+
+
+async def escalate_channel_to_ceo(
+    db: AsyncSession,
+    *,
+    channel: ChatChannel,
+    attempted_by: Agent,
+    attempted_body: str,
+    run_id: uuid.UUID,
+    root_run_id: uuid.UUID,
+    parent_task_id: uuid.UUID | None,
+    depth: int,
+) -> tuple[uuid.UUID | None, list[uuid.UUID]]:
+    """Pause a channel that hit its message budget and wake the CEO to rule on it.
+
+    The loop guard's escalation path: flips ``escalation_pending`` so further posts
+    are held, creates a CEO review task (the CEO extends the discussion or ends it
+    with ``extend_chat_channel``), and wakes any agents parked waiting in the
+    channel so the pause can't strand them. Returns ``(ceo_task_id, woken_task_ids)``
+    for the caller to enqueue; ``ceo_task_id`` is ``None`` when there is no active
+    CEO to escalate to (the caller then lets the post through rather than deadlock).
+    """
+    from app.runtime import breakers  # local import avoids a service↔runtime cycle
+
+    ceo = await db.scalar(
+        select(Agent).where(
+            Agent.company_id == channel.company_id,
+            Agent.role == AgentRole.ceo,
+            Agent.status == AgentStatus.active,
+        )
+    )
+    if ceo is None:
+        return None, []
+
+    channel.escalation_pending = True
+    await db.flush()
+
+    recent = await messages(db, channel_id=channel.id, limit=10)
+    lines = [render_message(m, await sender_label(db, m)) for m in recent]
+    transcript = "\n".join(lines)
+    count = await message_count(db, channel_id=channel.id)
+    purpose = f" — {channel.purpose}" if channel.purpose else ""
+    preview = (attempted_body or "").strip()[:200]
+    goal = (
+        f"A team chat discussion in #{channel.name}{purpose} has reached its "
+        f"{channel.message_budget}-message limit and is PAUSED for your review. This guard "
+        "keeps collaboration distributed across the team while making sure two agents can't "
+        "get stuck in an endless back-and-forth.\n\n"
+        f"{count} messages so far. Most recent:\n{transcript}\n\n"
+        f'{attempted_by.name} ({attempted_by.role.value}) was about to post: "{preview}"\n\n'
+        "Judge whether this is productive collaboration worth continuing or an unproductive "
+        "loop that should stop, then decide:\n"
+        f'- To let it continue, call `extend_chat_channel` with channel "{channel.name}" and '
+        "`additional_messages` set to how many more messages to allow before the next review "
+        "(e.g. 10 for a focused topic, more for a big initiative).\n"
+        f'- To end it, call `extend_chat_channel` with channel "{channel.name}" and '
+        "`additional_messages` 0 — that closes the channel.\n"
+        "Then finish with `report_result`."
+    )
+    review = Task(
+        company_id=channel.company_id,
+        run_id=run_id,
+        root_run_id=root_run_id,
+        agent_id=ceo.id,
+        parent_task_id=parent_task_id,
+        depth=depth,
+        goal=goal,
+        input={"chat_escalation_channel_id": str(channel.id)},
+        status=TaskStatus.queued,
+        loop_signature=breakers.loop_signature(
+            ceo.id, f"chat-escalation {channel.id} b{channel.message_budget}"
+        ),
+    )
+    db.add(review)
+    await db.flush()
+    # Don't strand the agent that just hit the cap — it stays parked on its own send
+    # (it will deliver whatever lands once the CEO rules); free everyone else.
+    woken = await wake_channel_waiters(
+        db, channel_id=channel.id, exclude_agent_id=attempted_by.id
+    )
+    return review.id, woken
 
 
 async def messages(
