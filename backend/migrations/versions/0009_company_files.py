@@ -1,7 +1,7 @@
 """Company files — the external file-store manifest.
 
 Adds one tenant table backing the file provider (Google Drive today): a durable,
-queryable record of every document filed under ``.abos/<company>/<Category>/`` so
+queryable record of every document filed under ``.galaxia/<company>/<Category>/`` so
 the store stays auditable and listable from the database even when the external
 provider is unreachable.
 

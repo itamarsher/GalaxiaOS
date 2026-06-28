@@ -33,7 +33,7 @@ class CompanyFile(Base, PKMixin, TenantMixin, TimestampMixin):
     name: Mapped[str] = mapped_column(String(500), nullable=False, index=True)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     mime_type: Mapped[str] = mapped_column(String(120), nullable=False)
-    # Human-readable path within the store, e.g. ".abos/Acme/Financials".
+    # Human-readable path within the store, e.g. ".galaxia/Acme/Financials".
     folder_path: Mapped[str] = mapped_column(String(512), nullable=False)
     # Which provider holds it + its opaque id + a link a human can open.
     provider: Mapped[str] = mapped_column(String(60), nullable=False)

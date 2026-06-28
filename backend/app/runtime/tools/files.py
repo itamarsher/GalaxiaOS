@@ -2,7 +2,7 @@
 
 These are how an agent puts a deliverable, a financial record, a due-diligence
 document, a brand guideline, or any knowledge worth keeping into the company's
-file provider (Google Drive today) under ``.abos/<company>/<Category>/`` — and how
+file provider (Google Drive today) under ``.galaxia/<company>/<Category>/`` — and how
 it lists and reads them back later. Filing is a genuine external write; without a
 connected provider the tools report the capability is unsupported (via
 ``unsupported_capability``) rather than pretending a doc was saved, so nothing

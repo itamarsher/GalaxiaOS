@@ -149,7 +149,7 @@ function CloudflareCard({ companyId }: { companyId: string }) {
 
 // Google Drive is the company's file store: agents file deliverables, financial
 // records, data-room docs, brand guidelines and received files into the founder's
-// own Drive under .abos/<company>/…. One-click connect: the button sends the
+// own Drive under .galaxia/<company>/…. One-click connect: the button sends the
 // founder to Google's consent screen; the callback stores a refresh token. No
 // Cloud Console setup — the deployment owns the OAuth app.
 function GoogleDriveCard({ companyId }: { companyId: string }) {
@@ -193,7 +193,7 @@ function GoogleDriveCard({ companyId }: { companyId: string }) {
       </div>
       <p className="muted" style={{ fontSize: 13, margin: "6px 0 0" }}>
         Your agents file every deliverable, financial record, data-room document, brand
-        guideline and received file into your own Drive under <code>.abos/&lt;company&gt;/…</code> —
+        guideline and received file into your own Drive under <code>.galaxia/&lt;company&gt;/…</code> —
         ready for audits and due diligence. Connect with one click; GalaxiaOS only ever touches
         the files it creates.
       </p>

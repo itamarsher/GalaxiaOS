@@ -273,7 +273,7 @@ class CrmActivityKind(str, enum.Enum):
 class FileCategory(str, enum.Enum):
     """Where a stored file lives in the company's external file store (Drive).
 
-    Each value maps to a top-level folder under ``.abos/<company>/`` (see
+    Each value maps to a top-level folder under ``.galaxia/<company>/`` (see
     :data:`app.services.files.CATEGORY_FOLDERS`). The taxonomy is chosen so the
     store can satisfy a financial audit, a due-diligence data room, and shared
     brand/knowledge — the goals the file provider exists to serve.

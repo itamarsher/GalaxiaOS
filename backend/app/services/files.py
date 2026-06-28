@@ -2,11 +2,11 @@
 
 Owns the *taxonomy* on top of the provider-agnostic
 :class:`~app.integrations.files.FileProvider` seam: every company gets a single
-root folder (``.abos`` by default) in the founder's Drive, a sub-folder per
+root folder (``.galaxia`` by default) in the founder's Drive, a sub-folder per
 company, and a fixed set of category folders under that — chosen so the store can
 satisfy the four goals the file provider exists for:
 
-    .abos/<company>/
+    .galaxia/<company>/
       ├── Artifacts/        every deliverable the agents produce
       ├── Financials/       invoices, statements, transactions — audit trail
       ├── Data Room/        due-diligence-ready documents
@@ -134,7 +134,7 @@ async def archive(
 ) -> CompanyFile:
     """File ``content`` into the company's ``category`` folder and index it.
 
-    Resolves (creating as needed) ``.abos/<company>/<Category>/``, uploads the file
+    Resolves (creating as needed) ``.galaxia/<company>/<Category>/``, uploads the file
     (replacing a same-named one in place), then writes the :class:`CompanyFile`
     manifest row. Raises :class:`FileProviderError` if the provider call fails — the
     DB row is only written after a successful upload, so a failure leaves no
