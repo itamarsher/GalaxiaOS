@@ -280,6 +280,16 @@ _DEFAULT_FLEET: list[dict] = [
         "autonomy_level": "approve_required",
     },
     {
+        "role": "design",
+        "name": "Graphic Designer",
+        "responsibility": (
+            "Own the company's visual identity and brand creative. Generate on-brand "
+            "photos and short videos with Google's Nano Banana, keep the brand & design "
+            "guidelines current, and deliver imagery for marketing, social, and the product."
+        ),
+        "autonomy_level": "approve_required",
+    },
+    {
         "role": "finance",
         "name": "Finance Lead",
         "responsibility": "Own budget monitoring and unit economics.",
@@ -358,6 +368,8 @@ _ROLE_BUDGET_WEIGHTS: dict[AgentRole, float] = {
     AgentRole.finance: 1.5,
     AgentRole.research: 2.0,
     AgentRole.product: 2.0,
+    # The designer runs paid image/video generation, so it carries a functional share.
+    AgentRole.design: 2.0,
     AgentRole.growth: 3.0,
     AgentRole.custom: 2.0,
 }

@@ -320,6 +320,27 @@ class Settings(BaseSettings):
     tavily_api_key: str = ""
     tavily_search_depth: str = "basic"  # basic | advanced
 
+    # Brand media-generation seam (the design agent's image/video synthesis);
+    # "simulated" is offline (NOT connected — generate_image/generate_video report
+    # the capability is unsupported). "google" wires Nano Banana (Gemini image) +
+    # Veo (video) via the Generative Language API.
+    media_gen_provider: str = "simulated"  # simulated | google
+    # Google Generative Language API key (only used when media_gen_provider=google).
+    # A per-company BYO key, stored under the "nano_banana" provider slot, overrides
+    # this global default at resolution time.
+    google_api_key: str = ""
+    nano_banana_image_model: str = "gemini-2.5-flash-image"
+    nano_banana_video_model: str = "veo-3.0-generate-001"
+    media_gen_timeout_seconds: float = 60.0
+    # Veo generation is a long-running operation; poll it on this cadence up to the
+    # max wait before giving up.
+    media_gen_video_poll_seconds: float = 8.0
+    media_gen_video_max_wait_seconds: float = 240.0
+    # Per-asset cost (cents) reserved+committed through the CostMeter, like any other
+    # paid action. Images are cheap; a short video clip is materially pricier.
+    media_image_cost_cents: int = 4
+    media_video_cost_cents: int = 50
+
     # Email seam (agents send sales/marketing/ops mail); "simulated" is offline.
     email_provider: str = "simulated"  # simulated | smtp | resend
     email_from: str = ""

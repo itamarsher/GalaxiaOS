@@ -23,6 +23,7 @@ class AgentRole(str, enum.Enum):
     growth = "growth"
     research = "research"
     product = "product"
+    design = "design"
     finance = "finance"
     governance = "governance"
     auditor = "auditor"
