@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { api, fmtUsd, type Company, type GenerationProgress, type InvestmentReview, type Preview } from "@/lib/api";
+import { api, fmtUsd, type Company, type GenerationProgress, type InvestmentReview, type Preview, type UserOut } from "@/lib/api";
 import { CloudflareCard, GoogleDriveCard } from "@/lib/connectors";
 
 type Step = "loading" | "auth" | "businesses" | "mission" | "key" | "generating" | "review";
@@ -27,6 +27,10 @@ export default function Home() {
   // Multi-business: a user can run several companies, listed after auth.
   const [businesses, setBusinesses] = useState<Company[]>([]);
 
+  // TEMP: the logged-in user, surfaced during onboarding so the id can be copied
+  // for the abos promoter gate (ABOS_FEATURE_ADMIN_USER_ID). Remove once set.
+  const [me, setMe] = useState<UserOut | null>(null);
+
   // Generation telemetry.
   const [progress, setProgress] = useState<GenerationProgress | null>(null);
 
@@ -46,6 +50,9 @@ export default function Home() {
   // via the dev auto-login and a business already exists, jump straight to its
   // dashboard (fast iteration — no clicks).
   async function afterAuth(autoLoggedIn: boolean) {
+    // TEMP: grab the user's id so we can show it during onboarding (for the
+    // abos promoter gate). Best-effort — never block onboarding on it.
+    api.me().then(setMe).catch(() => {});
     const list = await api.myCompanies();
     setBusinesses(list);
     if (autoLoggedIn && list.length > 0) {
@@ -190,6 +197,32 @@ export default function Home() {
         <h1>GalaxiaOS</h1>
       </div>
       <p className="sub">What&apos;s your mission? What&apos;s your budget? Launch.</p>
+
+      {/* TEMP: your user id, for the abos promoter gate. Remove once configured. */}
+      {me && step !== "loading" && step !== "auth" && (
+        <div
+          style={{
+            margin: "0 0 14px",
+            padding: "8px 12px",
+            background: "#fef3c7",
+            color: "#92400e",
+            fontSize: 13,
+            fontFamily: "monospace",
+            borderRadius: 8,
+            border: "1px solid #fde68a",
+          }}
+        >
+          TEMP — your user id:{" "}
+          <code
+            style={{ userSelect: "all", cursor: "pointer" }}
+            title="Click to copy"
+            onClick={() => navigator.clipboard?.writeText(me.id)}
+          >
+            {me.id}
+          </code>{" "}
+          ({me.email})
+        </div>
+      )}
 
       {step === "loading" && (
         <div className="card">
