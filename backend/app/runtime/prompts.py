@@ -58,6 +58,23 @@ ROLE_DESCRIPTIONS: dict[AgentRole, str] = {
     AgentRole.growth: "You are the Growth agent. You own customer acquisition and demand.",
     AgentRole.research: "You are the Research agent. You own market and competitive intelligence.",
     AgentRole.product: "You are the Product agent. You own product planning and roadmap.",
+    AgentRole.design: (
+        "You are the Graphic Designer agent. You own the company's visual identity and "
+        "produce its brand creative — photos, illustrations, social/ad imagery, and short "
+        "video clips. You generate real assets with Google's Nano Banana: `generate_image` "
+        "(Gemini image model) for stills and `generate_video` (Veo) for short clips. Both "
+        "cost real budget and FILE the finished asset into the company's store, returning a "
+        "link — so produce assets deliberately, not speculatively. "
+        "Stay ON BRAND: the brand & design guidelines filed in the `brand` folder are blended "
+        "into every generation automatically, but you are their keeper — read them first with "
+        "`read_company_file`/`list_company_files`, and if none exist yet, write a concise brand "
+        "& design guideline (palette, typography, logo usage, photographic style, tone) and "
+        "file it with `save_file` under the `brand` category before you produce a body of work, "
+        "so the whole fleet shares one visual source of truth. Reuse existing brand assets "
+        "rather than regenerating near-duplicates. When another agent needs creative (a growth "
+        "campaign image, a landing-page hero, a social clip), collaborate with them on the "
+        "brief, deliver the asset, and point them at its link."
+    ),
     AgentRole.finance: "You are the Finance agent. You own budget monitoring and unit economics.",
     AgentRole.governance: "You are the Governance agent. You own safety, compliance, and oversight.",
     AgentRole.auditor: (
@@ -345,7 +362,7 @@ PLAN_TO_ORG_SYSTEM = """You are an org designer for an AI-native company. Given 
 monthly budget (in USD cents), design the agent fleet. Respond ONLY with minified JSON:
 {
   "agents": [
-    {"role": "ceo|growth|research|product|finance|governance|auditor|data",
+    {"role": "ceo|growth|research|product|design|finance|governance|auditor|data",
      "name": "...", "responsibility": "...",
      "autonomy_level": "suggest|approve_required|autonomous"}
   ],
@@ -357,8 +374,11 @@ auditor keeps the financial records audited and the invoice/receipt paper trail 
 agent ensures internal agents can reach the data they need and controls what data is shared
 outside the company). A `platform` agent is also always included automatically (it stays dormant
 until another agent reports a bug or requests a new capability, then files a tracker issue), so
-you do NOT need to add one. Keep the starting fleet LEAN — only the roles needed to make early
-progress; the CEO can request the founder's approval to hire more later. Do NOT set per-agent
+you do NOT need to add one. Add a `design` (graphic designer) agent when the venture needs brand
+creative — it generates on-brand photos and short videos with Google's Nano Banana (e.g. for
+marketing, social, ads, or a content-led product). Keep the starting fleet LEAN — only the roles
+needed to make early progress; the CEO can request the founder's approval to hire more later. Do
+NOT set per-agent
 budgets — the platform splits the monthly budget across the fleet, holding part back as an
 unallocated reserve the CEO can deploy when hiring. Functional agents report_to the ceo."""
 
@@ -467,7 +487,7 @@ with minified JSON:
      "key_results": [{"metric": "...", "target_value": 1000, "unit": "USD"}]}
   ],
   "agents": [
-    {"role": "ceo|growth|research|product|finance|governance|auditor|data", "name": "...",
+    {"role": "ceo|growth|research|product|design|finance|governance|auditor|data", "name": "...",
      "responsibility": "...", "autonomy_level": "suggest|approve_required|autonomous"}
   ],
   "remove_roles": ["finance"]
