@@ -6,20 +6,15 @@ import { api, type ApiKey, type Company, type McpServer } from "@/lib/api";
 import { usePoll } from "@/lib/useApi";
 import { CloudflareCard, GoogleDriveCard } from "@/lib/connectors";
 
-// The two keys GalaxiaOS understands today: the BYOK LLM provider key (required to
-// run) and an optional GitHub token (lets the platform agent file real issues).
+// The keys GalaxiaOS understands today. The BYOK LLM provider key is required to
+// run; the rest are optional integrations. (GitHub issue filing is handled centrally
+// by the deployment's own token, so there's no per-company GitHub key here.)
 const SLOTS: { provider: string; label: string; hint: string; placeholder: string }[] = [
   {
     provider: "anthropic",
     label: "Anthropic API key",
     hint: "Required. The BYOK key your agents use to think. Encrypted at rest; only a fingerprint is shown.",
     placeholder: "sk-ant-…",
-  },
-  {
-    provider: "github",
-    label: "GitHub token",
-    hint: "Optional. Lets the platform agent open real issues for bug reports and capability requests. Without it, issues go to an offline tracker.",
-    placeholder: "ghp_…",
   },
   {
     provider: "tavily",

@@ -23,14 +23,15 @@ def _set_master_key() -> None:
 
 
 @requires_db
-async def test_issue_tracker_is_none_without_github_key(
+async def test_issue_tracker_is_none_without_any_github_token(
     session_factory, company_with_budget
 ):
     _set_master_key()
     async with session_factory() as db:
         tracker = await _resolve_issue_tracker(db, company_with_budget)
-    # No github key stored and no global tracker configured -> None, so open_issue
-    # records the request to company memory instead of fabricating an external issue.
+    # GitHub is the default tracker, but with neither a per-company key nor a global
+    # ABOS_GITHUB_TOKEN there's nothing to authenticate with -> None, so open_issue
+    # records the request to company memory instead of 401-ing against GitHub.
     assert tracker is None
 
 

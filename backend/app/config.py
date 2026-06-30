@@ -360,9 +360,11 @@ class Settings(BaseSettings):
     # folder created in the founder's Drive: ``.galaxia/<company>/<category>/…``.
     gdrive_root_folder: str = ".galaxia"
 
-    # Issue-tracker seam (the Platform agent files bug/feature issues here);
-    # "simulated" is offline and deterministic.
-    issue_tracker: str = "simulated"  # simulated | github
+    # Issue-tracker seam (the Platform agent files bug/feature issues here).
+    # Defaults to real GitHub issues, authenticated with a centralized global
+    # ``ABOS_GITHUB_TOKEN`` set in the deployment env (Render). Set
+    # ``ABOS_ISSUE_TRACKER=none`` to force the tracker off.
+    issue_tracker: str = "github"  # github | none | simulated
     github_token: str = ""
     github_repo: str = "itamarsher/just-launch-it"
 
