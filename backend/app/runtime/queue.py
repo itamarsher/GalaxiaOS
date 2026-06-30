@@ -29,3 +29,25 @@ async def enqueue_task(task_id: uuid.UUID, *, delay_seconds: float = 0) -> None:
         )
     finally:
         await pool.close()
+
+
+async def enqueue_provider_balance_recheck(
+    company_id: uuid.UUID, *, delay_seconds: float = 0
+) -> None:
+    """Schedule a deferred re-validation of a company's provider balance.
+
+    Used after the founder says they reloaded but the balance still reads empty:
+    we re-check (and resurface to the founder) after ``delay_seconds`` (~15 min).
+    The worker's ``recheck_provider_balance`` job is idempotent and self-terminating
+    — once the company is no longer flagged exhausted it does nothing — so a
+    redundant schedule is harmless.
+    """
+    pool = await create_pool(redis_settings())
+    try:
+        await pool.enqueue_job(
+            "recheck_provider_balance",
+            str(company_id),
+            _defer_by=delay_seconds if delay_seconds > 0 else None,
+        )
+    finally:
+        await pool.close()

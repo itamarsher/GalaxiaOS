@@ -257,6 +257,13 @@ class Settings(BaseSettings):
     business_cycle_interval_seconds: int = 120  # delay between auto-continued cycles
     business_cycle_min_budget_cents: int = 50  # pause auto-continuation below this
 
+    # When the LLM provider account runs out of credits the fleet is paused and
+    # the founder is asked to top up. After they say they've reloaded, the API is
+    # re-validated; if it still reports "insufficient balance" we resurface to the
+    # founder and re-check on this cadence until it clears (see
+    # app.services.provider_balance).
+    provider_balance_recheck_seconds: int = 15 * 60
+
     # Start lean: at launch the platform allocates only part of the monthly budget
     # across the starting fleet and leaves the rest as an unallocated pool the CEO
     # can deploy later (with the founder's approval) by hiring agents. Keeps the

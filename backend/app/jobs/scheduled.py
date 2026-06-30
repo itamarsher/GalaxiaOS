@@ -9,7 +9,7 @@ from app.db import SessionLocal, set_tenant
 from app.models import Company
 from app.models.enums import CompanyStatus
 from app.runtime import orchestrator
-from app.services import copilot
+from app.services import copilot, provider_balance
 from app.services import memory as memory_svc
 from app.services import runway as runway_svc
 from app.services import sites as sites_svc
@@ -97,8 +97,12 @@ async def run_business_cycle(ctx: dict) -> dict:
             await set_tenant(db, company_id)
             # Skip companies that are already busy — continuous mode keeps a run
             # going, so the daily cron is only a fallback for idle orgs and must
-            # not stack a second, parallel run on top of a live one.
-            if await orchestrator.has_active_tasks(db, company_id):
+            # not stack a second, parallel run on top of a live one. Also skip a
+            # company whose provider account is dry (its tasks are paused awaiting
+            # a founder top-up); a new run would only hit the same refusal.
+            if await orchestrator.has_active_tasks(
+                db, company_id
+            ) or await provider_balance.is_exhausted(db, company_id):
                 count += 1
                 continue
             task_id = await orchestrator.create_scheduled_run(db, company_id)

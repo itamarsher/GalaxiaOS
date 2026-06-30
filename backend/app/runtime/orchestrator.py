@@ -27,11 +27,13 @@ from app.models.enums import (
     RunTrigger,
     TaskStatus,
 )
+from app.providers.base import ProviderError
 from app.runtime import breakers
 from app.runtime.backends import get_backend
 from app.runtime.context import RuntimeContext
 from app.runtime.tools.base import clip
 from app.services import budget as budget_svc
+from app.services import provider_balance
 from app.services import tasks as task_svc
 
 #: Task statuses that mean the run is still doing (or waiting to do) work.
@@ -133,6 +135,14 @@ async def run_task(ctx: RuntimeContext, task_id: uuid.UUID) -> dict:
         if task.status not in (TaskStatus.queued, TaskStatus.waiting_approval):
             return {"status": f"skipped:{task.status.value}"}
 
+        # The provider account is out of credits and the founder is being asked to
+        # top up — park this task rather than burn another guaranteed-to-fail call.
+        # It resumes with the rest of the fleet once the balance is validated.
+        if await provider_balance.is_exhausted(db, task.company_id):
+            task.status = TaskStatus.paused
+            await db.commit()
+            return {"status": TaskStatus.paused.value, "reason": "provider_balance"}
+
         verdict = await breakers.check_before_task(db, task)
         if not verdict.ok:
             await breakers.block_task(db, task, verdict.reason or "blocked")
@@ -153,6 +163,15 @@ async def run_task(ctx: RuntimeContext, task_id: uuid.UUID) -> dict:
     try:
         result = await backend.run(ctx, agent, task)
     except Exception as exc:  # noqa: BLE001
+        # The LLM vendor refused because the founder's provider account is out of
+        # credits (distinct from the company's internal budget). Don't fail the
+        # task: pause the whole fleet and ask the founder to load more balance, so
+        # no progress is lost and work resumes once the balance is restored.
+        if (
+            isinstance(exc, ProviderError)
+            and exc.kind == provider_balance.INSUFFICIENT_BALANCE_KIND
+        ):
+            return await _handle_balance_exhausted(ctx, task)
         # A task is flipped to ``running`` before dispatch; if the backend raises
         # (provider/network error, a bug, …) we must not leave it orphaned in
         # ``running`` — the run gate skips anything that isn't queued/waiting, so
@@ -192,6 +211,22 @@ async def run_task(ctx: RuntimeContext, task_id: uuid.UUID) -> dict:
     # burst of work until the once-a-day cron fires.
     await _maybe_continue_cycle(ctx, company_id=task.company_id, root_run_id=task.root_run_id)
     return result
+
+
+async def _handle_balance_exhausted(ctx: RuntimeContext, task: Task) -> dict:
+    """Pause the fleet and ask the founder to top up the provider balance.
+
+    Delegates to :func:`app.services.provider_balance.handle_exhaustion`, which is
+    idempotent and serialized per company — so concurrent task failures collapse
+    into one pause + one founder ask. The triggering task is among those paused.
+    """
+    async with ctx.session_factory() as db:
+        await set_tenant(db, task.company_id)
+        await provider_balance.handle_exhaustion(
+            db, company_id=task.company_id, provider_name=ctx.provider.name
+        )
+        await db.commit()
+    return {"status": TaskStatus.paused.value, "reason": "provider_balance"}
 
 
 async def has_active_tasks(db: AsyncSession, company_id: uuid.UUID) -> bool:
@@ -252,6 +287,11 @@ async def _can_continue(db: AsyncSession, company_id: uuid.UUID) -> bool:
     """Gate auto-continuation on company health: active, un-tripped, with budget."""
     company = await db.get(Company, company_id)
     if company is None or company.status is not CompanyStatus.active:
+        return False
+
+    # Don't spin up fresh work while the provider account is dry — it would only
+    # hit the same wall. Resumes once the founder reloads and it's validated.
+    if await provider_balance.is_exhausted(db, company_id):
         return False
 
     spend_tripped = await db.scalar(

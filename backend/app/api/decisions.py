@@ -8,10 +8,11 @@ from datetime import UTC, datetime
 from fastapi import APIRouter, Body, HTTPException, status
 from sqlalchemy import select
 
+from app.config import settings
 from app.deps import CompanyDep, CurrentUser, DbDep
 from app.models import Agent, DecisionRequest, MemoryEntry, Objective, Task
-from app.models.enums import DecisionStatus, MemoryType, TaskStatus
-from app.runtime.queue import enqueue_task
+from app.models.enums import DecisionKind, DecisionStatus, MemoryType, TaskStatus
+from app.runtime.queue import enqueue_provider_balance_recheck, enqueue_task
 from app.schemas import (
     DecisionChatRequest,
     DecisionChatResult,
@@ -22,7 +23,7 @@ from app.schemas import (
 )
 from app.services import budget as budget_svc
 from app.services import chat as chat_svc
-from app.services import copilot, memory
+from app.services import copilot, memory, provider_balance
 from app.services import external_messages as ext
 
 # Listing is company-scoped; resolve actions are by decision id (re-checked against membership).
@@ -263,6 +264,34 @@ async def _apply_discussion(db, decision: DecisionRequest, *, resolution: str) -
     )
 
 
+async def _resolve_provider_balance(
+    db, decision: DecisionRequest, user, body: DecisionResolveRequest | None
+) -> DecisionOut:
+    """Founder-confirmed provider top-up: validate, then resume or re-check.
+
+    Mirrors the worker's periodic re-check (same :func:`provider_balance.attempt_resume`
+    + :func:`provider_balance.dispatch_outcome`), so an immediate founder click and
+    the 15-minute auto-recheck behave identically. The decision is only marked
+    resolved when the balance is actually confirmed; otherwise it stays pending so
+    the founder can try again after topping up the right account.
+    """
+    await _apply_note(db, decision, body.note if body else None)
+    outcome = await provider_balance.attempt_resume(db, company_id=decision.company_id)
+    if outcome.resumed:
+        # attempt_resume already flipped the decision to approved.
+        decision.resolved_by_user_id = user.id
+        decision.resolved_at = datetime.now(UTC)
+    await db.commit()
+    await provider_balance.dispatch_outcome(
+        outcome,
+        company_id=decision.company_id,
+        enqueue_task=enqueue_task,
+        enqueue_recheck=enqueue_provider_balance_recheck,
+        recheck_delay_seconds=settings.provider_balance_recheck_seconds,
+    )
+    return (await _to_out(db, [decision]))[0]
+
+
 @router.post("/decisions/{decision_id}/approve", response_model=DecisionOut)
 async def approve(
     decision_id: uuid.UUID,
@@ -271,6 +300,14 @@ async def approve(
     body: DecisionResolveRequest | None = Body(default=None),
 ):
     decision = await _load_decision(db, user, decision_id)
+
+    # The founder reloaded the provider balance. Don't blindly mark this approved
+    # and resume: validate the account actually has balance now, and only then
+    # release the paused fleet. If it still reads empty, leave the ask open and
+    # schedule a re-check so we resurface to the founder.
+    if decision.kind is DecisionKind.provider_balance:
+        return await _resolve_provider_balance(db, decision, user, body)
+
     decision.status = DecisionStatus.approved
     decision.resolved_by_user_id = user.id
     decision.resolved_at = datetime.now(UTC)

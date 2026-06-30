@@ -34,6 +34,19 @@ _STREAM_THRESHOLD = 16_000
 # Internal tool used to force structured JSON output (see ``complete``).
 _JSON_TOOL_NAME = "emit_result"
 
+# Substrings Anthropic uses when the account has no spendable balance. A low
+# credit balance comes back as an HTTP 400 ``BadRequestError`` ("Your credit
+# balance is too low to access the Anthropic API…"), which is otherwise
+# indistinguishable from a malformed request — so we sniff the message to map it
+# to the vendor-neutral ``insufficient_credits`` kind the runtime acts on.
+_INSUFFICIENT_CREDIT_MARKERS = ("credit balance is too low", "credit balance")
+
+
+def _is_insufficient_credit(exc: Exception) -> bool:
+    """True if an Anthropic error means the account is out of credits."""
+    text = (getattr(exc, "message", None) or str(exc)).lower()
+    return any(marker in text for marker in _INSUFFICIENT_CREDIT_MARKERS)
+
 
 def _block_text(block: object) -> str:
     """Approximate character length of a structured block (for estimation)."""
@@ -171,11 +184,26 @@ class AnthropicProvider(LLMProvider):
             raise ProviderError(f"Anthropic could not find model '{model}'.",
                                 kind="bad_request") from exc
         except anthropic.BadRequestError as exc:
+            # A drained account is reported as a 400; surface it as its own kind so
+            # the runtime can pause the fleet and ask the founder to top up,
+            # instead of treating it as a malformed (and unretryable) request.
+            if _is_insufficient_credit(exc):
+                raise ProviderError(
+                    "Anthropic rejected the call: the account's credit balance is too "
+                    "low. The founder needs to top up the provider balance.",
+                    kind="insufficient_credits",
+                ) from exc
             raise ProviderError(f"Anthropic rejected the request: {exc}", kind="bad_request") from exc
         except anthropic.APIConnectionError as exc:
             raise ProviderError("Could not reach the Anthropic API (network error).",
                                 kind="connection") from exc
         except anthropic.APIStatusError as exc:
+            if _is_insufficient_credit(exc):
+                raise ProviderError(
+                    "Anthropic rejected the call: the account's credit balance is too "
+                    "low. The founder needs to top up the provider balance.",
+                    kind="insufficient_credits",
+                ) from exc
             raise ProviderError(f"Anthropic API error (HTTP {exc.status_code}).") from exc
         except anthropic.APIError as exc:
             raise ProviderError(f"Anthropic API call failed: {type(exc).__name__}.") from exc

@@ -459,4 +459,5 @@ export const decisionKindLabel = (kind: string): string =>
     hire_approval: "Hire request",
     user_action: "Action requested",
     external_comm: "External message",
+    provider_balance: "Top up balance",
   }[kind] ?? kind.replace(/_/g, " "));

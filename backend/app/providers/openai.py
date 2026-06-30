@@ -30,6 +30,20 @@ from app.providers.base import (
 # non-streaming response (which risks an HTTP read timeout).
 _STREAM_THRESHOLD = 16_000
 
+# OpenAI signals a drained account with the ``insufficient_quota`` code (carried
+# on a 429 that otherwise looks like ordinary rate limiting). Mapped to the
+# vendor-neutral ``insufficient_credits`` kind the runtime pauses the fleet on.
+_INSUFFICIENT_QUOTA_MARKERS = ("insufficient_quota", "exceeded your current quota", "billing")
+
+
+def _is_insufficient_quota(exc: Exception) -> bool:
+    """True if an OpenAI error means the account has no spendable quota left."""
+    code = (getattr(exc, "code", None) or "").lower()
+    if "insufficient_quota" in code:
+        return True
+    text = (getattr(exc, "message", None) or str(exc)).lower()
+    return any(marker in text for marker in _INSUFFICIENT_QUOTA_MARKERS)
+
 
 def _flatten(content) -> str:
     """Render a Message's content (str or list[ContentBlock]) to plain text.
@@ -198,12 +212,27 @@ class OpenAIProvider(LLMProvider):
                 kind="auth",
             ) from exc
         except openai.RateLimitError as exc:
+            # A drained account surfaces as a 429 too; separate it from genuine
+            # rate limiting so the runtime pauses the fleet for a top-up rather
+            # than backing off and retrying forever.
+            if _is_insufficient_quota(exc):
+                raise ProviderError(
+                    "OpenAI rejected the call: the account is out of quota/credits. "
+                    "The founder needs to top up the provider balance.",
+                    kind="insufficient_credits",
+                ) from exc
             raise ProviderError("OpenAI rate limit exceeded; try again shortly.",
                                 kind="rate_limit") from exc
         except openai.NotFoundError as exc:
             raise ProviderError(f"OpenAI could not find model '{model}'.",
                                 kind="bad_request") from exc
         except openai.BadRequestError as exc:
+            if _is_insufficient_quota(exc):
+                raise ProviderError(
+                    "OpenAI rejected the call: the account is out of quota/credits. "
+                    "The founder needs to top up the provider balance.",
+                    kind="insufficient_credits",
+                ) from exc
             raise ProviderError(f"OpenAI rejected the request: {exc}", kind="bad_request") from exc
         except openai.APIConnectionError as exc:
             raise ProviderError("Could not reach the OpenAI API (network error).",

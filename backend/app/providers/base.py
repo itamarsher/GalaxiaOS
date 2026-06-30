@@ -18,7 +18,17 @@ class ProviderError(Exception):
     Wraps the vendor SDK's exception so callers outside ``app/providers/`` can
     handle provider failures without importing a vendor SDK (see the
     provider-boundary guard). ``kind`` is a coarse, vendor-neutral category
-    (``auth`` | ``rate_limit`` | ``connection`` | ``bad_request`` | ``error``).
+    (``auth`` | ``rate_limit`` | ``connection`` | ``bad_request`` |
+    ``insufficient_credits`` | ``error``).
+
+    ``insufficient_credits`` specifically means the provider account has no
+    spendable balance left (e.g. Anthropic's "credit balance is too low"). It is
+    distinct from ``auth`` (a bad/blocked key) and from the *internal*
+    :class:`app.services.budget.BudgetExceeded` (the company's own budget cap):
+    here the vendor itself refused the charge, so no agent work can proceed until
+    the founder tops up the provider account. The runtime catches this kind to
+    pause the fleet and ask the founder to reload (see
+    :mod:`app.services.provider_balance`).
     """
 
     def __init__(self, message: str, *, kind: str = "error") -> None:

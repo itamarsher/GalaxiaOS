@@ -35,19 +35,37 @@ from app.jobs.scheduled import _active_company_ids
 from app.models import Task
 from app.models.enums import TaskStatus
 from app.runtime import orchestrator
+from app.services import provider_balance
 
 
 class _Enqueue(Protocol):
     def __call__(self, task_id: uuid.UUID, *, delay_seconds: float = 0) -> Awaitable[None]: ...
 
 
-async def recover_pending_work(enqueue: _Enqueue) -> dict:
+class _EnqueueRecheck(Protocol):
+    def __call__(
+        self, company_id: uuid.UUID, *, delay_seconds: float = 0
+    ) -> Awaitable[None]: ...
+
+
+async def recover_pending_work(
+    enqueue: _Enqueue, enqueue_recheck: _EnqueueRecheck | None = None
+) -> dict:
     """Rebuild the Redis work queue from durable Postgres state.
 
     ``enqueue`` is an async callable ``(task_id, *, delay_seconds=0) -> None``
     (the worker's ``enqueue_task``). Transactions are kept per-company, mirroring
-    :mod:`app.jobs.scheduled`.
+    :mod:`app.jobs.scheduled``.
+
+    ``enqueue_recheck`` re-arms the provider-balance re-check for any company that
+    is paused for an empty provider account (its deferred re-check job was lost
+    with the crash). Defaults to the real arq helper; injectable for tests.
     """
+    if enqueue_recheck is None:
+        from app.runtime.queue import enqueue_provider_balance_recheck
+
+        enqueue_recheck = enqueue_provider_balance_recheck
+
     companies = 0
     requeued = 0
     restarted = 0
@@ -56,6 +74,7 @@ async def recover_pending_work(enqueue: _Enqueue) -> dict:
         companies += 1
         to_enqueue: list[uuid.UUID] = []
         restart_task_id: uuid.UUID | None = None
+        rearm_recheck = False
 
         async with SessionLocal() as db:
             await set_tenant(db, company_id)
@@ -93,6 +112,11 @@ async def recover_pending_work(enqueue: _Enqueue) -> dict:
             ) and await orchestrator._can_continue(db, company_id):
                 restart_task_id = await orchestrator.create_scheduled_run(db, company_id)
                 await db.commit()
+            # A company paused for an empty provider balance had its deferred
+            # re-check lost with the crash; re-arm it so it can still auto-resume
+            # (and resurface to the founder) once the balance is restored.
+            elif await provider_balance.is_exhausted(db, company_id):
+                rearm_recheck = True
 
         for task_id in to_enqueue:
             await enqueue(task_id)
@@ -103,5 +127,11 @@ async def recover_pending_work(enqueue: _Enqueue) -> dict:
                 restart_task_id, delay_seconds=settings.business_cycle_interval_seconds
             )
             restarted += 1
+
+        if rearm_recheck:
+            # Check promptly after restart (the balance may have been topped up
+            # while the worker was down); the re-check reschedules itself on the
+            # normal cadence if it's still empty.
+            await enqueue_recheck(company_id, delay_seconds=0)
 
     return {"companies": companies, "requeued": requeued, "restarted": restarted}

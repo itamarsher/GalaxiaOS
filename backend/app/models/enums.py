@@ -78,6 +78,11 @@ class TaskStatus(str, enum.Enum):
     running = "running"
     waiting_approval = "waiting_approval"
     auditing = "auditing"
+    # Parked because the provider account ran out of credits (the LLM vendor
+    # returned "insufficient balance"). Non-terminal: the working-memory
+    # transcript is preserved so the task resumes from its checkpoint once the
+    # founder reloads the balance and it's validated (see app.services.provider_balance).
+    paused = "paused"
     done = "done"
     failed = "failed"
     blocked = "blocked"
@@ -135,6 +140,7 @@ class DecisionKind(str, enum.Enum):
     hire_approval = "hire_approval"
     user_action = "user_action"
     external_comm = "external_comm"  # an outbound external message awaiting sign-off
+    provider_balance = "provider_balance"  # the LLM provider account is out of credits; founder must top up
 
 
 class ExternalMessageStatus(str, enum.Enum):

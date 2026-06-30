@@ -745,6 +745,26 @@ async def spawn_dm_handler_task(
     return task.id
 
 
+async def post_agent_dm(
+    db: AsyncSession, *, company_id: uuid.UUID, agent_id: uuid.UUID, body: str
+) -> ChatMessage:
+    """Post a plain status message from an agent into its founder DM thread.
+
+    For system-style updates an agent surfaces to the founder out of band (e.g.
+    the CEO reporting that the provider balance ran dry / was restored). Like
+    :func:`post_system_reply`, it deliberately bypasses :func:`post_message`'s wait
+    satisfaction — it's a display-only line and must not wake an unrelated parked
+    task.
+    """
+    channel = await founder_dm(db, company_id=company_id, agent_id=agent_id)
+    message = ChatMessage(
+        company_id=company_id, channel_id=channel.id, sender_agent_id=agent_id, body=body
+    )
+    db.add(message)
+    await db.flush()
+    return message
+
+
 async def post_decision_dm(
     db: AsyncSession, *, company_id: uuid.UUID, agent_id: uuid.UUID, summary: str
 ) -> tuple[ChatChannel, ChatMessage]:

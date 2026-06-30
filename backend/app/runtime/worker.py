@@ -7,7 +7,7 @@ import uuid
 from arq import cron
 
 from app.config import settings
-from app.db import SessionLocal
+from app.db import SessionLocal, set_tenant
 from app.jobs.recovery import recover_pending_work
 from app.jobs.scheduled import (
     backfill_memory_embeddings,
@@ -21,7 +21,8 @@ from app.providers.registry import get_provider
 from app.runtime import orchestrator
 from app.runtime.context import RuntimeContext
 from app.runtime.cost_meter import CostMeter
-from app.runtime.queue import redis_settings
+from app.runtime.queue import enqueue_provider_balance_recheck, redis_settings
+from app.services import provider_balance
 
 _log = get_logger("abos.worker")
 
@@ -29,6 +30,48 @@ _log = get_logger("abos.worker")
 async def run_task(ctx: dict, task_id: str) -> dict:
     rc: RuntimeContext = ctx["runtime"]
     return await orchestrator.run_task(rc, uuid.UUID(task_id))
+
+
+async def recheck_provider_balance(ctx: dict, company_id: str) -> dict:
+    """Re-validate a paused company's provider balance and resume if it's healthy.
+
+    Scheduled ~15 minutes after the founder says they reloaded (and re-armed each
+    cycle while the balance is still empty). Idempotent and self-terminating: once
+    the company is no longer flagged exhausted it does nothing.
+    """
+    rc: RuntimeContext = ctx["runtime"]
+    cid = uuid.UUID(company_id)
+    try:
+        async with SessionLocal() as db:
+            await set_tenant(db, cid)
+            outcome = await provider_balance.attempt_resume(db, company_id=cid)
+            await db.commit()
+    except Exception:  # noqa: BLE001
+        # Never let an unexpected error silently end the re-check loop — if the
+        # company is still flagged exhausted, re-arm and try again next cycle.
+        _log.exception(
+            "provider_balance_recheck_failed", extra={"extra_fields": {"company_id": company_id}}
+        )
+        async with SessionLocal() as db:
+            await set_tenant(db, cid)
+            still = await provider_balance.is_exhausted(db, cid)
+        if still:
+            await enqueue_provider_balance_recheck(
+                cid, delay_seconds=settings.provider_balance_recheck_seconds
+            )
+        return {"error": True, "rescheduled": still}
+    await provider_balance.dispatch_outcome(
+        outcome,
+        company_id=cid,
+        enqueue_task=rc.enqueue_task,
+        enqueue_recheck=enqueue_provider_balance_recheck,
+        recheck_delay_seconds=settings.provider_balance_recheck_seconds,
+    )
+    return {
+        "resumed": outcome.resumed,
+        "resumed_tasks": len(outcome.resumed_task_ids),
+        "still_exhausted": outcome.still_exhausted,
+    }
 
 
 async def startup(ctx: dict) -> None:
@@ -65,7 +108,7 @@ async def startup(ctx: dict) -> None:
 
 
 class WorkerSettings:
-    functions = [run_task]
+    functions = [run_task, recheck_provider_balance]
     cron_jobs = [
         cron(recompute_runway, minute=settings.runway_recompute_minute),
         cron(generate_digests, hour=settings.digest_hour_utc, minute=0),
