@@ -72,6 +72,17 @@ def test_each_prompt_mirrors_the_ventures_language():
         assert "same\nlanguage" in lower or "same language" in lower, persona
         # JSON keys/enum values stay English so parsing is unaffected.
         assert "json keys" in lower, persona
+        # The directive must NOT name a concrete language. Hardcoded examples
+        # ("respond in Hebrew") leak: the model anchors on the named language and
+        # emits it regardless of the input — which made the devil's advocate
+        # answer in Hebrew for every venture. Mirror the input's language instead.
+        for lang in ("hebrew", "spanish", "english"):
+            if lang == "english":
+                # "English" is allowed only where it pins JSON keys to English,
+                # never as the answer language ("respond in English").
+                assert "respond in english" not in lower, persona
+            else:
+                assert lang not in lower, (persona, lang)
 
 
 def test_each_prompt_sets_ai_native_operating_context():
