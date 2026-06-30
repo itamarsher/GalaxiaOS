@@ -15,13 +15,13 @@ gets its first "+1" comment too, so demand starts at 1. The marker
 human discussion on the thread.
 
 There is deliberately NO simulated tracker that fabricates an external issue
-number/URL. When no real tracker is configured, :func:`get_issue_tracker` returns
-``None`` and ``open_issue`` records the bug/feature request to the company's own
-memory instead (deduped + counted the same way) — a durable, honest internal
-artifact — so the ``request_capability`` → ``open_issue`` escalation loop still works
-offline. Real GitHub issues turn on as soon as a token is configured — a global
-``ABOS_GITHUB_TOKEN`` (no need to also set ``ABOS_ISSUE_TRACKER=github``) or a
-per-company token; set ``ABOS_ISSUE_TRACKER=none`` to force them off.
+number/URL. GitHub is the default tracker, authenticated with a centralized global
+``ABOS_GITHUB_TOKEN`` set in the deployment env. If that yields no usable tracker
+(``ABOS_ISSUE_TRACKER=none``, or the legacy ``simulated`` value with no token),
+:func:`get_issue_tracker` returns ``None`` and ``open_issue`` records the bug/feature
+request to the company's own memory instead (deduped + counted the same way) — a
+durable, honest internal artifact — so the ``request_capability`` → ``open_issue``
+escalation loop still works offline.
 """
 
 from __future__ import annotations
@@ -297,19 +297,16 @@ def get_issue_tracker(name: str | None = None) -> IssueTracker | None:
     ``open_issue`` records the request to company memory instead of fabricating an
     external issue.
 
-    A configured global ``ABOS_GITHUB_TOKEN`` is enough on its own — operators do
-    NOT also have to flip ``ABOS_ISSUE_TRACKER=github``. When a token is present we
-    file real issues unless the tracker was *explicitly* disabled with
-    ``ABOS_ISSUE_TRACKER=none``. Without this, a deployment that set a token but
-    left the tracker at its default would silently drop to internal memory and the
-    Platform agent would tell agents the GitHub token "isn't set" when it is.
+    GitHub is the default tracker, so any value other than an explicit
+    ``ABOS_ISSUE_TRACKER=none`` (and the legacy ``simulated``) routes here. We file
+    real issues whenever a global ``ABOS_GITHUB_TOKEN`` is configured; without any
+    token we return ``None`` so ``open_issue`` records the request to company memory
+    instead of 401-ing against GitHub. In production the centralized token is always
+    set, so this is effectively always-GitHub.
     """
     key = (name or settings.issue_tracker).strip().lower()
-    if key == "github":
-        return GitHubIssueTracker()
-    if key in ("", "simulated") and settings.github_token.strip():
-        # Auto-enable real GitHub issues when a global token is configured.
-        return GitHubIssueTracker()
-    if key in ("", "none", "simulated"):
+    if key == "none":
         return None
+    if key in ("github", "", "simulated"):
+        return GitHubIssueTracker() if settings.github_token.strip() else None
     raise ValueError(f"unknown issue tracker: {key!r}")
