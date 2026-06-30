@@ -33,7 +33,12 @@ from app.providers.base import LLMProvider, Message, TextBlock, ToolResultBlock,
 from app.runtime import skills as skills_lib
 from app.runtime.context import RuntimeContext
 from app.runtime.prompts import ROLE_DESCRIPTIONS, render_agent_system
-from app.runtime.tools import TOOL_SPECS, execute_tool
+from app.runtime.tools import (
+    CORE_TOOL_NAMES,
+    execute_tool,
+    resolve_tool_names,
+    specs_for,
+)
 from app.runtime.tools.base import ToolOutcome, clip
 from app.runtime.tools.base import consume_approval_grant as _consume_approval_grant
 from app.runtime.transcript import dump_messages, load_messages, sanitize_messages, transcript_lines
@@ -66,6 +71,7 @@ def _escalate_tier(tier: str, trust: float | None) -> str:
         return tier
     return _MODEL_TIERS[min(idx + 1, len(_MODEL_TIERS) - 1)]
 
+
 # Conservative pre-execution price hint (cents) for governance evaluation only.
 # Domain pricing is now quoted dynamically by the registrar at execution time
 # (see app.integrations); this hint just lets policies gate the action up front.
@@ -92,6 +98,43 @@ def _model_for(agent: Agent, provider: LLMProvider, trust: float | None = None) 
     tier = "planner" if agent.role is AgentRole.ceo else "cheap"
     tier = _escalate_tier(tier, trust)
     return provider.default_models.get(tier, provider.default_models["cheap"])
+
+
+def _names_from_use_tool_call(arguments: dict | None) -> list[str]:
+    """The valid tool names a ``use_tool`` call asked to load."""
+    raw = (arguments or {}).get("names")
+    if isinstance(raw, str):
+        raw = [raw]
+    if not isinstance(raw, list):
+        return []
+    loadable, _unknown = resolve_tool_names(raw)
+    return loadable
+
+
+def _active_tools_from_messages(messages: list[Message]) -> set[str]:
+    """Reconstruct a task's live tool set from its transcript.
+
+    The active set is the core tools plus everything the agent hot-loaded with
+    ``use_tool`` so far. Replaying it from the persisted conversation means a task
+    resumed in a fresh process keeps the tools it had discovered, with no extra
+    state to persist. (Within a single run the set is kept in memory and only grows,
+    so mid-run compaction never drops a loaded tool.)
+    """
+    active = set(CORE_TOOL_NAMES)
+    for msg in messages:
+        if msg.role != "assistant" or not isinstance(msg.content, list):
+            continue
+        for block in msg.content:
+            if isinstance(block, ToolUseBlock) and block.name == "use_tool":
+                active.update(_names_from_use_tool_call(block.input))
+    return active
+
+
+def _absorb_use_tool(active: set[str], tool_calls) -> None:
+    """Grow ``active`` with any tools the model just asked to load this step."""
+    for call in tool_calls:
+        if call.name == "use_tool":
+            active.update(_names_from_use_tool_call(call.arguments))
 
 
 class NativeBackend:
@@ -125,9 +168,7 @@ class NativeBackend:
             metrics_summary = metrics.summarize_for_prompt(signals)
 
             # Reputation drives model selection (escalate a struggling agent).
-            rep = await reputation.get_or_create(
-                db, company_id=task.company_id, agent_id=agent.id
-            )
+            rep = await reputation.get_or_create(db, company_id=task.company_id, agent_id=agent.id)
             trust = rep.trust
 
             # Connected MCP servers contribute extra, company-specific tools. Built
@@ -159,9 +200,13 @@ class NativeBackend:
             skills=skills_lib.index_for_role(agent.role.value),
             file_store_connected=file_store_connected,
         )
-        tools = list(TOOL_SPECS) + mcp_specs
         messages = self._resume_or_seed(task)
         await self._inject_audit_feedback(ctx, task, messages)
+        # Tool discovery: a task starts with only the core toolset and grows as the
+        # agent hot-loads tools with `use_tool`. Seed the live set from the transcript
+        # so a task resumed in a fresh process keeps the tools it already discovered.
+        # MCP tools (per-company, few) stay always-on alongside the core set.
+        active_tools = _active_tools_from_messages(messages)
         # Watermark for the "catch up on new chat" nudge, carried across steps so
         # each new batch of channel activity is surfaced once (on resume and while
         # running). Seeded from the persisted value and advanced as we nudge.
@@ -177,6 +222,9 @@ class NativeBackend:
         for _ in range(settings.max_steps_per_task):
             messages = await self._maybe_compact(ctx, task, provider, api_key, model, messages)
             chat_seen = await self._maybe_nudge_chat(ctx, agent, task, messages, chat_seen)
+            # Only the currently-loaded tools are offered this step; the list grows as
+            # the agent discovers and hot-loads more (see `_absorb_use_tool` below).
+            tools = specs_for(active_tools) + mcp_specs
             resp = await ctx.cost_meter.run_llm(
                 provider,
                 api_key=api_key,
@@ -192,9 +240,14 @@ class NativeBackend:
 
             if not resp.tool_calls:
                 return await self._finish_or_audit(
-                    ctx, agent, task,
+                    ctx,
+                    agent,
+                    task,
                     {"summary": clip(resp.text, settings.max_result_summary_chars)},
                 )
+
+            # Hot-load any tools the agent asked for, so they're offered next step.
+            _absorb_use_tool(active_tools, resp.tool_calls)
 
             results: list[ToolResultBlock] = []
             for call in resp.tool_calls:
@@ -589,9 +642,7 @@ class NativeBackend:
         async with ctx.session_factory() as db:
             await set_tenant(db, task.company_id)
             if await task_svc.should_audit(db, agent=agent, task=task):
-                audit_task_id = await task_svc.begin_auditing(
-                    db, child_id=task.id, output=output
-                )
+                audit_task_id = await task_svc.begin_auditing(db, child_id=task.id, output=output)
                 if audit_task_id is not None:
                     await db.commit()
         if audit_task_id is not None:
@@ -655,9 +706,7 @@ class NativeBackend:
             if isinstance(content, list):
                 content.append(note)
             else:
-                messages[-1] = Message(
-                    role="user", content=[TextBlock(text=str(content)), note]
-                )
+                messages[-1] = Message(role="user", content=[TextBlock(text=str(content)), note])
         else:
             messages.append(Message(role="user", content=[note]))
 
