@@ -48,10 +48,9 @@ GITHUB_PROVIDER = "github"
 # authorize by checking that this user is a member of the acting company, so a
 # tool call from any other tenant's Platform agent is refused.
 #
-# IMPORTANT: replace this placeholder with the real abos founder's user id before
-# the promoter can be used. An empty/placeholder value matches no membership, so
-# the gate safely denies everyone until it is set.
-ABOS_FEATURE_ADMIN_USER_ID = "00000000-0000-0000-0000-000000000000"
+# The abos founder's user id. The promoter tools only work inside a company this
+# user is a member of; any other tenant's Platform agent is refused.
+ABOS_FEATURE_ADMIN_USER_ID = "91da8f48-d302-4921-bb4a-c3f2c18eaf3d"
 
 #: Maps a backlog kind to the tracker label used when filing.
 _KIND_LABEL = {
