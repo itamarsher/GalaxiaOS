@@ -161,6 +161,7 @@ async def chat(
         decision=decision,
         message=body.message,
         history=thread,
+        user_id=user.id,
     )
     # Append this exchange and persist. Reassign (don't mutate in place) so
     # SQLAlchemy flags the JSONB column as dirty.

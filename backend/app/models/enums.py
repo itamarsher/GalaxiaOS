@@ -127,6 +127,24 @@ class MemoryType(str, enum.Enum):
     strategy_shift = "strategy_shift"
 
 
+class FeatureRequestKind(str, enum.Enum):
+    """What a backlog entry is — mirrors the agent escalation tools."""
+
+    bug = "bug"
+    capability = "capability"
+
+
+class FeatureRequestStatus(str, enum.Enum):
+    """Lifecycle of an internal feature-request backlog entry.
+
+    ``open`` accrues votes from companies/users; ``promoted`` means the abos
+    promoter has filed it as a real tracker issue (and recorded the issue number).
+    """
+
+    open = "open"
+    promoted = "promoted"
+
+
 class DecisionKind(str, enum.Enum):
     spend_approval = "spend_approval"
     risky_action = "risky_action"
