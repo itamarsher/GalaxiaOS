@@ -30,6 +30,29 @@ Field rules:
   for a "conditional" stance these are your gating requirements (may be []).
 Respond with the JSON object and nothing else."""
 
+# JSON schema matching ``_JSON_CONTRACT``. Passed to the provider so the verdict
+# is *forced* into structured JSON (Anthropic pins a tool, OpenAI uses JSON mode)
+# rather than relying on the model to hand-write clean JSON. This matters most
+# once verdicts come back in the founder's own language: prose preambles, markdown
+# fences, or non-ASCII punctuation around a hand-written object would slip past the
+# best-effort parser and surface as "(unparseable response)". Forcing the schema
+# returns guaranteed-valid JSON regardless of language. Kept permissive (no
+# ``additionalProperties`` strictness) — downstream parsing already tolerates
+# missing keys via ``.get()`` defaults.
+INVESTOR_VERDICT_SCHEMA: dict = {
+    "type": "object",
+    "properties": {
+        "stance": {"type": "string", "enum": ["invest", "conditional", "pass"]},
+        "conviction": {"type": "integer", "minimum": 0, "maximum": 100},
+        "headline": {"type": "string"},
+        "thesis": {"type": "string"},
+        "strengths": {"type": "array", "items": {"type": "string"}},
+        "risks": {"type": "array", "items": {"type": "string"}},
+        "conditions": {"type": "array", "items": {"type": "string"}},
+    },
+    "required": ["stance", "conviction", "headline", "thesis"],
+}
+
 # Shared operating-context block prepended (before the JSON contract) to every
 # persona so each judges the venture as an AI-native company rather than a
 # conventional human-run startup. Note: the deal memo deliberately omits the
