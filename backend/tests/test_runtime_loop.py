@@ -46,6 +46,18 @@ def test_render_agent_system_fills_all_slots() -> None:
         assert slot not in rendered
 
 
+def test_prompt_instructs_operating_in_founders_language() -> None:
+    """Agents must produce output in the mission's language, not default to English."""
+    rendered = render_agent_system(
+        role_desc="r", agent_directive=None, playbook=None,
+        mission="לבנות חברה", goal="g", memory="x", metrics="y",
+    )
+    assert "Operate in the founder's language" in rendered
+    assert "SAME language as the mission" in rendered
+    # The Hebrew mission is carried through verbatim for the agent to mirror.
+    assert "לבנות חברה" in rendered
+
+
 def test_prompt_instructs_distributed_collaboration() -> None:
     """Agents are told to collaborate peer-to-peer, not funnel everything via the CEO."""
     rendered = render_agent_system(

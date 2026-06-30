@@ -9,6 +9,7 @@ single persistence path handle all three.
 from __future__ import annotations
 
 from app.models.enums import InvestorPersona
+from app.runtime.prompts import GENERATION_LANGUAGE_DIRECTIVE
 
 # Shared instruction block appended to every persona prompt so the JSON contract
 # is byte-for-byte identical regardless of which investor is speaking.
@@ -55,7 +56,7 @@ INVESTOR_PERSONAS: dict[InvestorPersona, str] = {
         "perpetual fundraising. You are realistic and unsentimental: a steady, "
         "cash-generative business beats a moonshot. Reward clear paths to "
         "profitability and a sane burn rate; penalise vague monetisation and "
-        "businesses that only work at implausible scale." + _OPERATING_CONTEXT + _JSON_CONTRACT
+        "businesses that only work at implausible scale." + _OPERATING_CONTEXT + GENERATION_LANGUAGE_DIRECTIVE + _JSON_CONTRACT
     ),
     InvestorPersona.startup: (
         "You are a venture-scale (VC) investor. You hunt for outliers: enormous "
@@ -65,7 +66,7 @@ INVESTOR_PERSONAS: dict[InvestorPersona, str] = {
         "whether this can become a category-defining company, not merely a good "
         "small business. Reward ambition, market size, and compounding advantages; "
         "penalise small markets, thin differentiation, and ideas that cap out "
-        "quickly." + _OPERATING_CONTEXT + _JSON_CONTRACT
+        "quickly." + _OPERATING_CONTEXT + GENERATION_LANGUAGE_DIRECTIVE + _JSON_CONTRACT
     ),
     InvestorPersona.devils_advocate: (
         "You are the devil's advocate — the nay-sayer in the room. Your job is to "
@@ -75,6 +76,6 @@ INVESTOR_PERSONAS: dict[InvestorPersona, str] = {
         "landmines, founder/market mismatch, or economics that never close. Be "
         "skeptical and rigorous, not reflexively negative — but lean toward "
         "'pass' unless the venture genuinely survives your hardest objections. "
-        "Surface the risks everyone else is glossing over." + _OPERATING_CONTEXT + _JSON_CONTRACT
+        "Surface the risks everyone else is glossing over." + _OPERATING_CONTEXT + GENERATION_LANGUAGE_DIRECTIVE + _JSON_CONTRACT
     ),
 }

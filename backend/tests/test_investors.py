@@ -59,6 +59,21 @@ def test_each_prompt_mentions_json_and_contract():
             assert key in prompt, (persona, key)
 
 
+def test_each_prompt_mirrors_the_ventures_language():
+    """Investors must answer in the venture's language, not default to English.
+
+    The verdict prose (headline, thesis, …) was coming back in English even when
+    the founder wrote their mission in another language; every persona now carries
+    the shared language directive while keeping its JSON keys in English.
+    """
+    for persona, prompt in INVESTOR_PERSONAS.items():
+        lower = prompt.lower()
+        assert "language & locale" in lower, persona
+        assert "same\nlanguage" in lower or "same language" in lower, persona
+        # JSON keys/enum values stay English so parsing is unaffected.
+        assert "json keys" in lower, persona
+
+
 def test_each_prompt_sets_ai_native_operating_context():
     """Every persona must judge an agent-run, minimal-human venture and ignore budget."""
     for persona, prompt in INVESTOR_PERSONAS.items():
