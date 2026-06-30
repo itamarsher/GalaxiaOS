@@ -4,6 +4,38 @@ from __future__ import annotations
 
 from app.models.enums import AgentRole
 
+# ── Language & locale ─────────────────────────────────────────────────────────
+# Founders write their mission in their own language and build for their own
+# country. To let them build AND operate natively, every generated artifact and
+# every agent's output should mirror the mission's language and regional context
+# instead of defaulting to English. These two directives carry that rule across
+# the system: ``GENERATION_LANGUAGE_DIRECTIVE`` is appended to the structured
+# onboarding/review prompts (which must keep their JSON keys in English), while
+# ``OPERATING_LANGUAGE_DIRECTIVE`` is woven into the agent loop so the live
+# company speaks the founder's language. Only natural-language *values* are
+# localized — JSON keys, enum values, tool names, and arguments stay as defined,
+# so parsing and dispatch are unaffected.
+
+GENERATION_LANGUAGE_DIRECTIVE = """
+
+Language & locale: write every natural-language value in your response in the SAME
+language as the venture described to you (the founder's mission and the rest of the
+input), and reason within its country/market context (locale, currency,
+regulations). If that content is written in Hebrew, respond in Hebrew; if in
+Spanish, respond in Spanish — never default to English when the input is in another
+language. Keep all JSON keys and enumerated values (e.g. the role and stance values)
+exactly as specified here in English; only the human-readable text is in the
+founder's language."""
+
+OPERATING_LANGUAGE_DIRECTIVE = (
+    "Operate in the founder's language and locale: the company mission below sets "
+    "this company's language, country, and market context. Write your reports, "
+    "messages, deliverables, and any other natural-language output in the SAME "
+    "language as the mission, and work within its regional context (currency, "
+    "regulations, locale) unless a task says otherwise. Tool names, arguments, and "
+    "structured field keys stay exactly as defined."
+)
+
 ROLE_DESCRIPTIONS: dict[AgentRole, str] = {
     AgentRole.ceo: (
         "You are the CEO agent. You own strategy and decomposition. Given the mission and "
@@ -249,6 +281,8 @@ What the company already knows (recall from memory — build on it, don't repeat
 Current real-world metrics (act on these; do not assume outcomes):
 {metrics}
 
+{language}
+
 Company mission: {mission}
 Your current task: {goal}
 """
@@ -340,6 +374,7 @@ def render_agent_system(
         metrics=metrics,
         skills=skills,
         file_store=file_store_block(file_store_connected),
+        language=OPERATING_LANGUAGE_DIRECTIVE,
     )
 
 
@@ -371,7 +406,7 @@ agent choose the lightest mechanism that fits the budget, all built into ABOS:
 - A custom domain is optional and can be connected later, once there's signal worth it.
 Phrase the objective so progress is verifiable (e.g. "Capture 100 waitlist signups").
 
-Produce 3-4 objectives, each with 1-2 measurable key results."""
+Produce 3-4 objectives, each with 1-2 measurable key results.""" + GENERATION_LANGUAGE_DIRECTIVE
 
 PLAN_TO_ORG_SYSTEM = """You are an org designer for an AI-native company. Given objectives and a
 monthly budget (in USD cents), design the agent fleet. Respond ONLY with minified JSON:
@@ -395,7 +430,7 @@ marketing, social, ads, or a content-led product). Keep the starting fleet LEAN 
 needed to make early progress; the CEO can request the founder's approval to hire more later. Do
 NOT set per-agent
 budgets — the platform splits the monthly budget across the fleet, holding part back as an
-unallocated reserve the CEO can deploy when hiring. Functional agents report_to the ceo."""
+unallocated reserve the CEO can deploy when hiring. Functional agents report_to the ceo.""" + GENERATION_LANGUAGE_DIRECTIVE
 
 
 # JSON schemas matching the two prompts above. Providers use these to *force*
@@ -519,7 +554,7 @@ Rules:
 - Include "remove_roles" ONLY to remove agents, listing their roles.
 - If the instruction is just a question or cannot be applied, return only "reply" and omit the
   other keys.
-- Keep everything consistent with the founder's mission and budget."""
+- Keep everything consistent with the founder's mission and budget.""" + GENERATION_LANGUAGE_DIRECTIVE
 
 REFINE_SCHEMA: dict = {
     "type": "object",
