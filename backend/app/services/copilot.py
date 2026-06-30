@@ -23,7 +23,6 @@ from app.models import Agent, DecisionRequest, FounderDigest, MemoryEntry, Task
 from app.models.enums import AgentRole, AgentStatus, DecisionStatus
 from app.providers.base import Message, ToolSpec
 from app.runtime.cost_meter import CostMeter
-from app.runtime.queue import enqueue_task
 from app.services import apikeys, platform_requests
 from app.services import budget as budget_svc
 from app.services import memory as memory_svc
@@ -105,8 +104,18 @@ async def _company_state(db: AsyncSession, company_id: uuid.UUID, extra_memory=N
     return "\n".join(lines)
 
 
-async def answer(db: AsyncSession, *, company_id: uuid.UUID, question: str) -> tuple[str, str]:
-    """Return (answer_text, kind) where kind is 'query' or 'command'."""
+async def answer(
+    db: AsyncSession,
+    *,
+    company_id: uuid.UUID,
+    question: str,
+    user_id: uuid.UUID | None = None,
+) -> tuple[str, str]:
+    """Return (answer_text, kind) where kind is 'query' or 'command'.
+
+    ``user_id`` is the founder asking; it is attributed to any capability/bug
+    request this command files, so the backlog tracks who asked.
+    """
     resolved = await apikeys.resolve_provider(db, company_id=company_id)
     if resolved is None:
         return ("Add a provider API key to use the copilot.", "query")
@@ -114,7 +123,9 @@ async def answer(db: AsyncSession, *, company_id: uuid.UUID, question: str) -> t
 
     if question.strip().lower().startswith(_COMMAND_VERBS):
         action = await _parse_command(provider, company_id, api_key, question)
-        text = await _execute_command(db, company_id=company_id, action=action)
+        text = await _execute_command(
+            db, company_id=company_id, action=action, user_id=user_id
+        )
         return (text, "command")
 
     relevant = await memory_svc.query(db, company_id=company_id, text=question, limit=8)
@@ -171,7 +182,13 @@ async def _resolve_agents(db, company_id: uuid.UUID, action: dict) -> list[Agent
     return list((await db.scalars(stmt)).all())
 
 
-async def _execute_command(db: AsyncSession, *, company_id: uuid.UUID, action: dict) -> str:
+async def _execute_command(
+    db: AsyncSession,
+    *,
+    company_id: uuid.UUID,
+    action: dict,
+    user_id: uuid.UUID | None = None,
+) -> str:
     kind = action.get("action")
 
     if kind == "pause_low_roi_agents":
@@ -203,23 +220,35 @@ async def _execute_command(db: AsyncSession, *, company_id: uuid.UUID, action: d
             "Capability request" if req_kind == "capability" else "Bug report"
         )
         details = str(action.get("details") or "").strip() or title
-        task_id = await platform_requests.file_request(
-            db, company_id=company_id, kind=req_kind, title=title, details=details
+        outcome = await platform_requests.file_request(
+            db, company_id=company_id, kind=req_kind, title=title, details=details,
+            user_id=user_id,
         )
-        if task_id is None:
-            return (
-                "I couldn't file that — this company has no Platform agent to handle it."
-            )
-        # Commit before enqueueing so the worker can't race ahead of the write.
-        await db.commit()
-        await enqueue_task(task_id)
-        noun = "capability request" if req_kind == "capability" else "bug report"
-        return (
-            f"Filed a {noun} with the Platform agent: “{title}”. It will investigate the "
-            "codebase and open a tracker issue."
-        )
+        if outcome is None:
+            return "I couldn't file that — I couldn't tell if it was a bug or a capability request."
+        return _confirm_request(req_kind, outcome)
 
     return "I couldn't map that to a supported command. Try: pause/resume agents, or pause agents below an ROI threshold."
+
+
+def _confirm_request(req_kind: str, outcome) -> str:
+    """Founder-facing confirmation that a request was logged to the backlog."""
+    noun = "capability request" if req_kind == "capability" else "bug report"
+    if outcome.is_new_feature:
+        return (
+            f"Logged a {noun} in the feature-request backlog: “{outcome.title}” "
+            f"(demand: {outcome.votes}). The abos team's promoter reviews the backlog "
+            "and files it as a tracker issue when there's enough demand."
+        )
+    if outcome.is_new_vote:
+        return (
+            f"That {noun} already exists — added your vote for “{outcome.title}” "
+            f"(demand now {outcome.votes})."
+        )
+    return (
+        f"You'd already requested “{outcome.title}”; it stays at {outcome.votes} "
+        "vote(s). I refreshed the details."
+    )
 
 
 #: Cap replayed discussion turns so a long thread can't blow the context window.
@@ -227,7 +256,13 @@ _DECISION_CHAT_HISTORY_LIMIT = 20
 
 
 async def discuss_decision(
-    db: AsyncSession, *, company_id: uuid.UUID, decision, message: str, history=None
+    db: AsyncSession,
+    *,
+    company_id: uuid.UUID,
+    decision,
+    message: str,
+    history=None,
+    user_id: uuid.UUID | None = None,
 ) -> str:
     """Answer a founder's question about a specific pending decision.
 
@@ -291,17 +326,20 @@ async def discuss_decision(
         max_tokens=600,
     )
 
-    # If the agent chose to file a capability/bug request, actually file it.
-    filed = await _handle_platform_tool_calls(db, company_id=company_id, resp=resp)
+    # If the agent chose to file a capability/bug request, actually record it.
+    filed = await _handle_platform_tool_calls(
+        db, company_id=company_id, resp=resp, user_id=user_id
+    )
     if filed:
         return (resp.text + "\n\n" if resp.text else "") + "\n".join(filed)
     return resp.text
 
 
-async def _handle_platform_tool_calls(db, *, company_id: uuid.UUID, resp) -> list[str]:
-    """Execute any request_capability/report_bug tool calls; return confirmations."""
+async def _handle_platform_tool_calls(
+    db, *, company_id: uuid.UUID, resp, user_id: uuid.UUID | None = None
+) -> list[str]:
+    """Record any request_capability/report_bug tool calls to the backlog."""
     confirmations: list[str] = []
-    enqueue_ids: list[uuid.UUID] = []
     for call in resp.tool_calls or []:
         if call.name not in ("request_capability", "report_bug"):
             continue
@@ -311,22 +349,15 @@ async def _handle_platform_tool_calls(db, *, company_id: uuid.UUID, resp) -> lis
             "Capability request" if req_kind == "capability" else "Bug report"
         )
         details = str(args.get("details") or "").strip() or title
-        task_id = await platform_requests.file_request(
-            db, company_id=company_id, kind=req_kind, title=title, details=details
+        outcome = await platform_requests.file_request(
+            db, company_id=company_id, kind=req_kind, title=title, details=details,
+            user_id=user_id,
         )
         noun = "capability request" if req_kind == "capability" else "bug report"
-        if task_id is None:
-            confirmations.append(f"(Couldn't file the {noun} — no Platform agent exists.)")
+        if outcome is None:
+            confirmations.append(f"(Couldn't record the {noun}.)")
         else:
-            enqueue_ids.append(task_id)
-            confirmations.append(
-                f"✅ Filed a {noun} with the Platform agent: “{title}”. It will investigate and "
-                "open a tracker issue."
-            )
-    if enqueue_ids:
-        await db.commit()  # commit the new task(s) before enqueueing
-        for task_id in enqueue_ids:
-            await enqueue_task(task_id)
+            confirmations.append("✅ " + _confirm_request(req_kind, outcome))
     return confirmations
 
 

@@ -36,6 +36,9 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
   const router = useRouter();
   const base = `/c/${params.id}`;
   const channels = usePoll(() => api.chatChannels(params.id), 8000, [params.id]);
+  // TEMP: surface the logged-in user's id so it can be copied for the abos
+  // feature-request promoter gate (ABOS_FEATURE_ADMIN_USER_ID). Remove once set.
+  const meQuery = usePoll(() => api.me(), 0, []);
   const convos = channels.data ?? [];
   const activeChannel = search.get("channel");
   const onChat = pathname === `${base}/chat`;
@@ -144,6 +147,29 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
       </aside>
 
       <main className="shell-main">
+        {/* TEMP: your user id, for the abos promoter gate. Remove once configured. */}
+        {meQuery.data && (
+          <div
+            style={{
+              padding: "6px 12px",
+              background: "#fef3c7",
+              color: "#92400e",
+              fontSize: 13,
+              fontFamily: "monospace",
+              borderBottom: "1px solid #fde68a",
+            }}
+          >
+            TEMP — your user id:{" "}
+            <code
+              style={{ userSelect: "all", cursor: "pointer" }}
+              title="Click to select, then copy"
+              onClick={() => navigator.clipboard?.writeText(meQuery.data!.id)}
+            >
+              {meQuery.data.id}
+            </code>{" "}
+            ({meQuery.data.email})
+          </div>
+        )}
         <div className="dash">{children}</div>
       </main>
     </div>

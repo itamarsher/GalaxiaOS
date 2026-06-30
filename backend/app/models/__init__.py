@@ -22,6 +22,7 @@ from app.models.chat import (
 from app.models.comms import ExternalMessage
 from app.models.company import Company
 from app.models.crm import CrmActivity, CrmContact, CrmDeal
+from app.models.feature_request import FeatureRequest, FeatureRequestVote
 from app.models.file import CompanyFile
 from app.models.founder import FounderDigest
 from app.models.governance import (
@@ -49,6 +50,8 @@ __all__ = [
     "CrmContact",
     "CrmDeal",
     "CrmActivity",
+    "FeatureRequest",
+    "FeatureRequestVote",
     "CompanyFile",
     "Mission",
     "Objective",

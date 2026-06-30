@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
-from app.deps import CompanyDep, DbDep
+from app.deps import CompanyDep, CurrentUser, DbDep
 from app.schemas import CopilotAskRequest, CopilotAskResponse
 from app.services import copilot
 
@@ -28,8 +28,10 @@ async def latest_digest(company: CompanyDep, db: DbDep):
 
 
 @router.post("/copilot/ask", response_model=CopilotAskResponse)
-async def ask(company: CompanyDep, body: CopilotAskRequest, db: DbDep):
-    text, kind = await copilot.answer(db, company_id=company.id, question=body.question)
+async def ask(company: CompanyDep, body: CopilotAskRequest, db: DbDep, user: CurrentUser):
+    text, kind = await copilot.answer(
+        db, company_id=company.id, question=body.question, user_id=user.id
+    )
     await db.commit()
     return CopilotAskResponse(answer=text, kind=kind)
 

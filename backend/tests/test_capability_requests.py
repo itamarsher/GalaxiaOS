@@ -9,9 +9,10 @@ from __future__ import annotations
 
 import base64
 import os
+import uuid
 from types import SimpleNamespace
 
-from sqlalchemy import func, select
+from sqlalchemy import select
 
 from app.integrations.tavily import TavilyWebSearch
 from app.models import Agent, Task
@@ -30,13 +31,6 @@ def _set_master_key() -> None:
     from app.config import settings as app_settings
 
     app_settings.master_key = base64.urlsafe_b64encode(os.urandom(32)).decode()
-
-
-async def _add_platform_agent(db, company_id):
-    agent = Agent(company_id=company_id, role=AgentRole.platform, name="Platform")
-    db.add(agent)
-    await db.flush()
-    return agent
 
 
 async def _make_agent_task(db, company_id):
@@ -60,44 +54,63 @@ async def _make_agent_task(db, company_id):
     return agent, task
 
 
-# ── file_request service ──────────────────────────────────────────────────────
+# ── file_request service → feature-request backlog ────────────────────────────
 
 
 @requires_db
-async def test_file_request_creates_task_for_platform_agent(session_factory, company_with_budget):
-    async with session_factory() as db:
-        await _add_platform_agent(db, company_with_budget)
-        await db.commit()
+async def test_file_request_records_to_backlog(session_factory, company_with_budget):
+    from app.models import FeatureRequest, FeatureRequestVote
+    from app.models.enums import FeatureRequestKind
 
     async with session_factory() as db:
-        task_id = await platform_requests.file_request(
+        outcome = await platform_requests.file_request(
             db, company_id=company_with_budget, kind="capability",
             title="Real web search", details="agents only get simulated results",
         )
         await db.commit()
 
-    assert task_id is not None
+    assert outcome is not None
+    assert outcome.is_new_feature is True
+    assert outcome.votes == 1
     async with session_factory() as db:
-        task = await db.get(Task, task_id)
-        agent = await db.get(Agent, task.agent_id)
-    assert agent.role is AgentRole.platform
-    assert "REQUESTED A CAPABILITY" in task.goal
+        fr = await db.get(FeatureRequest, outcome.feature_id)
+        votes = (await db.scalars(select(FeatureRequestVote))).all()
+    assert fr.kind is FeatureRequestKind.capability
+    assert len(votes) == 1
+    assert votes[0].company_id == company_with_budget
 
 
 @requires_db
-async def test_file_request_without_platform_agent_returns_none(session_factory, company_with_budget):
+async def test_file_request_attributes_user_and_dedupes(session_factory, company_with_budget):
+    """Two users in one company asking the same thing → one entry, two votes."""
+    from app.models import Company, FeatureRequest, FeatureRequestVote, User
+
     async with session_factory() as db:
-        task_id = await platform_requests.file_request(
-            db, company_id=company_with_budget, kind="bug", title="x", details="y"
-        )
-    assert task_id is None
+        # The fixture made an owner user; add a second user in the same company.
+        company = await db.get(Company, company_with_budget)
+        u2 = User(email=f"{uuid.uuid4()}@t.io", hashed_password="x")
+        db.add(u2)
+        await db.flush()
+        owner_id, second_id = company.owner_user_id, u2.id
+        await db.commit()
+
+    for uid in (owner_id, second_id, owner_id):  # owner asks twice → still one vote
+        async with session_factory() as db:
+            await platform_requests.file_request(
+                db, company_id=company_with_budget, kind="capability",
+                title="Real web search", details="need it", user_id=uid,
+            )
+            await db.commit()
+
+    async with session_factory() as db:
+        frs = (await db.scalars(select(FeatureRequest))).all()
+        votes = (await db.scalars(select(FeatureRequestVote))).all()
+    assert len(frs) == 1 and frs[0].vote_count == 2  # two distinct users
+    assert {v.user_id for v in votes} == {owner_id, second_id}
 
 
 @requires_db
 async def test_file_request_unknown_kind_returns_none(session_factory, company_with_budget):
-    async with session_factory() as db:
-        await _add_platform_agent(db, company_with_budget)
-        await db.commit()
     async with session_factory() as db:
         assert await platform_requests.file_request(
             db, company_id=company_with_budget, kind="nonsense", title="x", details="y"
@@ -108,18 +121,10 @@ async def test_file_request_unknown_kind_returns_none(session_factory, company_w
 
 
 @requires_db
-async def test_copilot_command_files_capability_request(
-    session_factory, company_with_budget, monkeypatch
+async def test_copilot_command_records_capability_request(
+    session_factory, company_with_budget
 ):
-    enqueued: list = []
-
-    async def _fake_enqueue(task_id, **_):
-        enqueued.append(task_id)
-
-    monkeypatch.setattr(copilot, "enqueue_task", _fake_enqueue)
-    async with session_factory() as db:
-        await _add_platform_agent(db, company_with_budget)
-        await db.commit()
+    from app.models import FeatureRequest
 
     async with session_factory() as db:
         text = await copilot._execute_command(
@@ -128,30 +133,20 @@ async def test_copilot_command_files_capability_request(
             action={"action": "request_capability", "title": "Real web search",
                     "details": "only simulated results today"},
         )
+        await db.commit()
 
-    assert "Filed a capability request" in text
-    assert len(enqueued) == 1
+    assert "backlog" in text.lower()
     async with session_factory() as db:
-        n = await db.scalar(
-            select(func.count()).select_from(Task).where(Task.company_id == company_with_budget)
-        )
-    assert n == 1
+        fr = await db.scalar(select(FeatureRequest))
+    assert fr is not None and fr.title == "Real web search" and fr.vote_count == 1
 
 
 # ── decision-discuss tool handling ────────────────────────────────────────────
 
 
 @requires_db
-async def test_discuss_tool_call_files_request(session_factory, company_with_budget, monkeypatch):
-    enqueued: list = []
-
-    async def _fake_enqueue(task_id, **_):
-        enqueued.append(task_id)
-
-    monkeypatch.setattr(copilot, "enqueue_task", _fake_enqueue)
-    async with session_factory() as db:
-        await _add_platform_agent(db, company_with_budget)
-        await db.commit()
+async def test_discuss_tool_call_records_request(session_factory, company_with_budget):
+    from app.models import FeatureRequest
 
     resp = SimpleNamespace(
         text="On it.",
@@ -162,9 +157,12 @@ async def test_discuss_tool_call_files_request(session_factory, company_with_bud
         confirmations = await copilot._handle_platform_tool_calls(
             db, company_id=company_with_budget, resp=resp
         )
+        await db.commit()
 
-    assert confirmations and "Filed a capability request" in confirmations[0]
-    assert len(enqueued) == 1
+    assert confirmations and "backlog" in confirmations[0].lower()
+    async with session_factory() as db:
+        fr = await db.scalar(select(FeatureRequest))
+    assert fr is not None and fr.title == "Real web search"
 
 
 # ── per-company web search key ────────────────────────────────────────────────
