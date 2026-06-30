@@ -48,7 +48,6 @@ async function req<T>(path: string, init: RequestInit = {}): Promise<T> {
 
 // ── Types ────────────────────────────────────────────────────────────────────
 export interface TokenResponse { access_token: string; token_type: string }
-export interface UserOut { id: string; email: string }
 export interface Company { id: string; name: string; status: string; mission_id: string | null; email_from: string | null }
 export interface ApiKey { id: string; provider: string; key_fingerprint: string; status: string }
 export interface CloudflareStatus { configured: boolean; account_id: string | null }
@@ -188,8 +187,6 @@ export const api = {
 
   signup: (email: string, password: string) =>
     req<TokenResponse>("/auth/signup", { method: "POST", body: JSON.stringify({ email, password }) }),
-
-  me: () => req<UserOut>("/auth/me"),
 
   myCompanies: () => req<Company[]>("/companies"),
 
