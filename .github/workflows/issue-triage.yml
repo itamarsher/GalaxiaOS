@@ -1,0 +1,43 @@
+name: Issue triage agent
+
+# When an issue is filed, an autonomous agent investigates it against the
+# codebase and either closes it (invalid/duplicate/out-of-scope) or, if it's
+# actionable, posts implementation notes and labels it `claude:implement` —
+# which hands off to the issue-implement workflow.
+on:
+  issues:
+    types: [opened]
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  triage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          # The triage agent only reads code and talks to the issue tracker; it
+          # never writes code in this step.
+          claude_args: "--allowedTools Bash(gh:*),Read,Grep,Glob"
+          prompt: |
+            Triage issue #${{ github.event.issue.number }} in this repository.
+            Investigate it against the codebase, then take EXACTLY ONE action
+            using the gh CLI:
+
+            - NOT actionable (invalid, spam, a duplicate of an existing issue,
+              out of scope, or too vague to act on): post a comment explaining
+              why, then close the issue.
+            - Actionable and reasonably scoped: post a comment whose first line
+              is exactly "## Implementation notes", describing the root cause and
+              the approach a developer should take. Then add the label
+              "claude:implement" (create it with `gh label create` if missing).
+              Do NOT write code in this step.
+            - Genuinely ambiguous or very large: post clarifying questions / a
+              scoping note and leave it open with no label.
+
+            Keep the change scoped to what the issue asks. Prefer leaving it open
+            for a human over guessing at a risky or large refactor.
