@@ -59,6 +59,30 @@ def test_each_prompt_mentions_json_and_contract():
             assert key in prompt, (persona, key)
 
 
+def test_verdict_schema_covers_the_contract():
+    """The forced-JSON schema must cover every field of the verdict contract.
+
+    The review passes this schema to the provider so the verdict is forced into
+    valid JSON (Anthropic pins a tool, OpenAI JSON mode) instead of being
+    hand-written — otherwise a verdict in the founder's language could arrive
+    wrapped in prose/fences and surface as "(unparseable response)".
+    """
+    from app.runtime.investor_prompts import INVESTOR_VERDICT_SCHEMA
+
+    props = INVESTOR_VERDICT_SCHEMA["properties"]
+    for key in ("stance", "conviction", "headline", "thesis", "strengths", "risks", "conditions"):
+        assert key in props, key
+    assert props["stance"]["enum"] == ["invest", "conditional", "pass"]
+
+
+def test_review_forces_structured_json_output():
+    """``review`` must pass the verdict schema so output is parseable in any language."""
+    import inspect
+
+    src = inspect.getsource(investors.review)
+    assert "json_schema=INVESTOR_VERDICT_SCHEMA" in src
+
+
 def test_each_prompt_mirrors_the_ventures_language():
     """Investors must answer in the venture's language, not default to English.
 

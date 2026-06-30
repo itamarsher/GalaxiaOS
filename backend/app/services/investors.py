@@ -22,7 +22,7 @@ from app.models.enums import InvestmentStance
 from app.observability import get_logger
 from app.providers.base import Message
 from app.runtime.cost_meter import CostMeter
-from app.runtime.investor_prompts import INVESTOR_PERSONAS
+from app.runtime.investor_prompts import INVESTOR_PERSONAS, INVESTOR_VERDICT_SCHEMA
 from app.services import apikeys
 
 _log = get_logger("abos.investors")
@@ -148,6 +148,7 @@ async def review(db: AsyncSession, *, company: Company) -> list[InvestmentReview
                 system=system,
                 messages=[Message(role="user", content=deal_memo)],
                 max_tokens=1200,
+                json_schema=INVESTOR_VERDICT_SCHEMA,
             )
         except Exception:  # noqa: BLE001 - one persona must not abort the rest
             _log.exception("investor LLM call failed for persona %s", persona.value)
