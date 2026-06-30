@@ -18,14 +18,14 @@ from app.models.enums import AgentRole
 
 GENERATION_LANGUAGE_DIRECTIVE = """
 
-Language & locale: write every natural-language value in your response in the SAME
-language as the venture described to you (the founder's mission and the rest of the
-input), and reason within its country/market context (locale, currency,
-regulations). If that content is written in Hebrew, respond in Hebrew; if in
-Spanish, respond in Spanish — never default to English when the input is in another
-language. Keep all JSON keys and enumerated values (e.g. the role and stance values)
-exactly as specified here in English; only the human-readable text is in the
-founder's language."""
+Language & locale: detect the language the input is written in (the founder's mission
+and the rest of the content described to you) and write every natural-language value
+in your response in that same language, reasoning within its country/market context
+(locale, currency, regulations). Mirror the input's language exactly: do not
+translate it, do not switch to a different language, and do not default to English
+when the input is in another language. Keep all JSON keys and enumerated values (e.g.
+the role and stance values) exactly as specified here in English; only the
+human-readable text is in the founder's language."""
 
 OPERATING_LANGUAGE_DIRECTIVE = (
     "Operate in the founder's language and locale: the company mission below sets "
