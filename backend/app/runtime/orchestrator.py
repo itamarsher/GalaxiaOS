@@ -27,7 +27,7 @@ from app.models.enums import (
     RunTrigger,
     TaskStatus,
 )
-from app.runtime import breakers
+from app.runtime import breakers, prompts
 from app.runtime.backends import get_backend
 from app.runtime.context import RuntimeContext
 from app.runtime.tools.base import clip
@@ -204,19 +204,97 @@ async def has_active_tasks(db: AsyncSession, company_id: uuid.UUID) -> bool:
     return bool(count and count > 0)
 
 
+def _should_run_retrospective(
+    *,
+    enabled: bool,
+    trigger: RunTrigger,
+    retro_already_ran: bool,
+    worked_roles: list[str],
+) -> bool:
+    """Decide whether a winding-down run should spawn its retrospective stage.
+
+    Pure so the branch is unit-testable without a database. The retrospective
+    runs once, at the end of a recurring business cycle (``scheduled`` run), and
+    only when some functional agent actually did work worth reflecting on.
+    """
+    return bool(enabled and trigger is RunTrigger.scheduled and not retro_already_ran and worked_roles)
+
+
+async def _retro_already_ran(db: AsyncSession, root_run_id: uuid.UUID) -> bool:
+    """True if this run already contains its CEO retrospective task (the marker)."""
+    count = await db.scalar(
+        select(func.count(Task.id)).where(
+            Task.root_run_id == root_run_id,
+            Task.input["retrospective"].as_boolean().is_(True),
+        )
+    )
+    return bool(count and count > 0)
+
+
+async def _worked_roles(db: AsyncSession, root_run_id: uuid.UUID) -> list[str]:
+    """The distinct functional roles (not the CEO) that completed work in this run."""
+    rows = await db.execute(
+        select(Agent.role)
+        .join(Task, Task.agent_id == Agent.id)
+        .where(
+            Task.root_run_id == root_run_id,
+            Task.status == TaskStatus.done,
+            Agent.role != AgentRole.ceo,
+        )
+        .distinct()
+    )
+    return [role.value for role in rows.scalars().all()]
+
+
+async def _create_ceo_retro_task(
+    db: AsyncSession, run: AgentRun, worked_roles: list[str]
+) -> uuid.UUID | None:
+    """Add the CEO's end-of-cycle retrospective task to the winding-down run.
+
+    Marked with ``input.retrospective`` so a later wind-down recognises the retro
+    has already run (via :func:`_retro_already_ran`) and closes the run instead of
+    looping. Lives in the *same* run as the cycle's work so its own completion
+    flows back through the normal wind-down path.
+    """
+    ceo = await db.scalar(
+        select(Agent).where(Agent.company_id == run.company_id, Agent.role == AgentRole.ceo)
+    )
+    if ceo is None:
+        return None
+    task = Task(
+        company_id=run.company_id,
+        run_id=run.id,
+        root_run_id=run.id,
+        agent_id=ceo.id,
+        depth=0,
+        goal=prompts.RETROSPECTIVE_CEO_GOAL.format(roles=", ".join(worked_roles)),
+        input={"retrospective": True},
+        status=TaskStatus.queued,
+        loop_signature=breakers.loop_signature(ceo.id, f"retrospective {run.id}"),
+    )
+    db.add(task)
+    await db.flush()
+    return task.id
+
+
 async def _maybe_continue_cycle(
     ctx: RuntimeContext, *, company_id: uuid.UUID, root_run_id: uuid.UUID
 ) -> None:
-    """Start the next cycle once the current run has fully wound down.
+    """Wind a run down: run the end-of-cycle retrospective, then start the next cycle.
 
-    Idempotent under races: the finishing task that first flips the run row to
-    ``done`` (under ``FOR UPDATE``) is the only one that enqueues the next cycle,
-    so concurrent finishers can't double-launch it.
+    When a business cycle's work is done, the CEO first runs a retrospective stage
+    (each agent that worked reflects; the CEO ingests and acts). Only once THAT has
+    also wound down does the run close and the next cycle begin.
+
+    Idempotent under races: the finishing task that first claims the run row (under
+    ``FOR UPDATE``) is the only one that spawns the retrospective or flips the run to
+    ``done``, so concurrent finishers can't double-launch either.
     """
     if not (settings.business_cycle_enabled and settings.business_cycle_continuous):
         return
 
     next_task_id: uuid.UUID | None = None
+    retro_task_id: uuid.UUID | None = None
     async with ctx.session_factory() as db:
         await set_tenant(db, company_id)
 
@@ -229,20 +307,48 @@ async def _maybe_continue_cycle(
         if active and active > 0:
             return
 
-        # Claim the run: only the first finisher flips it to done and continues.
+        # Claim the run: only the first finisher acts on the wind-down.
         run = await db.scalar(
             select(AgentRun).where(AgentRun.id == root_run_id).with_for_update().limit(1)
         )
         if run is None or run.status is not RunStatus.running:
             return
-        run.status = RunStatus.done
-        await db.flush()
+        # Re-check under the lock: a sibling may have queued more work between the
+        # unlocked count above and claiming the run.
+        active = await db.scalar(
+            select(func.count(Task.id)).where(
+                Task.root_run_id == root_run_id, Task.status.in_(_ACTIVE_TASK_STATUSES)
+            )
+        )
+        if active and active > 0:
+            return
 
-        if await _can_continue(db, company_id):
-            next_task_id = await create_scheduled_run(db, company_id)
-        await db.commit()
+        retro_ran = await _retro_already_ran(db, root_run_id)
+        worked_roles = [] if retro_ran else await _worked_roles(db, root_run_id)
+        if _should_run_retrospective(
+            enabled=settings.business_cycle_retrospective_enabled,
+            trigger=run.trigger,
+            retro_already_ran=retro_ran,
+            worked_roles=worked_roles,
+        ):
+            # Keep the run open and hand it to the CEO for the retrospective; the
+            # run closes on the NEXT wind-down, once the retro has finished too.
+            retro_task_id = await _create_ceo_retro_task(db, run, worked_roles)
 
-    if next_task_id is not None:
+        if retro_task_id is not None:
+            await db.commit()
+        else:
+            # No retrospective to run (disabled, not a cycle, already done, no work,
+            # or no CEO) — close the run and continue to the next cycle as usual.
+            run.status = RunStatus.done
+            await db.flush()
+            if await _can_continue(db, company_id):
+                next_task_id = await create_scheduled_run(db, company_id)
+            await db.commit()
+
+    if retro_task_id is not None:
+        await ctx.enqueue_task(retro_task_id)
+    elif next_task_id is not None:
         await ctx.enqueue_task(
             next_task_id, delay_seconds=settings.business_cycle_interval_seconds
         )

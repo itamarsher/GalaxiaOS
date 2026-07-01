@@ -256,6 +256,11 @@ class Settings(BaseSettings):
     business_cycle_continuous: bool = True
     business_cycle_interval_seconds: int = 120  # delay between auto-continued cycles
     business_cycle_min_budget_cents: int = 50  # pause auto-continuation below this
+    # End-of-cycle retrospective: before a business cycle closes, the CEO runs a
+    # retrospective stage — every agent that did work this cycle reflects (what went
+    # right/wrong, impactful improvement suggestions) and the CEO ingests it, deciding
+    # what to implement now vs. route to the Platform agent as a capability request.
+    business_cycle_retrospective_enabled: bool = True
 
     # Start lean: at launch the platform allocates only part of the monthly budget
     # across the starting fleet and leaves the rest as an unallocated pool the CEO
