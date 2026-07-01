@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from app.models.enums import AgentRole
 from app.providers.base import Message, ToolResultBlock, ToolUseBlock
 from app.runtime import skills as skills_lib
 from app.runtime.backends.native import NativeBackend
@@ -31,6 +32,36 @@ def test_skill_role_scoping() -> None:
 def test_index_for_role_is_nonempty_bullets() -> None:
     idx = skills_lib.index_for_role("ceo")
     assert idx.startswith("- ")
+
+
+# ── Business-function skill library ─────────────────────────────────────────────
+def test_library_has_full_business_function_catalog() -> None:
+    # The library ships a broad catalog of business-function playbooks (≥100).
+    assert len(skills_lib.all_skills()) >= 100
+
+
+def test_all_skills_are_wellformed() -> None:
+    valid_roles = {r.value for r in AgentRole}
+    seen: set[str] = set()
+    for s in skills_lib.all_skills():
+        assert s.name not in seen, f"duplicate skill name: {s.name}"
+        seen.add(s.name)
+        assert s.title, f"{s.name}: missing title"
+        assert s.description, f"{s.name}: missing description"
+        # Rich playbooks, not stubs — front matter stripped, real body retained.
+        assert len(s.body) >= 200, f"{s.name}: body too short ({len(s.body)})"
+        for role in s.roles:
+            assert role in valid_roles, f"{s.name}: unknown role {role!r}"
+
+
+def test_every_operating_role_has_skills() -> None:
+    # Each canonical operating role gets a non-empty skill index (custom is a
+    # user-defined catch-all and may legitimately have none of its own).
+    for role in AgentRole:
+        if role is AgentRole.custom:
+            continue
+        idx = skills_lib.index_for_role(role.value)
+        assert idx.startswith("- "), f"role {role.value} has no skills indexed"
 
 
 # ── MCP tool exposure ───────────────────────────────────────────────────────────
