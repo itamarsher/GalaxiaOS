@@ -2,7 +2,7 @@ name: Issue triage agent
 
 # When an issue is filed, an autonomous agent investigates it against the
 # codebase and either closes it (invalid/duplicate/out-of-scope) or, if it's
-# actionable, posts implementation notes and labels it `claude:implement` —
+# actionable, posts implementation notes and labels it `claude-implement` —
 # which hands off to the issue-implement workflow.
 on:
   issues:
@@ -34,7 +34,7 @@ jobs:
             - Actionable and reasonably scoped: post a comment whose first line
               is exactly "## Implementation notes", describing the root cause and
               the approach a developer should take. Then add the label
-              "claude:implement" (create it with `gh label create` if missing).
+              "claude-implement" (create it with `gh label create` if missing).
               Do NOT write code in this step.
             - Genuinely ambiguous or very large: post clarifying questions / a
               scoping note and leave it open with no label.
