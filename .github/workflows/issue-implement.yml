@@ -1,7 +1,7 @@
 name: Issue implement agent
 
 # Fires only when the triage agent (or a maintainer) applies the
-# `claude:implement` label. Claude reads the issue + the triage agent's
+# `claude-implement` label. Claude reads the issue + the triage agent's
 # "Implementation notes" comment, implements the fix on a branch, and opens a PR
 # that closes the issue. The PR is gated by CI + human review — nothing lands on
 # the default branch automatically.
@@ -16,7 +16,7 @@ permissions:
 
 jobs:
   implement:
-    if: github.event.label.name == 'claude:implement'
+    if: github.event.label.name == 'claude-implement'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
