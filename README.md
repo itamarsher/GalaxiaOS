@@ -52,6 +52,13 @@ See the full design in the plan referenced from the project history.
   before any charge.
 - **Live runtime**: native agent loop, CEO-as-planner orchestration, circuit breakers,
   declarative policy engine, founder decision inbox.
+- **End-of-cycle retrospective**: before each business cycle closes, the CEO runs a
+  retrospective — every agent that did work reflects (what went right/wrong, and only
+  *impactful* improvement suggestions, targeting anything in its context: memory,
+  playbook, directives, skills, or missing tools). The CEO ingests them and decides
+  what to implement now with its own levers (playbook/directive/memory) versus route to
+  the Platform agent as a `request_capability`. Agents are told a genuinely empty
+  retrospective beats padded filler.
 - **External-comms index & approval gate**: every outbound message the fleet sends
   (email, social post, published page, ad, notification) is indexed at the agent
   loop's tool chokepoint into one auditable log. A toggleable governance policy

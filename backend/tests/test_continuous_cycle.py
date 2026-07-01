@@ -60,6 +60,171 @@ async def _make_run(session_factory, company_id, *, task_status):
         return run.id
 
 
+async def _make_cycle_run(
+    session_factory,
+    company_id,
+    *,
+    functional_role=AgentRole.growth,
+    functional_status=TaskStatus.done,
+    with_retro_marker=False,
+):
+    """A wound-down *scheduled* cycle run: a done CEO task plus one functional task.
+
+    When ``with_retro_marker`` is set, a completed CEO retrospective task is also
+    present, simulating the second wind-down (retro already ran).
+    """
+    async with session_factory() as db:
+        ceo = Agent(company_id=company_id, role=AgentRole.ceo, name="CEO")
+        func = Agent(company_id=company_id, role=functional_role, name="Fn")
+        db.add_all([ceo, func])
+        await db.flush()
+        run = AgentRun(
+            company_id=company_id, trigger=RunTrigger.scheduled, status=RunStatus.running
+        )
+        db.add(run)
+        await db.flush()
+        run.root_run_id = run.id
+        db.add_all(
+            [
+                Task(
+                    company_id=company_id, run_id=run.id, root_run_id=run.id,
+                    agent_id=ceo.id, goal="plan cycle", status=TaskStatus.done,
+                ),
+                Task(
+                    company_id=company_id, run_id=run.id, root_run_id=run.id,
+                    agent_id=func.id, goal="do work", status=functional_status,
+                ),
+            ]
+        )
+        if with_retro_marker:
+            db.add(
+                Task(
+                    company_id=company_id, run_id=run.id, root_run_id=run.id,
+                    agent_id=ceo.id, goal="retro", status=TaskStatus.done,
+                    input={"retrospective": True},
+                )
+            )
+        await db.commit()
+        return run.id
+
+
+# ── End-of-cycle retrospective ──────────────────────────────────────────────────
+def test_should_run_retrospective_decision() -> None:
+    # Fires only for a scheduled cycle that hasn't retro'd yet and had real work.
+    assert orchestrator._should_run_retrospective(
+        enabled=True, trigger=RunTrigger.scheduled, retro_already_ran=False,
+        worked_roles=["growth"],
+    )
+    # Not for the onboarding/launch run.
+    assert not orchestrator._should_run_retrospective(
+        enabled=True, trigger=RunTrigger.onboarding, retro_already_ran=False,
+        worked_roles=["growth"],
+    )
+    # Not once the retro has already run (prevents recursion).
+    assert not orchestrator._should_run_retrospective(
+        enabled=True, trigger=RunTrigger.scheduled, retro_already_ran=True,
+        worked_roles=["growth"],
+    )
+    # Not when no functional agent did work.
+    assert not orchestrator._should_run_retrospective(
+        enabled=True, trigger=RunTrigger.scheduled, retro_already_ran=False,
+        worked_roles=[],
+    )
+    # Not when the feature is disabled.
+    assert not orchestrator._should_run_retrospective(
+        enabled=False, trigger=RunTrigger.scheduled, retro_already_ran=False,
+        worked_roles=["growth"],
+    )
+
+
+@requires_db
+async def test_scheduled_cycle_spawns_retrospective_before_closing(
+    session_factory, company_with_budget
+):
+    company_id = company_with_budget
+    run_id = await _make_cycle_run(session_factory, company_id)
+    ctx = _Ctx(session_factory)
+
+    await orchestrator._maybe_continue_cycle(ctx, company_id=company_id, root_run_id=run_id)
+
+    # The run is held OPEN and a CEO retrospective task is enqueued immediately —
+    # the next cycle is NOT started yet.
+    assert len(ctx.enqueued) == 1
+    retro_task_id, delay = ctx.enqueued[0]
+    assert delay == 0
+    async with session_factory() as db:
+        run = await db.get(AgentRun, run_id)
+        assert run.status is RunStatus.running  # stays open for the retrospective
+        retro = await db.get(Task, retro_task_id)
+        assert retro.input == {"retrospective": True}
+        assert retro.agent_id == await db.scalar(
+            select(Agent.id).where(
+                Agent.company_id == company_id, Agent.role == AgentRole.ceo
+            )
+        )
+        # No next scheduled cycle yet.
+        assert (
+            await db.scalar(
+                select(AgentRun).where(
+                    AgentRun.company_id == company_id,
+                    AgentRun.trigger == RunTrigger.scheduled,
+                    AgentRun.id != run_id,
+                )
+            )
+        ) is None
+
+
+@requires_db
+async def test_retrospective_runs_once_then_run_closes(session_factory, company_with_budget):
+    """Once the retrospective task exists, the next wind-down closes the run."""
+    company_id = company_with_budget
+    run_id = await _make_cycle_run(session_factory, company_id, with_retro_marker=True)
+    ctx = _Ctx(session_factory)
+
+    await orchestrator._maybe_continue_cycle(ctx, company_id=company_id, root_run_id=run_id)
+
+    # No second retrospective; the run closes and the next cycle starts.
+    assert len(ctx.enqueued) == 1
+    assert ctx.enqueued[0][1] == settings.business_cycle_interval_seconds
+    async with session_factory() as db:
+        run = await db.get(AgentRun, run_id)
+        assert run.status is RunStatus.done
+
+
+@requires_db
+async def test_no_retrospective_when_only_ceo_worked(session_factory, company_with_budget):
+    """A cycle where no functional agent completed work skips the retrospective."""
+    company_id = company_with_budget
+    # Functional task never completed → no worked roles.
+    run_id = await _make_cycle_run(
+        session_factory, company_id, functional_status=TaskStatus.failed
+    )
+    ctx = _Ctx(session_factory)
+
+    await orchestrator._maybe_continue_cycle(ctx, company_id=company_id, root_run_id=run_id)
+
+    # Straight to closing + next cycle, no retrospective task.
+    async with session_factory() as db:
+        run = await db.get(AgentRun, run_id)
+        assert run.status is RunStatus.done
+        assert not await orchestrator._retro_already_ran(db, run_id)
+
+
+@requires_db
+async def test_retrospective_can_be_disabled(session_factory, company_with_budget, monkeypatch):
+    company_id = company_with_budget
+    monkeypatch.setattr(settings, "business_cycle_retrospective_enabled", False)
+    run_id = await _make_cycle_run(session_factory, company_id)
+    ctx = _Ctx(session_factory)
+
+    await orchestrator._maybe_continue_cycle(ctx, company_id=company_id, root_run_id=run_id)
+
+    async with session_factory() as db:
+        run = await db.get(AgentRun, run_id)
+        assert run.status is RunStatus.done  # closed directly, no retro
+        assert not await orchestrator._retro_already_ran(db, run_id)
+
+
 @requires_db
 async def test_continues_when_run_is_finished(session_factory, company_with_budget):
     company_id = company_with_budget  # active, $100 budget
