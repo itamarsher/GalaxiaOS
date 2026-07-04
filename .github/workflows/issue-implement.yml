@@ -29,10 +29,6 @@ jobs:
           # tools are auto-denied in headless CI (no human to approve the
           # prompt), so Claude reads the issue but can never write the fix.
           claude_args: "--allowed-tools Read,Grep,Glob,Edit,MultiEdit,Write,Bash"
-          # Temporary: surface the agent transcript in the run log so we can see
-          # where it stops. Revert to false (the default) once the flow is
-          # confirmed working — it prints the full conversation into CI logs.
-          show_full_output: true
           prompt: |
             Resolve issue #${{ github.event.issue.number }} in this repository.
 
