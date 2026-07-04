@@ -29,17 +29,32 @@ jobs:
           # tools are auto-denied in headless CI (no human to approve the
           # prompt), so Claude reads the issue but can never write the fix.
           claude_args: "--allowed-tools Read,Grep,Glob,Edit,MultiEdit,Write,Bash"
+          # Temporary: surface the agent transcript in the run log so we can see
+          # where it stops. Revert to false (the default) once the flow is
+          # confirmed working — it prints the full conversation into CI logs.
+          show_full_output: true
           prompt: |
             Resolve issue #${{ github.event.issue.number }} in this repository.
 
-            First read the issue and the "## Implementation notes" comment left
-            by the triage agent — follow that note as your plan. Then implement
-            the fix on a new branch and open a pull request whose description
-            includes "Closes #${{ github.event.issue.number }}".
+            Read the issue first. If a "## Implementation notes" comment from the
+            triage agent exists, follow it as your plan; otherwise use the issue
+            body itself as the specification. Then implement the fix on a new
+            branch and open a pull request whose description includes
+            "Closes #${{ github.event.issue.number }}".
 
             Backend lives in `backend/` (Python, uv, pytest); run the relevant
             tests with `uv run pytest` before opening the PR and mention the
             result in the PR body. Keep the change scoped to the issue — do not
-            refactor beyond it. If the notes turn out to be wrong or the change
-            is larger/riskier than they imply, stop and explain in a comment
-            rather than forcing a fix.
+            refactor beyond it.
+
+            You MUST end the run in exactly one of two terminal states, and you
+            are not done until you reach one:
+              1. Branch pushed AND a pull request opened (use `gh pr create`;
+                 the gh CLI is already authenticated in this workflow), or
+              2. A comment posted on the issue with `gh issue comment` explaining
+                 why you did not implement (e.g. the change is too large/risky,
+                 the spec is wrong, or you are blocked).
+            Never finish silently: if you edited files you must commit, push a
+            branch, and open the PR — work left only in the working tree is lost
+            when the runner is torn down. Print the PR or comment URL as your
+            final message.
