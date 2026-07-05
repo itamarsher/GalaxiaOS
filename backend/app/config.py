@@ -373,6 +373,39 @@ class Settings(BaseSettings):
     github_token: str = ""
     github_repo: str = "itamarsher/just-launch-it"
 
+    # ── Galaxia: the dogfooding company (ABOS running on itself) ──────────────
+    # Galaxia is the reference business ABOS operates on its own product: its
+    # agents' unmet needs (report_bug / request_capability) accrue in the shared
+    # feature-request backlog, and Galaxia's Platform agent is the ONLY actor
+    # authorized to promote that backlog into real tracker issues on this repo
+    # (see runtime/tools/platform.py). Promotion authority is keyed to the
+    # founder-user's membership, so that company must actually exist in every
+    # deployment or the whole demand→issue loop is dead. It is therefore
+    # bootstrapped deterministically and idempotently at API startup
+    # (app.services.galaxia). Keep ``galaxia_founder_user_id`` stable — it is the
+    # promoter gate.
+    galaxia_bootstrap_enabled: bool = True
+    galaxia_founder_user_id: str = "91da8f48-d302-4921-bb4a-c3f2c18eaf3d"
+    galaxia_founder_email: str = "founder@galaxia.abos"
+    # Fixed company id makes the bootstrap idempotent. Empty → derived
+    # deterministically from the founder id (uuid5), so there is never a magic
+    # literal to keep in sync across environments.
+    galaxia_company_id: str = ""
+    galaxia_company_name: str = "Galaxia"
+    # Galaxia's monthly operating budget (cents). Modest by default — its work is
+    # platform triage, metered through the same CostMeter as any company.
+    galaxia_monthly_budget_cents: int = 50_000
+    galaxia_mission: str = (
+        "Build and operate ABOS itself — the Autonomous Business Operating System "
+        "in this repository — so that any person on the planet can own or create an "
+        "autonomous business on it. Dogfood the product end to end with the same "
+        "agent fleet ABOS gives every founder, and turn the gaps our own agents (and "
+        "every other company's agents) hit into shipped improvements: when an agent "
+        "reports a bug or requests a capability, review the shared feature-request "
+        "backlog and promote the highest-demand asks into real tracker issues on the "
+        "repo, closing the loop from need to shipped code."
+    )
+
     # Investor review (onboarding): three agentic investors critique the venture.
     investor_review_enabled: bool = True
     investor_model: str = ""  # empty -> provider's planner-tier default

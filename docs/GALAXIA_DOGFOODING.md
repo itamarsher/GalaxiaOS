@@ -77,7 +77,15 @@ without a human, and it never **closes back** onto the requesters. Details below
 
 Prioritised P0 (loop cannot run without it) → P2 (hardening).
 
-### P0-1 — Galaxia is never bootstrapped; the loop has no origin
+### P0-1 — Galaxia is never bootstrapped; the loop has no origin — ✅ IMPLEMENTED
+
+> **Status: done.** `app/services/galaxia.py` provisions the Galaxia founder, company, fleet
+> (guaranteeing the Platform agent), mission, budget, and governance deterministically and
+> idempotently under a Postgres advisory lock, called from the API lifespan
+> (`app/main.py`). The founder-user id now lives in one place (`settings.galaxia_founder_user_id`),
+> which both the bootstrap and the `platform.py` promoter gate read. Covered by
+> `tests/test_galaxia_bootstrap.py` (idempotency + the gate now authorizes Galaxia). The rest of
+> this section is the original analysis.
 
 `ABOS_FEATURE_ADMIN_USER_ID = "91da8f48-…"` is hardcoded in `runtime/tools/platform.py`, and the
 promoter tools authorize by checking that this user is a member of the acting company
@@ -206,7 +214,8 @@ Encoding this as a policy the auto-merge workflow consults — rather than hardc
 
 ## Suggested build order
 
-1. **P0-1 Galaxia bootstrap** — nothing runs until the driving company exists.
+1. **P0-1 Galaxia bootstrap** — nothing runs until the driving company exists. ✅ **done**
+   (`app/services/galaxia.py`).
 2. **P0-2 Scheduled promoter** — turn standing demand into issues without a human prompt.
 3. **P0-3 Auto-review + auto-merge** with the escalation boundary — the headline gap.
 4. **P1-4 Post-deploy verify/rollback** + deploy-status feedback into Galaxia.

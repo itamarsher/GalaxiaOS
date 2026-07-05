@@ -427,6 +427,65 @@ async def _reallocate_agent_budgets(
     await db.flush()
 
 
+async def provision_fleet(
+    db: AsyncSession,
+    *,
+    company: Company,
+    specs: list[dict],
+    total_budget_cents: int | None,
+) -> dict[str, uuid.UUID]:
+    """Persist an agent fleet, wire it under a single CEO, and split the budget.
+
+    Shared by LLM generation and the deterministic Galaxia bootstrap so both
+    produce an identically-wired org chart — functional agents reporting to the
+    CEO, with the monthly budget allocated by role. ``specs`` is the already-
+    resolved fleet; run it through :func:`_fleet_specs` first to guarantee the
+    oversight roles (incl. the platform agent). Returns a ``role -> agent_id`` map.
+    """
+    role_to_agent: dict[str, uuid.UUID] = {}
+    for spec in specs:
+        try:
+            role = AgentRole(spec.get("role", "custom"))
+        except ValueError:
+            role = AgentRole.custom
+        agent = Agent(
+            company_id=company.id,
+            role=role,
+            name=str(spec.get("name") or role.value.title())[:255],
+            system_prompt=str(spec.get("responsibility") or ""),
+            autonomy_level=_parse_autonomy(spec.get("autonomy_level")),
+        )
+        db.add(agent)
+        await db.flush()
+        role_to_agent[role.value] = agent.id
+
+    # Wire functional agents under the CEO.
+    ceo_id = role_to_agent.get("ceo")
+    if ceo_id:
+        for role_name, agent_id in role_to_agent.items():
+            if role_name == "ceo":
+                continue
+            await db.execute(
+                Agent.__table__.update()
+                .where(Agent.id == agent_id)
+                .values(reports_to_agent_id=ceo_id)
+            )
+            db.add(
+                AgentEdge(
+                    company_id=company.id,
+                    from_agent_id=agent_id,
+                    to_agent_id=ceo_id,
+                    relation=EdgeRelation.reports_to,
+                )
+            )
+
+    await db.flush()
+    await _reallocate_agent_budgets(
+        db, company_id=company.id, total_cents=total_budget_cents
+    )
+    return role_to_agent
+
+
 async def start(
     db: AsyncSession,
     *,
@@ -550,47 +609,14 @@ async def generate(db: AsyncSession, *, company: Company) -> dict:
         company.id, phase="wiring", pct=80, message="Wiring the org chart"
     )
 
-    role_to_agent: dict[str, uuid.UUID] = {}
-    for spec in _fleet_specs(_as_dicts(org.get("agents"), "role")):
-        try:
-            role = AgentRole(spec.get("role", "custom"))
-        except ValueError:
-            role = AgentRole.custom
-        agent = Agent(
-            company_id=company.id,
-            role=role,
-            name=str(spec.get("name") or role.value.title())[:255],
-            system_prompt=str(spec.get("responsibility") or ""),
-            autonomy_level=_parse_autonomy(spec.get("autonomy_level")),
-        )
-        db.add(agent)
-        await db.flush()
-        role_to_agent[role.value] = agent.id
-
-    # Wire functional agents under the CEO.
-    ceo_id = role_to_agent.get("ceo")
-    if ceo_id:
-        for role, agent_id in role_to_agent.items():
-            if role == "ceo":
-                continue
-            await db.execute(
-                Agent.__table__.update()
-                .where(Agent.id == agent_id)
-                .values(reports_to_agent_id=ceo_id)
-            )
-            db.add(
-                AgentEdge(
-                    company_id=company.id,
-                    from_agent_id=agent_id,
-                    to_agent_id=ceo_id,
-                    relation=EdgeRelation.reports_to,
-                )
-            )
-
-    await db.flush()
-    # Split the monthly budget across the fleet (ignore any per-agent figures the
-    # LLM guessed — the platform owns the allocation so it always sums correctly).
-    await _reallocate_agent_budgets(db, company_id=company.id, total_cents=budget.limit_cents)
+    # Ignore any per-agent budget figures the LLM guessed — provision_fleet owns
+    # the allocation so it always sums correctly.
+    role_to_agent = await provision_fleet(
+        db,
+        company=company,
+        specs=_fleet_specs(_as_dicts(org.get("agents"), "role")),
+        total_budget_cents=budget.limit_cents,
+    )
 
     # ── Investment review (best-effort; never breaks generation) ──────────────
     investor_reviews = 0

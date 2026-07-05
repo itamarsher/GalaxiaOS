@@ -11,8 +11,9 @@ companies becomes one entry with a running demand count.
 A gated promoter — the Platform agent inside the **abos** company (we dogfood our
 own product) — reads that backlog with ``list_feature_requests`` and turns
 accrued demand into real tracker issues with ``promote_feature_request``. Both
-promoter tools are authorized against a hardcoded abos admin user id, so only the
-abos company's agent can file from the cross-company backlog. Promotion routes
+promoter tools are authorized against the Galaxia founder's user id (from config,
+``settings.galaxia_founder_user_id``), so only the Galaxia (abos) company's agent
+can file from the cross-company backlog. Promotion routes
 through the :mod:`app.integrations.issues` seam (``report_issue``), which keeps
 GitHub-side dedup/"+1" voting intact and records an audit-trail memory.
 
@@ -44,13 +45,15 @@ GITHUB_PROVIDER = "github"
 
 # ── abos promoter gate ────────────────────────────────────────────────────────
 # The promoter tools (``list_feature_requests`` / ``promote_feature_request``)
-# only work inside the abos company — the one whose founder is this user. We
-# authorize by checking that this user is a member of the acting company, so a
-# tool call from any other tenant's Platform agent is refused.
+# only work inside the Galaxia (abos) company — the one whose founder is this
+# user. We authorize by checking that this user is a member of the acting
+# company, so a tool call from any other tenant's Platform agent is refused.
 #
-# The abos founder's user id. The promoter tools only work inside a company this
-# user is a member of; any other tenant's Platform agent is refused.
-ABOS_FEATURE_ADMIN_USER_ID = "91da8f48-d302-4921-bb4a-c3f2c18eaf3d"
+# The Galaxia founder's user id, sourced from config so the id lives in exactly
+# one place: the same value seeds the deterministic Galaxia bootstrap that creates
+# this user's membership (app.services.galaxia). Keep it a module global so tests
+# can monkeypatch the gate.
+ABOS_FEATURE_ADMIN_USER_ID = settings.galaxia_founder_user_id
 
 #: Maps a backlog kind to the tracker label used when filing.
 _KIND_LABEL = {
