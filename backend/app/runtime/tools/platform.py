@@ -130,8 +130,9 @@ SPECS: list[ToolSpec] = [
                 "details": {
                     "type": "string",
                     "description": (
-                        "What capability you need and why — the gap it would close in "
-                        "your work."
+                        "The business case: what capability you need and why — the gap it "
+                        "would close in your work and the outcome it would unlock. Describe "
+                        "the need, not how it should be built in code."
                     ),
                 },
             },
@@ -169,8 +170,9 @@ SPECS: list[ToolSpec] = [
             "Pass the feature_request_id from `list_feature_requests`. The issue body "
             "summarizes demand and which companies/users asked. Routes through the tracker "
             "(GitHub when credentials are set), which still dedupes by title and '+1's an "
-            "existing open issue instead of duplicating it. Investigate the relevant code "
-            "with `list_repo_files` / `read_repo_file` first if useful."
+            "existing open issue instead of duplicating it. Frame the issue around the "
+            "business case and product requirement — the need and the outcome it enables — "
+            "rather than a code-level design."
         ),
         input_schema={
             "type": "object",

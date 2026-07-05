@@ -39,7 +39,13 @@ _PLATFORM_REQUEST_TOOLS: list[ToolSpec] = [
             "type": "object",
             "properties": {
                 "title": {"type": "string"},
-                "details": {"type": "string", "description": "What's needed and why."},
+                "details": {
+                    "type": "string",
+                    "description": (
+                        "The business case: what's needed and why — the outcome it enables, "
+                        "not how it should be built."
+                    ),
+                },
             },
             "required": ["title", "details"],
         },

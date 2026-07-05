@@ -321,8 +321,9 @@ _DEFAULT_FLEET: list[dict] = [
         "name": "Platform Engineer",
         "responsibility": (
             "Stay dormant until another agent reports a bug or requests a capability; then "
-            "investigate this codebase and file a precise tracker issue so the platform can "
-            "be fixed or extended."
+            "turn it into a precise tracker issue — investigating the code for bugs, and "
+            "capturing the business case and product requirement (not the implementation) "
+            "for capability requests — so the platform can be fixed or extended."
         ),
         "autonomy_level": "approve_required",
     },
