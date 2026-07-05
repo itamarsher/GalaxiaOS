@@ -3,21 +3,22 @@
 At MVP execution is simulated (no real third-party call): the backend charges
 the agent's flat ``invocation_price_cents`` per task through the CostMeter as an
 ``agent_invocation`` spend, records a memory entry describing the engagement, and
-finalises the task exactly like :class:`NativeBackend` (status + cost rollup +
-reputation). The point is that the marketplace seam is *functional* — spend is
-metered and the org chart treats hired agents identically — while the remote
-execution itself remains a stub.
+finalises the task through the shared :func:`app.services.tasks.finalize` — exactly
+like :class:`NativeBackend` (status, cost rollup, reputation, transcript teardown,
+and propagation of a delegated result back to the parent/CEO via company memory).
+The point is that the marketplace seam is *functional* — spend is metered and the
+org chart treats hired agents identically — while the remote execution itself
+remains a stub.
 """
 
 from __future__ import annotations
 
-from sqlalchemy import func, select
-
 from app.db import set_tenant
-from app.models import Agent, SpendEntry, Task
+from app.models import Agent, Task
 from app.models.enums import MemoryType, TaskStatus
 from app.runtime.context import RuntimeContext
-from app.services import memory, reputation
+from app.services import memory
+from app.services import tasks as task_svc
 
 
 class MarketplaceBackend:
@@ -71,21 +72,6 @@ class MarketplaceBackend:
             row = await db.get(Task, task.id)
             if row is None:  # pragma: no cover
                 return {"status": status.value}
-            row.status = status
-            row.output = output
-            cost = await db.scalar(
-                select(func.coalesce(func.sum(SpendEntry.amount_cents), 0)).where(
-                    SpendEntry.task_id == task.id
-                )
-            )
-            row.cost_cents = int(cost or 0)
-            await reputation.record_task_outcome(
-                db,
-                company_id=task.company_id,
-                agent_id=task.agent_id,
-                success=status is TaskStatus.done,
-                blocked=status is TaskStatus.blocked,
-                cost_cents=row.cost_cents,
-            )
+            await task_svc.finalize(db, task=row, status=status, output=output)
             await db.commit()
         return {"status": status.value, "output": output}
