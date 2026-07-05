@@ -1,0 +1,83 @@
+name: Auto review & merge
+
+# Closes the "PR approval is a human gate" gap: for a PR from the agent pipeline
+# (label `claude-implement`), an autonomous reviewer reads .github/dogfooding.yml,
+# escalates founder-level changes to a human, and — for everything else — reviews
+# the diff and arms GitHub auto-merge so the PR lands the moment required CI is
+# green. Nothing here bypasses CI: branch protection must require the CI checks
+# (and this review), so auto-merge only completes on green. See
+# docs/DOGFOODING_OPERATIONS.md for the required branch-protection + secrets.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, ready_for_review]
+
+# Only agent-pipeline PRs, and never drafts.
+jobs:
+  auto_merge:
+    if: >-
+      github.event.pull_request.draft == false &&
+      contains(join(github.event.pull_request.labels.*.name, ','), 'claude-implement')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write        # arm auto-merge / merge
+      pull-requests: write   # approve, label, comment
+      issues: write          # label + comment the linked issue
+      actions: read          # read CI status
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          additional_permissions: |
+            actions: read
+          # The reviewer talks to GitHub and reads code; it never edits files.
+          claude_args: "--allowed-tools Bash(gh:*),Read,Grep,Glob"
+          prompt: |
+            You are the autonomous PR reviewer + merge gate for this repository,
+            operating on pull request #${{ github.event.pull_request.number }}.
+            The gh CLI is already authenticated. Follow this exactly.
+
+            0. KILL SWITCH. Read `.github/dogfooding.yml`. If `auto_merge.enabled`
+               is false, OR the repository variable `DOGFOODING_AUTOMERGE` equals
+               "off" (check with `gh variable get DOGFOODING_AUTOMERGE` — treat a
+               missing variable as "on"), stop now without approving or merging and
+               post NO comment. Do nothing else.
+
+            1. ELIGIBILITY. Confirm the PR carries one of `auto_merge.eligible_labels`
+               (it will — the workflow gates on it). If not, stop silently.
+
+            2. ESCALATION BOUNDARY. Get the changed files:
+               `gh pr diff ${{ github.event.pull_request.number }} --name-only`.
+               If ANY changed file matches ANY glob in `escalate_paths`, this is a
+               founder-level change and NOT yours to merge:
+                 - add the label `founder-review` (create it with `gh label create`
+                   if missing),
+                 - post ONE comment naming the specific file(s) that triggered
+                   escalation and that a founder must review/merge,
+                 - do NOT approve and do NOT merge. Stop.
+
+            3. RUNAWAY CAP. Count PRs merged in the last 24h
+               (`gh pr list --state merged --search "merged:>=<24h-ago>"`). If that
+               is >= `auto_merge.max_merges_per_day`, post ONE comment saying the
+               daily auto-merge cap was hit and a founder should merge manually.
+               Stop.
+
+            4. REVIEW. Read the diff (`gh pr diff`). Review ONLY for: does it do
+               what the linked issue asked, is it scoped (no unrelated refactors),
+               are there obvious correctness bugs, and does it include tests when it
+               adds/changes behavior. If you find real problems, post a concise
+               review requesting the specific changes and stop (do not merge). Note:
+               a capability PR should register its new tool AND add a test that
+               exercises it (see docs/DOGFOODING_OPERATIONS.md); flag it if not.
+
+            5. APPROVE + ARM AUTO-MERGE. If the review is clean:
+                 - `gh pr review ${{ github.event.pull_request.number }} --approve`
+                   with a one-line rationale,
+                 - arm auto-merge with the configured method, e.g.
+                   `gh pr merge ${{ github.event.pull_request.number }} --squash --auto`.
+               GitHub completes the merge only once the required CI checks pass, so
+               you are never merging red code. Post the PR URL as your final message.
+
+            Be terse. Comment only when you escalate, request changes, or hit the
+            cap — an approval + armed auto-merge speaks for itself.

@@ -171,6 +171,18 @@ async def load_attribution(
     return [(name, email, details) for name, email, details in rows]
 
 
+async def requesting_company_ids(
+    db: AsyncSession, feature_id: uuid.UUID
+) -> list[uuid.UUID]:
+    """Distinct company ids that voted for a request — the delivery-notice targets."""
+    rows = await db.scalars(
+        select(FeatureRequestVote.company_id)
+        .where(FeatureRequestVote.feature_request_id == feature_id)
+        .distinct()
+    )
+    return list(rows)
+
+
 async def build_issue_body(db: AsyncSession, fr: FeatureRequest) -> str:
     """Compose a tracker-issue body summarizing demand + who asked + their framing."""
     attribution = await load_attribution(db, fr.id)
@@ -215,6 +227,32 @@ async def mark_promoted(
     await db.flush()
 
 
+async def list_promoted(
+    db: AsyncSession, *, limit: int = 50
+) -> list[FeatureRequest]:
+    """Promoted-but-not-yet-delivered entries that carry a tracker issue number.
+
+    These are what the reconciler polls: each has a real issue whose closure means
+    the fix shipped. Oldest-first so long-waiting asks are reconciled first.
+    """
+    stmt = (
+        select(FeatureRequest)
+        .where(
+            FeatureRequest.status == FeatureRequestStatus.promoted,
+            FeatureRequest.github_issue_number.is_not(None),
+        )
+        .order_by(FeatureRequest.created_at.asc())
+        .limit(limit)
+    )
+    return list((await db.scalars(stmt)).all())
+
+
+async def mark_delivered(db: AsyncSession, fr: FeatureRequest) -> None:
+    """Flag a promoted entry as delivered (its tracker issue closed / fix merged)."""
+    fr.status = FeatureRequestStatus.delivered
+    await db.flush()
+
+
 __all__ = [
     "RequestOutcome",
     "coerce_kind",
@@ -224,4 +262,7 @@ __all__ = [
     "load_attribution",
     "build_issue_body",
     "mark_promoted",
+    "list_promoted",
+    "mark_delivered",
+    "requesting_company_ids",
 ]

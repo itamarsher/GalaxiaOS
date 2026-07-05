@@ -92,3 +92,31 @@ jobs:
           # service), so its hook is optional.
           if [ -n "$WORKER_HOOK" ]; then curl -fsS -X POST "$WORKER_HOOK"; fi
           curl -fsS -X POST "$WEB_HOOK"
+
+      - name: Verify deploy health
+        # Post-deploy gate: after triggering the release, confirm the API comes
+        # back healthy. Render's own health check (healthCheckPath in render.yaml)
+        # keeps the previous revision live if the new one never passes, so a failure
+        # here means the release did not take — we surface it as a red deploy job
+        # (which notifies) rather than declaring success on a broken deploy. No-op
+        # until ABOS_HEALTHCHECK_URL (the API's /health/ready) is set.
+        env:
+          HEALTH_URL: ${{ secrets.ABOS_HEALTHCHECK_URL }}
+        run: |
+          if [ -z "$HEALTH_URL" ]; then
+            echo "ABOS_HEALTHCHECK_URL not set; skipping post-deploy health gate."
+            exit 0
+          fi
+          echo "Waiting for the new revision to roll out before probing…"
+          sleep 45
+          for i in $(seq 1 20); do
+            code=$(curl -s -o /dev/null -w "%{http_code}" "$HEALTH_URL" || echo 000)
+            if [ "$code" = "200" ]; then
+              echo "Health gate passed (200) on attempt $i."
+              exit 0
+            fi
+            echo "Attempt $i: /health/ready returned $code; retrying in 15s…"
+            sleep 15
+          done
+          echo "::error::Post-deploy health gate failed: $HEALTH_URL never returned 200."
+          exit 1

@@ -103,7 +103,14 @@ data migration, not the dev router) that provisions the Galaxia founder user (id
 Platform agent — `onboarding.py:_fleet_specs`), and a mission of "build and operate ABOS."
 Derive the id/email from config so it is not a magic literal split across two files.
 
-### P0-2 — Nothing schedules the promoter, and the Platform agent doesn't know it exists
+### P0-2 — Nothing schedules the promoter, and the Platform agent doesn't know it exists — ✅ IMPLEMENTED
+
+> **Status: done.** A `promote_feature_backlog` cron (`app/jobs/scheduled.py`, registered in
+> `app/runtime/worker.py`) drains the shared backlog into tracker issues on Galaxia's behalf,
+> hourly, above a configurable demand threshold. The filing logic is the new shared
+> `app/services/promoter.py` (`promote_request` / `promote_backlog`), which the Platform agent's
+> `promote_feature_request` tool now also calls, so interactive and scheduled promotion behave
+> identically. Runs unscoped (the backlog is cross-company). Covered by `tests/test_promoter.py`.
 
 The Platform agent is **DORMANT by default** — its role prompt says "the CEO never dispatches
 you … you wake ONLY when another agent triggers you" and instructs it to file with `open_issue`.
@@ -120,7 +127,13 @@ Platform agent to `list_feature_requests` above a demand threshold and `promote_
 the top entries; and a Galaxia-specific Platform prompt/playbook that documents the promoter
 tools and the promote-when-demand-crosses-N policy.
 
-### P0-3 — PR approval + merge is not automated (the explicitly-requested gap)
+### P0-3 — PR approval + merge is not automated (the explicitly-requested gap) — ✅ IMPLEMENTED
+
+> **Status: done (code); requires GitHub-side config to activate.** `.github/workflows/auto-merge.yml`
+> reviews eligible agent PRs and arms GitHub auto-merge; `.github/dogfooding.yml` encodes the
+> escalation boundary + guardrails it consults. Activating it needs branch protection + secrets
+> (operator-side, not code) — see `docs/DOGFOODING_OPERATIONS.md`. The reviewer escalates any PR
+> touching the founder surface and honours a kill switch + daily merge cap.
 
 `issue-implement.yml` states outright: *"The PR is gated by CI + human review — nothing lands on
 the default branch automatically."* There is no auto-review workflow, no `enable_pr_auto_merge`,
@@ -134,7 +147,12 @@ protection ruleset** that requires the CI checks + one approving review, so the 
 the default branch is green CI plus the reviewer agent's approval — the automation cannot be
 bypassed and neither can a human sneak past CI.
 
-### P1-4 — Merge → deploy → verify is not closed; no post-deploy gate or rollback
+### P1-4 — Merge → deploy → verify is not closed; no post-deploy gate or rollback — ◑ PARTIAL
+
+> **Status: partial.** `ci.yml` now has a post-deploy health gate that fails the deploy job if the
+> API doesn't come back healthy (no-op until `ABOS_HEALTHCHECK_URL` is set). Revision-aware
+> verification + automated rollback (needs the Render API) and feeding deploy status back into
+> Galaxia's memory remain — tracked in `docs/DOGFOODING_OPERATIONS.md`.
 
 The deploy job fires on push to `claude/abos-system-architecture-u9xny4` (which auto-merge would
 trigger), but: (a) it is a **no-op until `RENDER_DEPLOY_HOOK_*` and the app-side
@@ -147,7 +165,12 @@ fed back to Galaxia, so the fleet can't observe whether its own change shipped.
 back on error) and a hook that records deploy success/failure into Galaxia's company memory so
 the loop is observable to the agents that drove it.
 
-### P1-5 — The loop never closes back onto the requesters
+### P1-5 — The loop never closes back onto the requesters — ✅ IMPLEMENTED
+
+> **Status: done.** A `reconcile_delivered_requests` cron (`promoter.reconcile_delivered`) polls
+> each promoted entry's tracker issue and, once it is closed (fix merged), flips the entry to a new
+> `delivered` state and writes a "your requested capability shipped" notice into each requesting
+> company's memory. Covered by `tests/test_promoter.py`.
 
 `mark_promoted` records the issue number, but when the PR merges and the issue closes,
 **nothing** flips the `FeatureRequest` to a delivered state, and the companies/agents who
@@ -159,7 +182,12 @@ the backlog entry `delivered`, links the merged PR, and notifies the requesting 
 ideally surfaces the new capability to their agents). Without this the loop is a ratchet with no
 feedback — the whole point of dogfooding demand.
 
-### P1-6 — A shipped capability isn't guaranteed to become a usable tool
+### P1-6 — A shipped capability isn't guaranteed to become a usable tool — ◑ PARTIAL
+
+> **Status: partial (convention, enforced by review).** The capability-PR acceptance convention
+> (register the tool + add a test that exercises it + keep scope) is documented in
+> `docs/DOGFOODING_OPERATIONS.md` and the auto-merge reviewer checks for it. A hard CI gate that
+> mechanically fails an unregistered/untested capability PR is the remaining step.
 
 When a `request_capability` ships as code, an agent only gains the capability if the PR also
 registers the new tool in the runtime tool registry **and** the worker restarts to pick it up.
@@ -170,7 +198,12 @@ requested capability now exists.
 test that exercises it) enforced in the reviewer agent's checklist and/or CI, so the loop is
 verifiably self-extending rather than shipping dead code.
 
-### P2-7 — No meta-loop safety rails / kill switch
+### P2-7 — No meta-loop safety rails / kill switch — ✅ IMPLEMENTED
+
+> **Status: done.** `.github/dogfooding.yml` provides a kill switch (`auto_merge.enabled` +
+> the `DOGFOODING_AUTOMERGE` repo variable), a daily merge cap (`max_merges_per_day`), and a veto
+> window (`veto_window_minutes`), all enforced by the auto-merge workflow; PR comments + GitHub's
+> merge history are the audit trail. Kill-switch ladder documented in `docs/DOGFOODING_OPERATIONS.md`.
 
 A repo that merges its own code and deploys itself needs guardrails distinct from the runtime
 circuit breakers (which govern *agent* actions, not *the pipeline*): a global kill switch for
@@ -181,7 +214,11 @@ deploys, and an audit trail of every autonomous merge. None of these exist for t
 checks), a daily auto-merge budget, and a configurable veto window — plus an append-only audit of
 autonomous merges surfaced in the founder dashboard.
 
-### P2-8 — Secrets & permissions for a self-driving repo aren't provisioned/documented as a set
+### P2-8 — Secrets & permissions for a self-driving repo aren't provisioned/documented as a set — ✅ IMPLEMENTED
+
+> **Status: done (runbook).** `docs/DOGFOODING_OPERATIONS.md` lists the full secret + repo-variable
+> + branch-protection set and the state each must be in, as a one-time checklist. Provisioning the
+> actual secrets/protection is operator-side (can't be done from the repo).
 
 The loop needs, together: `CLAUDE_CODE_OAUTH_TOKEN` (present in workflows), a merge-capable bot
 identity that branch protection permits, the app-side `ABOS_GITHUB_TOKEN` for issue filing, and
@@ -216,12 +253,19 @@ Encoding this as a policy the auto-merge workflow consults — rather than hardc
 
 1. **P0-1 Galaxia bootstrap** — nothing runs until the driving company exists. ✅ **done**
    (`app/services/galaxia.py`).
-2. **P0-2 Scheduled promoter** — turn standing demand into issues without a human prompt.
-3. **P0-3 Auto-review + auto-merge** with the escalation boundary — the headline gap.
-4. **P1-4 Post-deploy verify/rollback** + deploy-status feedback into Galaxia.
-5. **P1-5 Close the loop** — mark delivered + notify requesters.
-6. **P1-6 Capability-PR acceptance convention** — self-extension is verifiable.
-7. **P2-7/8 Guardrails + secrets runbook** — make it safe and reproducible to operate.
+2. **P0-2 Scheduled promoter** — turn standing demand into issues without a human prompt. ✅ **done**
+3. **P0-3 Auto-review + auto-merge** with the escalation boundary — the headline gap. ✅ **done**
+   (code; needs branch protection + secrets to activate).
+4. **P1-4 Post-deploy verify/rollback** + deploy-status feedback into Galaxia. ◑ **partial**
+   (health gate shipped; revision-aware rollback + memory feedback remain).
+5. **P1-5 Close the loop** — mark delivered + notify requesters. ✅ **done**
+6. **P1-6 Capability-PR acceptance convention** — self-extension is verifiable. ◑ **partial**
+   (convention + reviewer check shipped; hard CI gate remains).
+7. **P2-7/8 Guardrails + secrets runbook** — make it safe and reproducible to operate. ✅ **done**
 
-Only after 1–3 does Galaxia run a *fully agentic* demand→ship cycle; 4–6 make that cycle
-**closed** (observable and self-terminating); 7–8 make it **safe to leave running.**
+**Where we are now:** with P0-1/2/3 done, Galaxia runs a fully agentic demand→ship cycle end to
+end once the GitHub-side config in `docs/DOGFOODING_OPERATIONS.md` is applied; P1-5 makes it
+self-terminating (no re-requesting shipped work); P2-7/8 make it safe to leave running. The
+remaining open edges are both in P1-4/P1-6: **revision-aware deploy rollback**, **deploy-status
+feedback into Galaxia's memory**, and a **hard CI gate for capability PRs** — all tracked in the
+operations runbook.

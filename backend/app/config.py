@@ -406,6 +406,24 @@ class Settings(BaseSettings):
         "repo, closing the loop from need to shipped code."
     )
 
+    # Scheduled promoter: a cron drains the shared feature-request backlog into
+    # real tracker issues on Galaxia's behalf, so accrued demand becomes issues
+    # without waiting for a human to prompt the Platform agent. Only entries with
+    # at least ``min_votes`` are promoted, ``batch`` at a time per tick (the tracker
+    # dedupes, so re-promotion is a +1, not a duplicate).
+    galaxia_promote_enabled: bool = True
+    galaxia_promote_min_votes: int = 1
+    galaxia_promote_batch: int = 5
+    galaxia_promote_minute: int = 7  # once/hour at :07
+
+    # Loop-closing reconciler: a cron checks each promoted backlog entry's tracker
+    # issue and, once it is closed (the fix merged), marks the entry ``delivered``
+    # and notifies the companies that requested it — so agents learn the gap they
+    # reported is now closed instead of re-requesting it forever.
+    galaxia_reconcile_enabled: bool = True
+    galaxia_reconcile_batch: int = 25
+    galaxia_reconcile_minute: int = 37  # once/hour at :37 (offset from the promoter)
+
     # Investor review (onboarding): three agentic investors critique the venture.
     investor_review_enabled: bool = True
     investor_model: str = ""  # empty -> provider's planner-tier default

@@ -138,11 +138,14 @@ class FeatureRequestStatus(str, enum.Enum):
     """Lifecycle of an internal feature-request backlog entry.
 
     ``open`` accrues votes from companies/users; ``promoted`` means the abos
-    promoter has filed it as a real tracker issue (and recorded the issue number).
+    promoter has filed it as a real tracker issue (and recorded the issue number);
+    ``delivered`` means that tracker issue was closed (its fix merged), so the
+    capability now exists — the reconciler flips it and notifies the requesters.
     """
 
     open = "open"
     promoted = "promoted"
+    delivered = "delivered"
 
 
 class DecisionKind(str, enum.Enum):
