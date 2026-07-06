@@ -1,18 +1,40 @@
 "use client";
 
-// Galaxia Command — operate your autonomous company as a pixel-art starbase.
+// Galaxia Command — operate your autonomous company as a pixel-art starbase GAME.
 //
-// This page orchestrates: it polls the live company data, folds it into a
-// SceneModel (lib/game/scene.ts), hands that to the rAF loop (useStationLoop)
-// via a ref, and lays out the animated canvas beside the DOM HUD (hud.tsx).
-// The canvas is decorative; every action also exists as a real DOM control.
+// The core loop is the real business cycle: "Advance cycle" triggers one
+// (POST /cycle), and the round plays out live over the SSE task stream. The page
+// polls live data, folds it into a SceneModel + RoundState, drives transient
+// canvas FX from data deltas (via a ref-owned queue the rAF loop consumes), and
+// lays out the DOM HUD (swipe-to-decide console, level/XP meter, gauges). Every
+// gesture also has an accessible DOM control.
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "next/navigation";
 import { api } from "@/lib/api";
 import { usePoll, useLiveTasks } from "@/lib/useApi";
-import { buildScene, VH, VW, type ModuleView, type SceneModel } from "@/lib/game/scene";
+import {
+  buildScene,
+  moduleAnchor,
+  sectorStanding,
+  VH,
+  VW,
+  type ModuleView,
+  type SceneModel,
+} from "@/lib/game/scene";
 import { useStationLoop, type HitLayout } from "@/lib/game/useStationLoop";
+import { makeFxQueue, FX_TTL, type FxQueue } from "@/lib/game/fx";
+import { deriveRound, phaseLabel, type RoundState } from "@/lib/game/round";
+import {
+  comboMultiplier,
+  isGoodRound,
+  loadProgress,
+  roundScore,
+  saveProgress,
+  totalLeads,
+  totalScore,
+} from "@/lib/game/score";
+import { AdvanceButton } from "./AdvanceButton";
 import {
   CaptainsConsole,
   CrewRoster,
@@ -24,10 +46,12 @@ import {
   ScorePanel,
 } from "./hud";
 
+const STANDINGS = ["Outpost", "Station", "Starbase", "Citadel"];
+
 export default function GalaxiaCommandPage() {
   const { id } = useParams<{ id: string }>();
 
-  // ── Live data (HUD state; also copied into sceneRef for the loop) ──────────
+  // ── Live data ──────────────────────────────────────────────────────────────
   const company = usePoll(() => api.company(id), 10000, [id]);
   const org = usePoll(() => api.org(id), 5000, [id]);
   const budget = usePoll(() => api.budget(id), 5000, [id]);
@@ -35,11 +59,11 @@ export default function GalaxiaCommandPage() {
   const decisions = usePoll(() => api.decisions(id, true), 5000, [id]);
   const reputation = usePoll(() => api.reputation(id), 15000, [id]);
   const sites = usePoll(() => api.sites(id), 15000, [id]);
+  const cycle = usePoll(() => api.cycleStatus(id), 8000, [id]);
   const tasks = useLiveTasks(id);
 
   const agents = useMemo(() => org.data?.agents ?? [], [org.data]);
 
-  // ── Scene model → ref (loop reads only the ref, never React state) ─────────
   const scene: SceneModel = useMemo(
     () =>
       buildScene({
@@ -54,17 +78,144 @@ export default function GalaxiaCommandPage() {
     [company.data?.status, agents, tasks, budget.data, runway.data, reputation.data, sites.data],
   );
 
+  const round: RoundState = useMemo(() => deriveRound(tasks), [tasks]);
+
+  // ── Score / streak (derived + persisted) ───────────────────────────────────
+  const doneCount = useMemo(() => tasks.filter((t) => t.status === "done").length, [tasks]);
+  const leads = useMemo(() => totalLeads(sites.data ?? []), [sites.data]);
+  const score = useMemo(
+    () => totalScore(scene.health, doneCount, leads, reputation.data ?? []),
+    [scene.health, doneCount, leads, reputation.data],
+  );
+  const [streak, setStreak] = useState(0);
+  useEffect(() => {
+    setStreak(loadProgress(id).streak);
+  }, [id]);
+
+  // ── Canvas + FX loop ─────────────────────────────────────────────────────────
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const hitRef = useRef<HitLayout | null>(null);
   const sceneRef = useRef<SceneModel | null>(null);
+  const fxRef = useRef<FxQueue | null>(null);
+  if (fxRef.current === null) fxRef.current = makeFxQueue();
   useEffect(() => {
     sceneRef.current = scene;
   }, [scene]);
+  useStationLoop({ canvasRef, sceneRef, hitRef, fxRef });
 
-  // ── Canvas + loop ──────────────────────────────────────────────────────────
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const hitRef = useRef<HitLayout | null>(null);
-  useStationLoop({ canvasRef, sceneRef, hitRef });
+  // ── Data-delta differ → FX + streak + announcements (never per-frame) ────────
+  const mounted = useRef(false);
+  const prevTaskStatus = useRef<Map<string, string>>(new Map());
+  const prevLeads = useRef<Map<string, number>>(new Map());
+  const prevRank = useRef<Map<string, number>>(new Map());
+  const prevStanding = useRef<string>("Outpost");
+  const prevPhase = useRef<string>("idle");
+  const prevRootKey = useRef<string | null>(null);
+  const [announce, setAnnounce] = useState("");
 
-  // ── Pointer interaction ────────────────────────────────────────────────────
+  useEffect(() => {
+    const fx = fxRef.current;
+    if (!fx) return;
+    const now = typeof performance !== "undefined" ? performance.now() : 0;
+    const anchorOf = (key: string | null) => moduleAnchor(scene, key);
+
+    // First run: seed prev snapshots without emitting a flood of FX.
+    if (!mounted.current) {
+      for (const t of tasks) prevTaskStatus.current.set(t.id, t.status);
+      for (const pl of scene.planets) prevLeads.current.set(pl.id, pl.leads);
+      for (const m of scene.modules) prevRank.current.set(m.key, m.rankStars);
+      prevStanding.current = sectorStanding(scene.health);
+      prevPhase.current = round.phase;
+      prevRootKey.current = round.rootKey;
+      mounted.current = true;
+      return;
+    }
+
+    // Task status transitions → bursts / orb launches.
+    const seen = new Set<string>();
+    for (const t of tasks) {
+      seen.add(t.id);
+      const prev = prevTaskStatus.current.get(t.id);
+      if (prev !== t.status) {
+        const a = anchorOf(t.agent_id);
+        if (t.status === "done" || t.status === "failed") {
+          const good = t.status === "done";
+          fx.push("taskBurst", FX_TTL.taskBurst, { x: a.x, y: a.y, good }, now);
+          const mult = comboMultiplier(streak);
+          fx.push(
+            "scorePop",
+            FX_TTL.scorePop,
+            { x: a.x, y: a.y - 4, value: Math.round((good ? 10 : -6) * mult), good },
+            now,
+          );
+        } else if (prev === undefined || prev === "queued" || t.status === "running") {
+          fx.push("orbLaunch", FX_TTL.orbLaunch, { x: a.x, y: a.y }, now);
+        }
+        prevTaskStatus.current.set(t.id, t.status);
+      }
+    }
+    for (const id2 of [...prevTaskStatus.current.keys()]) if (!seen.has(id2)) prevTaskStatus.current.delete(id2);
+
+    // Lead landings.
+    for (const pl of scene.planets) {
+      const prev = prevLeads.current.get(pl.id) ?? 0;
+      if (pl.leads > prev) fx.push("leadLand", FX_TTL.leadLand, { x: pl.x, y: pl.y }, now);
+      prevLeads.current.set(pl.id, pl.leads);
+    }
+
+    // Rank ups.
+    for (const m of scene.modules) {
+      const prev = prevRank.current.get(m.key) ?? 0;
+      if (m.rankStars > prev) {
+        const a = anchorOf(m.key);
+        fx.push("rankUp", FX_TTL.rankUp, { x: a.x, y: a.y }, now);
+      }
+      prevRank.current.set(m.key, m.rankStars);
+    }
+
+    // Level up (sector standing rose a band).
+    const standing = sectorStanding(scene.health);
+    if (STANDINGS.indexOf(standing) > STANDINGS.indexOf(prevStanding.current)) {
+      fx.push("levelUp", FX_TTL.levelUp, { label: standing }, now);
+      fx.push("shake", FX_TTL.shake, { mag: 3 }, now);
+      fx.push("scorePop", FX_TTL.scorePop, { x: VW / 2, y: VH / 2 - 12, value: 100, good: true }, now);
+      setAnnounce(`Level up! Now a ${standing}.`);
+    }
+    prevStanding.current = standing;
+
+    // New round began.
+    if (round.rootKey && round.rootKey !== prevRootKey.current) {
+      const a = anchorOf("ceo");
+      fx.push("cycleStart", FX_TTL.cycleStart, { x: a.x, y: a.y }, now);
+    }
+    prevRootKey.current = round.rootKey;
+
+    // Round settled → streak + outcome announcement (edge-triggered, once).
+    if (round.phase === "settled" && prevPhase.current !== "settled") {
+      const good = isGoodRound(round.counts);
+      setStreak((s) => {
+        const ns = good ? s + 1 : 0;
+        const prog = loadProgress(id);
+        saveProgress(id, { ...prog, streak: ns, bestScore: Math.max(prog.bestScore, score) });
+        return ns;
+      });
+      const rs = roundScore(round.counts, 0, 0);
+      fx.push(
+        "scorePop",
+        FX_TTL.scorePop,
+        { x: VW / 2, y: VH / 2 + 8, value: rs, good: rs >= 0 },
+        now,
+      );
+      setAnnounce(`Cycle complete: ${round.counts.done} done, ${round.counts.failed} failed.`);
+      if (!good && round.counts.failed > 0) fx.push("shake", FX_TTL.shake, { mag: 2 }, now);
+    } else if (round.phase !== prevPhase.current && round.phase !== "settled") {
+      setAnnounce(phaseLabel(round.phase));
+    }
+    prevPhase.current = round.phase;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tasks, scene, round, id]);
+
+  // ── Pointer interaction (module pause/resume) ────────────────────────────────
   const coarse =
     typeof window !== "undefined" && window.matchMedia?.("(hover: none)").matches;
   const [busyKey, setBusyKey] = useState<string | null>(null);
@@ -72,7 +223,6 @@ export default function GalaxiaCommandPage() {
   const [hover, setHover] = useState<{ module: ModuleView; left: number; top: number } | null>(null);
   const moveThrottle = useRef(0);
 
-  // Convert a client point to a module under the pointer using the shared hit layout.
   const moduleAt = (clientX: number, clientY: number): ModuleView | null => {
     const el = canvasRef.current;
     const layout = hitRef.current;
@@ -104,15 +254,12 @@ export default function GalaxiaCommandPage() {
   const onPointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
     const m = moduleAt(e.clientX, e.clientY);
     if (!m || !m.agentId) return;
-    if (coarse) {
-      setSheetModule(m); // touch: open the action sheet
-    } else {
-      void toggleAgent(m); // mouse: direct toggle
-    }
+    if (coarse) setSheetModule(m);
+    else void toggleAgent(m);
   };
 
   const onPointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
-    if (coarse) return; // no hover on touch
+    if (coarse) return;
     const now = e.timeStamp;
     if (now - moveThrottle.current < 40) return;
     moveThrottle.current = now;
@@ -135,28 +282,37 @@ export default function GalaxiaCommandPage() {
   };
 
   const decisionList = decisions.data ?? [];
+  const cycleData = cycle.data;
 
   return (
     <div>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+      <div className="game-header">
         <h2 style={{ margin: 0 }}>
           Galaxia Command <span className="muted" style={{ fontSize: 14 }}>· {company.data?.name ?? "Starbase"}</span>
         </h2>
-        <span className={`status ${company.data?.status ?? ""}`}>{company.data?.status ?? "—"}</span>
+        <AdvanceButton
+          companyId={id}
+          phase={round.phase}
+          canStart={cycleData?.can_start ?? false}
+          statusReason={cycleData?.reason ?? "already_running"}
+          onAdvanced={() => { cycle.reload(); }}
+        />
       </div>
       <p className="muted" style={{ marginTop: 4 }}>
-        Your company as a living starbase. Crew droids man the modules, the reactor is your budget,
-        life support is your runway — and the Captain&apos;s Console is where you give the orders.
+        Advance a cycle to run your fleet. Watch the round play out, swipe to give orders, and level
+        up your starbase.
       </p>
 
+      {/* Screen-reader announcer for canvas-only FX and round phases. */}
+      <div aria-live="polite" className="sr-only">{announce}</div>
+
       <div className="gamewrap">
-        {/* The animated station scene. Decorative — actions mirror in the DOM below. */}
         <div className="station-stage">
           <canvas
             ref={canvasRef}
             className="station-canvas"
             role="img"
-            aria-label={`Pixel-art starbase for ${company.data?.name ?? "your company"}, command rating ${scene.health} of 100`}
+            aria-label={`Pixel-art starbase for ${company.data?.name ?? "your company"} — ${phaseLabel(round.phase)}, command rating ${scene.health} of 100`}
             onPointerDown={onPointerDown}
             onPointerMove={onPointerMove}
             onPointerLeave={() => setHover(null)}
@@ -164,13 +320,12 @@ export default function GalaxiaCommandPage() {
           {hover && <ModuleTooltip module={hover.module} left={hover.left} top={hover.top} />}
         </div>
 
-        {/* HUD. Order matters on mobile (single column): console first. */}
         <div className="hud-grid">
           <div className="hud-primary">
-            <CaptainsConsole companyId={id} decisions={decisionList} onResolved={() => decisions.reload()} />
+            <CaptainsConsole decisions={decisionList} onResolved={() => decisions.reload()} />
           </div>
           <div className="hud-gauges">
-            <ScorePanel health={scene.health} />
+            <ScorePanel health={scene.health} score={score} streak={streak} />
             <RunwayGauge runway={runway.data} />
             <ReactorGauge budget={budget.data} />
           </div>

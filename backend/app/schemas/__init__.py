@@ -361,12 +361,32 @@ class TaskOut(ORMModel):
     id: uuid.UUID
     agent_id: uuid.UUID
     parent_task_id: uuid.UUID | None
+    root_run_id: uuid.UUID | None
     depth: int
     goal: str
     status: str
     cost_cents: int
     output: dict | None
     created_at: datetime
+
+
+class CycleStartOut(BaseModel):
+    """Result of POST /companies/{id}/cycle."""
+
+    started: bool
+    task_id: uuid.UUID | None = None
+    # started | already_running | not_active | insufficient_budget | spend_breaker | no_ceo
+    reason: str
+    active: bool  # a cycle is in progress after this call (started OR already_running)
+
+
+class CycleStatusOut(BaseModel):
+    """Result of GET /companies/{id}/cycle — drives the Advance button state."""
+
+    active: bool
+    can_start: bool
+    reason: str  # "ready" when can_start, else the block reason
+    active_task_count: int
 
 
 class TaskDetailOut(TaskOut):
