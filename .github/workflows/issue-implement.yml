@@ -1,0 +1,58 @@
+name: Issue implement agent
+
+# Fires only when the triage agent (or a maintainer) applies the
+# `claude-implement` label. Claude reads the issue + the triage agent's
+# "Implementation notes" comment, implements the fix on a branch, and opens a PR
+# that closes the issue. The PR is then picked up by the auto-review-and-merge
+# workflow (.github/workflows/auto-merge.yml): CI must be green, and anything
+# touching the founder-escalated surface in .github/dogfooding.yml is routed to a
+# human — everything else is reviewed and auto-merged with no human in the loop.
+on:
+  issues:
+    types: [labeled]
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+  id-token: write
+
+jobs:
+  implement:
+    if: github.event.label.name == 'claude-implement'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # The implement agent needs to edit files, run the test suite, and
+          # push a branch / open a PR. Without an explicit allow-list these
+          # tools are auto-denied in headless CI (no human to approve the
+          # prompt), so Claude reads the issue but can never write the fix.
+          claude_args: "--allowed-tools Read,Grep,Glob,Edit,MultiEdit,Write,Bash"
+          prompt: |
+            Resolve issue #${{ github.event.issue.number }} in this repository.
+
+            Read the issue first. If a "## Implementation notes" comment from the
+            triage agent exists, follow it as your plan; otherwise use the issue
+            body itself as the specification. Then implement the fix on a new
+            branch and open a pull request whose description includes
+            "Closes #${{ github.event.issue.number }}".
+
+            Backend lives in `backend/` (Python, uv, pytest); run the relevant
+            tests with `uv run pytest` before opening the PR and mention the
+            result in the PR body. Keep the change scoped to the issue — do not
+            refactor beyond it.
+
+            You MUST end the run in exactly one of two terminal states, and you
+            are not done until you reach one:
+              1. Branch pushed AND a pull request opened (use `gh pr create`;
+                 the gh CLI is already authenticated in this workflow), or
+              2. A comment posted on the issue with `gh issue comment` explaining
+                 why you did not implement (e.g. the change is too large/risky,
+                 the spec is wrong, or you are blocked).
+            Never finish silently: if you edited files you must commit, push a
+            branch, and open the PR — work left only in the working tree is lost
+            when the runner is torn down. Print the PR or comment URL as your
+            final message.

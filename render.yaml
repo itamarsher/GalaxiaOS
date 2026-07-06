@@ -1,0 +1,127 @@
+# Render Blueprint for ABOS — managed Postgres + Redis, API + worker + web.
+#
+# Apply via Render Dashboard → "New +" → "Blueprint" (point at this repo). Secret
+# env vars (sync:false) must be set in the dashboard after first apply. Verify
+# plan names / region against your Render account — plans evolve.
+#
+# Deploys are gated on green CI: `autoDeploy: false` here, and the GitHub Actions
+# `deploy` job triggers a Render Deploy Hook per service only after tests pass.
+
+databases:
+  - name: abos-postgres
+    plan: basic-256mb
+    postgresMajorVersion: "16"
+    # pgvector: the baseline Alembic migration runs `CREATE EXTENSION vector`,
+    # which Render Postgres supports. No manual step needed.
+
+services:
+  # Managed Redis-compatible store (rate limiting + arq queue).
+  - type: keyvalue
+    name: abos-redis
+    plan: starter
+    ipAllowList: []  # internal-only
+
+  # FastAPI app. Migrations run as a pre-deploy step before each release.
+  - type: web
+    name: abos-api
+    # Production branch. Pinned explicitly so a Blueprint sync deploys from here
+    # regardless of which branch the Blueprint itself is connected to (otherwise
+    # services default to the Blueprint's branch). Keep these in sync if the
+    # production branch ever changes.
+    branch: claude/abos-system-architecture-u9xny4
+    runtime: docker
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    autoDeploy: false
+    healthCheckPath: /health/ready
+    preDeployCommand: "alembic upgrade head"
+    envVars:
+      - key: ABOS_DATABASE_URL
+        fromDatabase:
+          name: abos-postgres
+          property: connectionString
+      - key: ABOS_REDIS_URL
+        fromService:
+          name: abos-redis
+          type: keyvalue
+          property: connectionString
+      - key: ABOS_RATE_LIMIT_BACKEND
+        value: redis
+      - key: ABOS_MASTER_KEY
+        sync: false   # set in dashboard: `make gen-key`
+      - key: ABOS_JWT_SECRET
+        generateValue: true
+      # Browser origins allowed to call the API. Set to the abos-web origin
+      # (comma-separated for multiple), e.g. https://abos-web.onrender.com.
+      - key: ABOS_CORS_ALLOW_ORIGINS
+        sync: false
+      # This API's own public URL (no trailing slash), e.g. https://abos-api.onrender.com.
+      # Landing pages are static on Cloudflare Pages, so their built-in lead-capture
+      # form POSTs to an absolute URL back here. Without it, on-page capture is off.
+      - key: ABOS_PUBLIC_API_BASE_URL
+        sync: false
+      - fromGroup: abos-shared
+
+  # arq worker (agent runtime + scheduled jobs). Same image, different command.
+  - type: worker
+    name: abos-worker
+    branch: claude/abos-system-architecture-u9xny4
+    runtime: docker
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    dockerCommand: "arq app.runtime.worker.WorkerSettings"
+    autoDeploy: false
+    envVars:
+      - key: ABOS_DATABASE_URL
+        fromDatabase:
+          name: abos-postgres
+          property: connectionString
+      - key: ABOS_REDIS_URL
+        fromService:
+          name: abos-redis
+          type: keyvalue
+          property: connectionString
+      - key: ABOS_MASTER_KEY
+        sync: false
+      - key: ABOS_JWT_SECRET
+        fromService:
+          name: abos-api
+          type: web
+          envVarKey: ABOS_JWT_SECRET
+      - fromGroup: abos-shared
+
+  # Next.js frontend.
+  - type: web
+    name: abos-web
+    branch: claude/abos-system-architecture-u9xny4
+    runtime: docker
+    dockerfilePath: ./frontend/Dockerfile.prod
+    dockerContext: ./frontend
+    autoDeploy: false
+    envVars:
+      # Baked into the client bundle at build time. Auto-wired from the API
+      # service so a fresh blueprint needs no manual dashboard step: Render
+      # supplies the API's host (no scheme), and the client normalizes it to an
+      # absolute https:// URL (see frontend/lib/api.ts). NB: this is a build-time
+      # value — after it changes you must rebuild abos-web (Clear build cache &
+      # deploy), not just restart it.
+      - key: NEXT_PUBLIC_API_BASE_URL
+        fromService:
+          type: web
+          name: abos-api
+          property: host
+
+envVarGroups:
+  - name: abos-shared
+    envVars:
+      - key: ABOS_LOG_JSON
+        value: "true"
+      - key: ABOS_LOG_LEVEL
+        value: INFO
+      - key: ABOS_RATE_LIMIT_ENABLED
+        value: "true"
+      - key: ABOS_RATE_LIMIT_PER_MINUTE
+        value: "120"
+      # NB: landing-page hosting + domain connection (Cloudflare Pages + DNS) are
+      # bring-your-own-key — each company sets its own Cloudflare API token + account
+      # id in Settings. There are intentionally no global Cloudflare env vars here.
