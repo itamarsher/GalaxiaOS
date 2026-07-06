@@ -263,6 +263,8 @@ export const api = {
     req<Company>(`/companies/${companyId}`, { method: "PATCH", body: JSON.stringify(patch) }),
   deleteCompany: (companyId: string) =>
     req<void>(`/companies/${companyId}`, { method: "DELETE" }),
+  resetCompany: (companyId: string) =>
+    req<Company>(`/companies/${companyId}/reset`, { method: "POST" }),
   playbook: (companyId: string) => req<Playbook>(`/companies/${companyId}/playbook`),
   updatePlaybook: (companyId: string, playbook: string) =>
     req<Playbook>(`/companies/${companyId}/playbook`, {
