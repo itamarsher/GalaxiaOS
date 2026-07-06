@@ -66,6 +66,27 @@ export default function Overview() {
     }
   };
 
+  // TEMP dev tool — remove before launch. Re-provisions the Galaxia reference
+  // company from scratch (same as POST /dev/galaxia/reset): wipes its fleet,
+  // mission, objectives, runs and memory, rebuilds a fresh draft, and preserves
+  // saved BYOK keys. Lands at plan-approval, so we return to onboarding.
+  const [resetting, setResetting] = useState(false);
+  const resetGalaxia = async () => {
+    if (!window.confirm(
+      "Reset Galaxia? This wipes its fleet, mission, objectives, runs and memory and " +
+      "re-provisions a fresh draft. Saved API keys are preserved. This cannot be undone."
+    )) return;
+    setResetting(true);
+    try {
+      const res = await api.galaxiaReset();
+      alert(`Galaxia reset — rebuilt as a fresh ${res.status ?? "draft"}. Saved keys were preserved.`);
+      router.push("/");
+    } catch (e) {
+      alert(String(e instanceof Error ? e.message : e));
+      setResetting(false);
+    }
+  };
+
   return (
     <div>
       <h2>{company.data?.name ?? "Company"}</h2>
@@ -189,6 +210,13 @@ export default function Overview() {
         {dev.data?.enabled && (
           <div style={{ marginTop: 16, paddingTop: 14, borderTop: "1px dashed var(--border)" }}>
             <p className="muted" style={{ fontSize: 12, margin: "0 0 8px" }}>
+              ⚠️ Dev only — re-provisions Galaxia from scratch (wipes its fleet, mission, runs and
+              memory; keeps saved API keys). Remove before going live.
+            </p>
+            <button className="ghost danger" disabled={resetting} onClick={resetGalaxia}>
+              {resetting ? "Resetting…" : "Reset Galaxia"}
+            </button>
+            <p className="muted" style={{ fontSize: 12, margin: "16px 0 8px" }}>
               ⚠️ Dev only — deletes every account except the default one. Remove before going live.
             </p>
             <button className="ghost danger" onClick={deleteOtherAccounts}>
