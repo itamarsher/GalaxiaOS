@@ -354,12 +354,13 @@ def _fleet_specs(parsed: list[dict]) -> list[dict]:
 
 
 # Relative share of the monthly budget by role. Coordination/oversight roles
-# (CEO, Governance) carry a smaller operational share than the functional agents
+# (Governance) carry a smaller operational share than the functional agents
 # that actually spend on the world (Growth runs the most spend-heavy work:
-# acquisition, outreach, ads). Tunable — only the ratios matter.
+# acquisition, outreach, ads). Tunable — only the ratios matter. The CEO is not
+# listed here: it is never given a per-agent cap (limited only by the global
+# company budget), so it is excluded from the weighted split.
 _DEFAULT_BUDGET_WEIGHT = 2.0
 _ROLE_BUDGET_WEIGHTS: dict[AgentRole, float] = {
-    AgentRole.ceo: 1.0,
     AgentRole.governance: 1.0,
     AgentRole.auditor: 1.0,
     # The platform agent is idle most of the time (only wakes when triggered), so
@@ -409,6 +410,10 @@ async def _reallocate_agent_budgets(
     split across the fleet; the remainder stays unallocated as the CEO's pool, so
     the team doesn't commit the whole budget up front and the CEO has reserve to
     deploy later via approved hires.
+
+    The CEO is deliberately left uncapped (``monthly_budget_cents = None``): it
+    owns the whole company budget and is limited only by the global ceiling, so
+    it can deploy the reserve pool without hitting a personal per-agent cap.
     """
     agents = (
         await db.scalars(
@@ -421,8 +426,13 @@ async def _reallocate_agent_budgets(
     if total_cents and total_cents > 0:
         reserve = min(max(settings.launch_budget_reserve_fraction, 0.0), 1.0)
         allocatable = int(total_cents * (1.0 - reserve))
-    weights = [_ROLE_BUDGET_WEIGHTS.get(a.role, _DEFAULT_BUDGET_WEIGHT) for a in agents]
-    for agent, cents in zip(agents, _weighted_split(weights, allocatable), strict=True):
+    # The CEO is limited only by the global company budget, not a per-agent slice.
+    capped = [a for a in agents if a.role != AgentRole.ceo]
+    for agent in agents:
+        if agent.role == AgentRole.ceo:
+            agent.monthly_budget_cents = None
+    weights = [_ROLE_BUDGET_WEIGHTS.get(a.role, _DEFAULT_BUDGET_WEIGHT) for a in capped]
+    for agent, cents in zip(capped, _weighted_split(weights, allocatable), strict=True):
         agent.monthly_budget_cents = cents
     await db.flush()
 
