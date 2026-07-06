@@ -195,6 +195,10 @@ export const api = {
   defaultLogin: () => req<TokenResponse>("/dev/default-login", { method: "POST" }),
   deleteOtherAccounts: () =>
     req<{ deleted_accounts: number }>("/dev/delete-all-accounts", { method: "POST" }),
+  galaxiaReset: () =>
+    req<{ reset: boolean; company_id: string; status: string | null }>("/dev/galaxia/reset", {
+      method: "POST",
+    }),
 
   login: async (email: string, password: string) => {
     const form = new URLSearchParams({ username: email, password });
