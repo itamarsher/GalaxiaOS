@@ -27,6 +27,9 @@ export interface RoundState {
   rootKey: string | null; // root_run_id of the current round (fallback: newest depth-0 task id)
   counts: RoundCounts;
   activeTotal: number; // queued + running + waiting + auditing
+  settled: number; // done + failed
+  total: number; // settled + activeTotal (tasks seen this round)
+  progress: number; // 0..1 — settled / total
 }
 
 const ACTIVE = new Set(["queued", "running", "waiting_approval", "auditing"]);
@@ -58,6 +61,9 @@ export function deriveRound(tasks: Task[]): RoundState {
     }
   }
   const activeTotal = counts.queued + counts.running + counts.waiting + counts.auditing;
+  const settled = counts.done + counts.failed;
+  const total = settled + activeTotal;
+  const progress = total > 0 ? settled / total : 0;
   const rootKey = pickRootKey(tasks);
 
   let phase: RoundPhase;
@@ -75,7 +81,7 @@ export function deriveRound(tasks: Task[]): RoundState {
     phase = ceoRunning && !functionalActive ? "dispatching" : "working";
   }
 
-  return { phase, rootKey, counts, activeTotal };
+  return { phase, rootKey, counts, activeTotal, settled, total, progress };
 }
 
 /** Human label for the round phase (for the aria-live announcer + button). */

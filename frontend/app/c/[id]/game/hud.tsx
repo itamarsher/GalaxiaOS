@@ -17,7 +17,56 @@ import {
 } from "@/lib/api";
 import { type ModuleView } from "@/lib/game/scene";
 import { levelFromScore } from "@/lib/game/score";
+import { phaseLabel, type RoundState } from "@/lib/game/round";
 import { SwipeDeck } from "./SwipeDeck";
+
+// ── Cycle progress: live phase + task progress while a round runs ─────────────
+export function CycleProgress({ round }: { round: RoundState }) {
+  const running = round.phase !== "idle" && round.phase !== "settled";
+  const pct = Math.round(round.progress * 100);
+  const { counts } = round;
+  return (
+    <div className={`cycle-strip${running ? " active" : ""}`}>
+      <div className="cycle-strip-head">
+        <span className="step" style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          {running && <span className="cycle-spinner" aria-hidden />}
+          {phaseLabel(round.phase)}
+        </span>
+        <span className="muted" style={{ fontSize: 12 }}>
+          {round.total > 0 ? `${round.settled}/${round.total} tasks` : "no tasks yet"}
+        </span>
+      </div>
+      {/* Determinate progress: settled / total. Striped while active. */}
+      <div className="bar cycle-bar">
+        <span
+          className={running ? "cycle-fill" : ""}
+          style={{ width: `${Math.max(running ? 4 : 0, pct)}%` }}
+        />
+      </div>
+      <div className="cycle-counts">
+        <span className="cycle-chip run" aria-label={`${counts.running} running`}>
+          ● {counts.running} running
+        </span>
+        <span className="cycle-chip queue" aria-label={`${counts.queued} queued`}>
+          {counts.queued} queued
+        </span>
+        <span className="cycle-chip done" aria-label={`${counts.done} done`}>
+          {counts.done} done
+        </span>
+        {counts.failed > 0 && (
+          <span className="cycle-chip fail" aria-label={`${counts.failed} failed`}>
+            {counts.failed} failed
+          </span>
+        )}
+        {counts.waiting > 0 && (
+          <span className="cycle-chip wait" aria-label={`${counts.waiting} awaiting you`}>
+            {counts.waiting} awaiting you
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
 
 // ── Captain's Console: the decision inbox as a swipeable order deck ───────────
 export function CaptainsConsole({

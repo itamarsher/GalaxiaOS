@@ -189,6 +189,32 @@ function drawReactor(ctx: CanvasRenderingContext2D, scene: SceneModel, t: number
       ctx.fillRect(px(x + w / 2 - 2 + i * 2), px(y + h + dy * 8), 1, 1);
     }
   }
+
+  // Cycle progress ring around the core: a background track plus a green arc that
+  // fills with the fraction of this round's tasks completed, and (while active) a
+  // rotating "processing" tick so it reads as live even at 0%.
+  if (scene.roundActive || scene.roundProgress > 0) {
+    const cx = x + w / 2;
+    const cy = y + h / 2;
+    const rr = Math.max(w, h) / 2 + 5;
+    const start = -Math.PI / 2; // 12 o'clock
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = mix(p.bg, p.border, 0.9);
+    ctx.beginPath();
+    ctx.arc(cx, cy, rr, 0, Math.PI * 2);
+    ctx.stroke();
+    if (scene.roundProgress > 0) {
+      ctx.strokeStyle = p.good;
+      ctx.beginPath();
+      ctx.arc(cx, cy, rr, start, start + scene.roundProgress * Math.PI * 2);
+      ctx.stroke();
+    }
+    if (scene.roundActive) {
+      const ang = start + (t * 0.003) % (Math.PI * 2);
+      ctx.fillStyle = p.accentStrong;
+      ctx.fillRect(px(cx + Math.cos(ang) * rr), px(cy + Math.sin(ang) * rr), 2, 2);
+    }
+  }
 }
 
 // ── Module ───────────────────────────────────────────────────────────────────
@@ -227,6 +253,26 @@ function drawModule(ctx: CanvasRenderingContext2D, m: ModuleView, p: Palette, t:
     const on = m.powered ? (Math.sin(t * 0.003 + wx) > -0.6 ? 1 : 0.4) : 1;
     ctx.fillStyle = m.powered ? mix(p.panel, winColor, on) : winColor;
     ctx.fillRect(px(wx), px(winY), 2, 2);
+  }
+
+  // Working scan: an indeterminate highlight sweeping across the hull + a
+  // pulsing worklight dot, so a module with a running task reads as busy.
+  if (m.working) {
+    const inner = m.w - 4;
+    const sweepW = 8;
+    const pos = ((t * 0.04) % (inner + sweepW)) - sweepW; // slides L→R and wraps
+    for (let i = 0; i < sweepW; i++) {
+      const sx = m.x + 2 + pos + i;
+      if (sx < m.x + 2 || sx > m.x + m.w - 2) continue;
+      const a = 1 - Math.abs(i - sweepW / 2) / (sweepW / 2);
+      ctx.fillStyle = mix(body, p.accentStrong, a * 0.7);
+      ctx.fillRect(px(sx), px(m.y + m.h - 7), 1, 3);
+    }
+    // Blinking worklight (top-left).
+    if (Math.sin(t * 0.02) > 0) {
+      ctx.fillStyle = p.good;
+      ctx.fillRect(px(m.x + 2), px(m.y + 2), 2, 2);
+    }
   }
 
   // Short role tag (tiny pixel label bar) along the bottom edge.

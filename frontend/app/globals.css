@@ -630,6 +630,52 @@ a.actrow:hover .goal { color: var(--accent-strong); }
 }
 .advance-note { font-size: 12px; }
 
+/* ── Cycle progress strip (live round/task progress) ────────────────────────── */
+.cycle-strip {
+  margin-top: 14px; padding: 12px 14px;
+  background: var(--panel); border: 1px solid var(--border);
+  border-radius: var(--radius); box-shadow: var(--shadow);
+  display: flex; flex-direction: column; gap: 8px;
+}
+.cycle-strip.active {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 22%, transparent), var(--shadow);
+}
+.cycle-strip-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.cycle-bar { height: 10px; }
+/* Determinate fill; barber-pole stripes animate while the cycle is running. */
+.cycle-bar > span { background: linear-gradient(90deg, var(--accent), var(--good)); transition: width 0.4s ease; }
+.cycle-bar > span.cycle-fill {
+  background-image: linear-gradient(90deg, var(--accent), var(--good)),
+    repeating-linear-gradient(45deg,
+      rgba(255, 255, 255, 0.16) 0 6px, rgba(255, 255, 255, 0) 6px 12px);
+  background-blend-mode: overlay;
+  animation: cycle-stripes 0.7s linear infinite;
+}
+@keyframes cycle-stripes { from { background-position: 0 0, 0 0; } to { background-position: 0 0, 24px 0; } }
+/* A small spinning ring next to the phase label. */
+.cycle-spinner {
+  width: 12px; height: 12px; border-radius: 50%;
+  border: 2px solid var(--border); border-top-color: var(--accent);
+  animation: spin 0.7s linear infinite; display: inline-block;
+}
+.cycle-counts { display: flex; flex-wrap: wrap; gap: 6px; }
+.cycle-chip {
+  font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 999px;
+  border: 1px solid var(--border); color: var(--muted);
+  background: color-mix(in srgb, var(--muted) 8%, transparent);
+}
+.cycle-chip.run { color: var(--accent-strong); border-color: color-mix(in srgb, var(--accent) 45%, transparent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.cycle-chip.run { animation: pulse 1.4s ease-in-out infinite; }
+.cycle-chip.done { color: var(--good); border-color: color-mix(in srgb, var(--good) 45%, transparent); background: color-mix(in srgb, var(--good) 12%, transparent); }
+.cycle-chip.fail { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 45%, transparent); background: color-mix(in srgb, var(--danger) 12%, transparent); }
+.cycle-chip.wait { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 45%, transparent); background: color-mix(in srgb, var(--warn) 12%, transparent); }
+
+@media (prefers-reduced-motion: reduce) {
+  .cycle-bar > span.cycle-fill { animation: none; }
+  .cycle-chip.run { animation: none; }
+}
+
 /* Screen-reader-only announcer for canvas FX / round phases. */
 .sr-only {
   position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
