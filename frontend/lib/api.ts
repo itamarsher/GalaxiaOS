@@ -356,13 +356,6 @@ export const api = {
     req<Decision>(`/decisions/${id}/approve`, { method: "POST", body: JSON.stringify({ note: note ?? null }) }),
   rejectDecision: (id: string, note?: string) =>
     req<Decision>(`/decisions/${id}/reject`, { method: "POST", body: JSON.stringify({ note: note ?? null }) }),
-  decisionChatThread: (id: string) =>
-    req<{ thread: ChatTurn[] }>(`/decisions/${id}/chat`),
-  decisionChat: (id: string, message: string) =>
-    req<{ answer: string; thread: ChatTurn[] }>(`/decisions/${id}/chat`, {
-      method: "POST",
-      body: JSON.stringify({ message }),
-    }),
 
   externalMessages: (companyId: string, status?: string) =>
     req<ExternalMessage[]>(

@@ -25,24 +25,36 @@ export default function ChatPage() {
   const { id } = useParams<{ id: string }>();
   const search = useSearchParams();
   const fromUrl = search.get("channel");
+  // Deep-link straight to the chat holding a specific decision (?decision=<id>) —
+  // e.g. from the Tasks/Communications tabs — instead of the old decision widget.
+  const fromDecision = search.get("decision");
   const channels = usePoll(() => api.chatChannels(id), 5000, [id]);
   const list = channels.data ?? [];
   const [selected, setSelected] = useState<string | null>(null);
   const [creating, setCreating] = useState(search.get("new") === "1");
 
-  // A channel picked from the sidebar (?channel=) wins; otherwise default to the
-  // founder's direct line to the CEO (the standing channel to steer the company),
-  // then any thread that needs the founder, else the most recent.
+  // A channel picked from the sidebar (?channel=) wins; then the channel carrying a
+  // linked decision (?decision=); otherwise default to the founder's direct line to
+  // the CEO, then any thread that needs the founder, else the most recent.
   useEffect(() => {
     if (fromUrl) {
       setSelected(fromUrl);
       return;
     }
+    if (fromDecision) {
+      const withDecision = list.find((c) => c.pending_decision?.id === fromDecision);
+      if (withDecision) {
+        setSelected(withDecision.id);
+        return;
+      }
+      // Not present yet (still loading) or already resolved — fall through to the
+      // normal default so we always land somewhere sensible.
+    }
     if (selected || list.length === 0) return;
     const ceo = list.find(isCeoDm);
     const needy = list.find((c) => isWaiting(c));
     setSelected((ceo ?? needy ?? list[0]).id);
-  }, [fromUrl, list, selected]);
+  }, [fromUrl, fromDecision, list, selected]);
 
   const active = useMemo(() => list.find((c) => c.id === selected) ?? null, [list, selected]);
 

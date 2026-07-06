@@ -132,7 +132,7 @@ function MessageRow({ m, companyId }: { m: ExternalMessage; companyId: string })
             {m.body && <div style={{ whiteSpace: "pre-wrap", fontSize: 13, marginBottom: 6 }}>{m.body}</div>}
             {m.detail && <div className="muted" style={{ fontSize: 12 }}>{m.detail}</div>}
             {m.status === "pending_approval" && m.decision_id && (
-              <Link href={`/c/${companyId}/chat`}>Review in Chat →</Link>
+              <Link href={`/c/${companyId}/chat?decision=${m.decision_id}`}>Review in Chat →</Link>
             )}
             {!m.body && !m.detail && <span className="muted">No content recorded.</span>}
           </td>
