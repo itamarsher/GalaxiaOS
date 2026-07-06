@@ -274,6 +274,24 @@ class Settings(BaseSettings):
     # same task before it is auto-accepted, so an audit↔redo loop can't run forever.
     max_audit_rounds: int = 2
 
+    # Self-validation critic: an INDEPENDENT reviewer (a separate metered LLM call
+    # with no access to the producing agent's reasoning) that plays devil's advocate
+    # on an agent's work and, for visual outputs (landing pages, generated images),
+    # opinionates on the actual material — literally seeing generated images via a
+    # vision model. Its feedback is fed back to the agent, which iterates until the
+    # critic is satisfied or a round cap is hit. Fail-open: if the critic can't run
+    # (no key, error) the work proceeds unblocked.
+    critic_enabled: bool = True
+    # Model for the critic. Empty → the provider's planner-tier default (a capable,
+    # vision-capable model on every provider). Overridable per deployment.
+    critic_model: str = ""
+    # How many revision rounds a VISUAL output (page/image) may be pushed back
+    # before it's accepted as-is, so an agent↔critic loop on one artifact ends.
+    visual_critic_max_rounds: int = 2
+    # How many times the devil's-advocate critic may send a task back for a rewrite
+    # before its result is accepted, so a critique↔redo loop can't run forever.
+    critic_max_rounds: int = 1
+
     # Chat collaboration loop: agents discuss shared topics in mutual channels,
     # which keeps collaboration distributed instead of routing everything through
     # the CEO. To stop two agents from ping-ponging replies forever, a channel is
