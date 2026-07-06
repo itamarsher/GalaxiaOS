@@ -154,6 +154,7 @@ export interface ModuleView {
   h: number;
   powered: boolean; // agent active (not paused) and station powered
   alert: boolean; // an agent task is waiting for founder approval
+  working: boolean; // the agent has a task actively running this cycle
   rankStars: number; // 0..5 from reputation trust
   status: string; // raw agent status (for the roster pill)
   budgetCents: number | null;
@@ -202,6 +203,8 @@ export interface SceneModel {
   planets: PlanetView[];
   reactor: ReactorView;
   health: number; // 0..100
+  roundActive: boolean; // a cycle is running (any active task)
+  roundProgress: number; // 0..1 — tasks settled / total seen this round
 }
 
 // Rectangles the pointer hit-tester needs (mirrored into the loop's hitRef).
@@ -302,6 +305,20 @@ export function buildScene(inp: SceneInputs): SceneModel {
   const alertAgents = new Set(
     inp.tasks.filter((t) => t.status === "waiting_approval").map((t) => t.agent_id),
   );
+  // Agents with a task actively running → their module shows a "working" scan.
+  const workingAgents = new Set(
+    inp.tasks.filter((t) => t.status === "running").map((t) => t.agent_id),
+  );
+  // Cycle progress: how many tasks have settled out of everything seen this round.
+  const settledCount = inp.tasks.filter(
+    (t) => t.status === "done" || t.status === "failed",
+  ).length;
+  const activeCount = inp.tasks.filter((t) =>
+    ["queued", "running", "waiting_approval", "auditing"].includes(t.status),
+  ).length;
+  const totalSeen = settledCount + activeCount;
+  const roundActive = activeCount > 0;
+  const roundProgress = totalSeen > 0 ? settledCount / totalSeen : 0;
 
   // Assign agents to slots: canonical role slot if free, else an aux slot.
   const usedRoleSlots = new Set<string>();
@@ -333,6 +350,7 @@ export function buildScene(inp: SceneInputs): SceneModel {
       h: slot.h,
       powered: stationPowered && !paused,
       alert: alertAgents.has(a.id),
+      working: stationPowered && !paused && workingAgents.has(a.id),
       rankStars: rankFromReputation(rep),
       status: a.status,
       budgetCents: a.monthly_budget_cents,
@@ -356,6 +374,7 @@ export function buildScene(inp: SceneInputs): SceneModel {
         h: slot.h,
         powered: false,
         alert: false,
+        working: false,
         rankStars: 0,
         status: "offline",
         budgetCents: null,
@@ -436,6 +455,8 @@ export function buildScene(inp: SceneInputs): SceneModel {
     planets,
     reactor,
     health,
+    roundActive,
+    roundProgress,
   };
 }
 
