@@ -68,14 +68,16 @@ async def test_reallocate_agent_budgets(session_factory, company_with_budget):
         agents = (await db.scalars(select(Agent).where(Agent.company_id == company_id))).all()
         by_role = {a.role: a.monthly_budget_cents for a in agents}
         assert len(agents) == 4
-        assert all(c is not None for c in by_role.values())
-        # Start lean: only the non-reserved share is split across the fleet; the
-        # rest stays as the CEO's unallocated pool.
+        # The CEO is limited only by the global company budget — never a per-agent cap.
+        assert by_role[AgentRole.ceo] is None
+        # Every non-CEO agent gets a per-agent slice.
+        capped = {r: c for r, c in by_role.items() if r != AgentRole.ceo}
+        assert all(c is not None for c in capped.values())
+        # Start lean: only the non-reserved share is split across the (non-CEO)
+        # fleet; the rest stays as the CEO's unallocated pool.
         allocatable = int(10_000 * (1.0 - settings.launch_budget_reserve_fraction))
         assert allocatable < 10_000  # a reserve is kept back, not fully allocated
-        assert sum(by_role.values()) == allocatable
-        # Weighted: growth (3) > finance (1.5) > ceo ~= governance (both 1;
-        # may differ by a single leftover cent from largest-remainder rounding).
+        assert sum(capped.values()) == allocatable
+        # Weighted: growth (3) > finance (1.5) > governance (1).
         assert by_role[AgentRole.growth] > by_role[AgentRole.finance]
-        assert by_role[AgentRole.finance] > by_role[AgentRole.ceo]
-        assert abs(by_role[AgentRole.ceo] - by_role[AgentRole.governance]) <= 1
+        assert by_role[AgentRole.finance] > by_role[AgentRole.governance]
