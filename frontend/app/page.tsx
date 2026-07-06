@@ -49,10 +49,25 @@ export default function Home() {
     const list = await api.myCompanies();
     setBusinesses(list);
     if (autoLoggedIn && list.length > 0) {
-      router.push(`/c/${list[0].id}`);
+      await openCompany(list[0]);
       return;
     }
     setStep(list.length > 0 ? "businesses" : "mission");
+  }
+
+  // Open a company: a draft hasn't been launched yet, so resume it at the plan-
+  // approval (review) screen — load its generated plan and let the founder launch
+  // — instead of dropping into a dashboard for a company that isn't live. A
+  // launched (active/paused/…) company goes straight to its dashboard.
+  async function openCompany(c: Company) {
+    if (c.status === "draft") {
+      const p = await api.preview(c.id);
+      setCompanyId(c.id);
+      setPreview(p);
+      setStep("review");
+      return;
+    }
+    router.push(`/c/${c.id}`);
   }
 
   // Bootstrap: use an existing session; else try the dev default account
@@ -225,7 +240,7 @@ export default function Home() {
               key={b.id}
               className="ghost"
               style={{ display: "flex", justifyContent: "space-between", width: "100%", marginTop: 8 }}
-              onClick={() => router.push(`/c/${b.id}`)}
+              onClick={() => guard(() => openCompany(b))}
             >
               <span>{b.name}</span>
               <span className={`status ${b.status}`}>{b.status}</span>

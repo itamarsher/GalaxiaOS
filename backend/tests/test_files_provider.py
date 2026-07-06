@@ -311,29 +311,29 @@ async def test_verify_google_drive_propagates_failure(monkeypatch):
         )
 
 
-def test_company_folder_name_sanitizes_and_appends_id():
+def test_company_folder_name_is_the_sanitized_company_name():
+    # Keyed on the readable name, NOT the id (no id suffix).
     c = _Company("Acme / Co\nInc")
-    name = files_svc.company_folder_name(c)
-    assert name == f"Acme Co Inc ({str(c.id)[:8]})"
+    assert files_svc.company_folder_name(c) == "Acme Co Inc"
 
 
-def test_company_folder_name_falls_back_to_id():
+def test_company_folder_name_falls_back_to_id_when_unnamed():
     c = _Company("")
     assert files_svc.company_folder_name(c) == f"company-{str(c.id)[:8]}"
 
 
-def test_company_folder_name_is_unique_for_same_named_companies():
-    # Two businesses share a name (e.g. onboarding's default "Untitled Company") —
-    # they must still get distinct folders in the founder's shared Drive.
-    a, b = _Company("Untitled Company"), _Company("Untitled Company")
-    assert files_svc.company_folder_name(a) != files_svc.company_folder_name(b)
+def test_company_folder_name_groups_by_name():
+    # Same name → same folder (the intended grouping): a company's data stays
+    # under one readable folder even across renames back to the same name.
+    a, b = _Company("GalaxiaOS"), _Company("GalaxiaOS")
+    assert files_svc.company_folder_name(a) == files_svc.company_folder_name(b) == "GalaxiaOS"
 
 
 def test_category_path_uses_root_and_category_folder():
     c = _Company("Acme")
     path = files_svc.category_path(c, FileCategory.financial)
     assert path[0] == ".galaxia"
-    assert path[1] == f"Acme ({str(c.id)[:8]})"
+    assert path[1] == "Acme"
     assert path[2] == "Financials"
 
 

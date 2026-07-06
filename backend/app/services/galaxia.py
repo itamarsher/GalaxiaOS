@@ -34,19 +34,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.db import SessionLocal
-from app.models import ApiKey, Budget, Company, Membership, Mission, Policy, User
+from app.models import ApiKey, Budget, Company, Membership, Mission, User
 from app.models.enums import (
     ApiKeyStatus,
     BudgetPeriod,
     CompanyStatus,
     MembershipRole,
-    PolicyEffect,
-    PolicyScope,
 )
 from app.observability import get_logger
 from app.security import hash_password
-from app.services import chat as chat_svc
-from app.services import governance as gov
 from app.services.onboarding import _fleet_specs, provision_fleet
 
 _log = get_logger("abos.galaxia")
@@ -188,12 +184,19 @@ async def _ensure_company(db: AsyncSession) -> Company:
 
 
 async def _provision_operating_state(db: AsyncSession, company: Company) -> None:
-    """Create the mission, fleet, and governance, then activate the company.
+    """Generate the (draft) org plan and stop at the onboarding approval phase.
+
+    Lands the company exactly where a founder is after generation but before
+    launch: **status stays ``draft``** with a generated fleet (the plan to
+    approve). It does NOT seed governance, open the CEO DM, or kick a launch run —
+    those are the founder's *launch* action (``onboarding.launch`` via
+    ``POST /onboarding/{id}/launch``), i.e. approving the plan. This keeps even the
+    dogfooding company inside the normal onboarding flow instead of springing to
+    life pre-approved.
 
     No LLM call: ``_fleet_specs([])`` yields the full default fleet (guaranteeing
     the Platform agent among the oversight roles), wired under the CEO with the
-    budget split by role. Governance is seeded but no launch run is kicked — the
-    business-cycle cron picks up active companies on its next tick.
+    budget split by role.
     """
     mission = Mission(
         company_id=company.id,
@@ -210,21 +213,7 @@ async def _provision_operating_state(db: AsyncSession, company: Company) -> None
         specs=_fleet_specs([]),
         total_budget_cents=settings.galaxia_monthly_budget_cents,
     )
-
-    for spec in gov.default_policies():
-        db.add(
-            Policy(
-                company_id=company.id,
-                name=spec["name"],
-                scope=PolicyScope(spec["scope"]),
-                rule=spec["rule"],
-                effect=PolicyEffect(spec["effect"]),
-                priority=spec["priority"],
-            )
-        )
-    await gov.set_external_comms_approval(db, company_id=company.id, enabled=False)
-    await chat_svc.ensure_ceo_dm(db, company_id=company.id)
-    company.status = CompanyStatus.active
+    # Intentionally left in ``draft``: the founder approves the plan by launching.
     await db.flush()
 
 
