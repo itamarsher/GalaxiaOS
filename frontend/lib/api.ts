@@ -81,7 +81,10 @@ export interface BudgetView {
   by_category: Record<string, number>;
   by_agent: Record<string, number>;
 }
-export interface Task { id: string; agent_id: string; goal: string; status: string; depth: number; cost_cents: number; output: Record<string, unknown> | null }
+export interface Task { id: string; agent_id: string; root_run_id: string | null; goal: string; status: string; depth: number; cost_cents: number; output: Record<string, unknown> | null }
+// The game's "round" trigger + status (backend app/services/runs.py).
+export interface CycleStart { started: boolean; task_id: string | null; reason: string; active: boolean }
+export interface CycleStatus { active: boolean; can_start: boolean; reason: string; active_task_count: number }
 export interface Decision {
   id: string; agent_id: string | null; agent_name: string | null; agent_role: string | null;
   task_id: string | null; kind: string; summary: string; status: string; created_at: string;
@@ -265,6 +268,10 @@ export const api = {
     req<void>(`/companies/${companyId}`, { method: "DELETE" }),
   resetCompany: (companyId: string) =>
     req<Company>(`/companies/${companyId}/reset`, { method: "POST" }),
+  advanceCycle: (companyId: string) =>
+    req<CycleStart>(`/companies/${companyId}/cycle`, { method: "POST" }),
+  cycleStatus: (companyId: string) =>
+    req<CycleStatus>(`/companies/${companyId}/cycle`),
   playbook: (companyId: string) => req<Playbook>(`/companies/${companyId}/playbook`),
   updatePlaybook: (companyId: string, playbook: string) =>
     req<Playbook>(`/companies/${companyId}/playbook`, {
