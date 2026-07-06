@@ -66,6 +66,28 @@ export default function Overview() {
     }
   };
 
+  // Reset this company to a fresh draft: wipes its generated org and all
+  // operational state (tasks, runs, budget spend, memory, chat, sites…) and
+  // rebuilds the default fleet, keeping the mission and saved API keys. Lands at
+  // plan-approval, so we return to onboarding to review and relaunch.
+  const [resetting, setResetting] = useState(false);
+  const resetCompany = async () => {
+    if (!window.confirm(
+      "Reset this company? This wipes its agents, tasks, budget history, memory and " +
+      "activity and rebuilds a fresh draft to relaunch. Its mission and saved API keys " +
+      "are preserved. This cannot be undone."
+    )) return;
+    setResetting(true);
+    try {
+      await api.resetCompany(id);
+      alert("Company reset — rebuilt as a fresh draft. Review the plan and relaunch when ready.");
+      router.push("/");
+    } catch (e) {
+      alert(String(e instanceof Error ? e.message : e));
+      setResetting(false);
+    }
+  };
+
   return (
     <div>
       <h2>{company.data?.name ?? "Company"}</h2>
@@ -178,12 +200,18 @@ export default function Overview() {
       <div className="card danger-zone">
         <div className="step">Danger zone</div>
         <p className="muted">
-          Permanently delete this company and stop all of its agents. This removes every
-          task, budget record, and memory — there is no undo.
+          Reset wipes this company&apos;s agents, tasks, budget history, memory and activity and
+          rebuilds a fresh draft to relaunch — keeping its mission and saved API keys. Delete
+          removes the company and everything under it. Neither can be undone.
         </p>
-        <button className="ghost danger" disabled={deleting} onClick={deleteCompany}>
-          {deleting ? "Deleting…" : "Delete company"}
-        </button>
+        <div className="btnrow">
+          <button className="ghost danger" disabled={resetting || deleting} onClick={resetCompany}>
+            {resetting ? "Resetting…" : "Reset company"}
+          </button>
+          <button className="ghost danger" disabled={deleting || resetting} onClick={deleteCompany}>
+            {deleting ? "Deleting…" : "Delete company"}
+          </button>
+        </div>
 
         {/* TEMP DEV TOOL — remove before launch (backend app/api/dev.py + ABOS_DEV_TOOLS_ENABLED). */}
         {dev.data?.enabled && (
