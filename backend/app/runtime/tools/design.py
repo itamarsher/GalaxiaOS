@@ -26,6 +26,7 @@ from app.models import Agent, Company, Task
 from app.models.enums import FileCategory, MemoryType
 from app.providers.base import ToolSpec
 from app.runtime.tools.base import ToolOutcome, unsupported_capability
+from app.runtime.tools.critique import visual_gate
 from app.services import files as files_svc
 from app.services import memory as memory_svc
 from app.services.integrations import resolve_file_provider
@@ -254,6 +255,29 @@ async def _generate_and_file(
         return ToolOutcome(observation=f"{kind} generation failed: {exc}", is_error=True)
 
     asset: GeneratedMedia = captured["asset"]
+
+    # Self-validation: before filing an image, an independent critic actually
+    # LOOKS at it (vision) and opinionates on quality/on-brand fit. If it's not
+    # good enough (and rounds remain), the agent gets the critique and regenerates
+    # with an improved prompt; only an approved image is filed. Videos can't be
+    # shown to the vision critic, so they pass through.
+    if kind == "image" and (asset.mime_type or "").startswith("image/"):
+        brief = f"Prompt the agent used: {prompt}"
+        if on_brand and brand.strip():
+            brief += "\n(The image was meant to follow the company's brand guidelines.)"
+        hold = await visual_gate(
+            db,
+            ctx,
+            agent=agent,
+            task=task,
+            key="image",
+            kind="marketing image",
+            brief=brief,
+            image=(asset.data, asset.mime_type),
+        )
+        if hold is not None:
+            return hold
+
     filename = _asset_filename(args.get("filename"), prompt, asset.mime_type)
     try:
         row = await files_svc.archive(

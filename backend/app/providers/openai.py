@@ -13,6 +13,7 @@ import openai
 
 from app.providers import pricing
 from app.providers.base import (
+    ImageBlock,
     LLMProvider,
     LLMResponse,
     Message,
@@ -49,6 +50,9 @@ def _flatten(content) -> str:
         elif isinstance(block, ToolResultBlock):
             prefix = "tool_error" if block.is_error else "tool_result"
             parts.append(f"[{prefix} {block.content}]")
+        elif isinstance(block, ImageBlock):
+            # Rough allowance so the pre-call estimate covers a vision input.
+            parts.append("x" * 6000)
     return "\n".join(parts)
 
 
@@ -88,8 +92,9 @@ def _to_oai_messages(system: str, messages: list[Message]) -> list[dict]:
             out.append(msg)
         else:
             # User turn: tool_result blocks become role:"tool" messages; any
-            # plain text becomes a trailing role:"user" message.
+            # plain text (and any image) becomes a trailing role:"user" message.
             text_parts: list[str] = []
+            image_parts: list[dict] = []
             for b in m.content:
                 if isinstance(b, ToolResultBlock):
                     content = f"ERROR: {b.content}" if b.is_error else b.content
@@ -98,7 +103,21 @@ def _to_oai_messages(system: str, messages: list[Message]) -> list[dict]:
                     )
                 elif isinstance(b, TextBlock):
                     text_parts.append(b.text)
-            if text_parts:
+                elif isinstance(b, ImageBlock):
+                    image_parts.append(
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": f"data:{b.media_type};base64,{b.data}"},
+                        }
+                    )
+            if image_parts:
+                # A vision turn needs the multimodal content-array shape.
+                content_parts: list[dict] = []
+                if text_parts:
+                    content_parts.append({"type": "text", "text": "\n".join(text_parts)})
+                content_parts.extend(image_parts)
+                out.append({"role": "user", "content": content_parts})
+            elif text_parts:
                 out.append({"role": "user", "content": "\n".join(text_parts)})
     return out
 

@@ -60,10 +60,25 @@ class ToolResultBlock:
     is_error: bool = False
 
 
+@dataclass
+class ImageBlock:
+    """An image handed to a vision-capable model as input (e.g. for a critic).
+
+    ``data`` is the raw image bytes encoded as a base64 ASCII string and
+    ``media_type`` its MIME type (e.g. ``image/png``). Only user turns carry
+    images, and only vision-capable models accept them — every current provider
+    model (``claude-*``, ``gpt-4o``) qualifies. This is input-only: the runtime
+    never persists image turns in a task transcript.
+    """
+
+    data: str
+    media_type: str = "image/png"
+
+
 # A structured turn is an ordered list of content blocks. Plain ``str`` content
 # is still accepted (and preferred for simple text-only turns) so existing
 # callers need no change.
-ContentBlock = Union[TextBlock, ToolUseBlock, ToolResultBlock]
+ContentBlock = Union[TextBlock, ToolUseBlock, ToolResultBlock, ImageBlock]
 
 
 @dataclass

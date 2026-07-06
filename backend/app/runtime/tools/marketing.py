@@ -22,6 +22,7 @@ from app.runtime.tools.base import (
     consume_approval_grant,
     unsupported_capability,
 )
+from app.runtime.tools.critique import visual_gate
 from app.services import sites as sites_svc
 from app.services.integrations import resolve_dns_provider, resolve_site_host
 
@@ -149,6 +150,31 @@ async def _publish_content(db, ctx, *, agent: Agent, task: Task, args: dict) -> 
     lead_capture = bool(args.get("lead_capture")) and channel == "landing_page"
     cta_headline = (str(args.get("cta_headline")).strip() or None) if args.get("cta_headline") else None
     cta_button = (str(args.get("cta_button")).strip() or None) if args.get("cta_button") else None
+
+    # Self-validation: an independent critic reviews the rendered page BEFORE it
+    # goes live, so the fleet stops shipping ugly/off-brand pages. If it wants
+    # changes (and rounds remain), the agent gets the critique and revises; the
+    # page publishes only once the critic is satisfied.
+    preview_html = sites_svc.render_page_html(
+        title,
+        body,
+        form_action="#" if lead_capture else None,
+        cta_headline=cta_headline,
+        cta_button=cta_button,
+    )
+    hold = await visual_gate(
+        db,
+        ctx,
+        agent=agent,
+        task=task,
+        key=f"page:{channel}",
+        kind="landing page" if channel == "landing_page" else "blog page",
+        brief=f"Title: {title}\nChannel: {channel}",
+        html=preview_html,
+    )
+    if hold is not None:
+        return hold
+
     try:
         site = await sites_svc.publish_site(
             db,
