@@ -12,17 +12,9 @@ from app.deps import CompanyDep, CurrentUser, DbDep
 from app.models import Agent, DecisionRequest, MemoryEntry, Objective, Task
 from app.models.enums import DecisionStatus, MemoryType, TaskStatus
 from app.runtime.queue import enqueue_task
-from app.schemas import (
-    DecisionChatRequest,
-    DecisionChatResult,
-    DecisionChatThread,
-    DecisionChatTurn,
-    DecisionOut,
-    DecisionResolveRequest,
-)
+from app.schemas import DecisionOut, DecisionResolveRequest
 from app.services import budget as budget_svc
 from app.services import chat as chat_svc
-from app.services import copilot, memory
 from app.services import external_messages as ext
 
 # Listing is company-scoped; resolve actions are by decision id (re-checked against membership).
@@ -137,46 +129,6 @@ async def list_decisions(company: CompanyDep, db: DbDep, only_pending: bool = Tr
     return await _to_out(db, list((await db.scalars(stmt.limit(200))).all()))
 
 
-@router.get("/decisions/{decision_id}/chat", response_model=DecisionChatThread)
-async def chat_thread(decision_id: uuid.UUID, db: DbDep, user: CurrentUser):
-    """The persisted discussion thread for a decision (for loading on open/reload)."""
-    decision = await _load_decision(db, user, decision_id)
-    return DecisionChatThread(thread=_load_thread(decision))
-
-
-@router.post("/decisions/{decision_id}/chat", response_model=DecisionChatResult)
-async def chat(
-    decision_id: uuid.UUID, body: DecisionChatRequest, db: DbDep, user: CurrentUser
-):
-    """Discuss a decision with the agent that raised it.
-
-    The thread is persisted on the decision, so the agent answers with the full
-    prior conversation in context and the founder keeps it across reloads.
-    """
-    decision = await _load_decision(db, user, decision_id)
-    thread = _load_thread(decision)
-    answer = await copilot.discuss_decision(
-        db,
-        company_id=decision.company_id,
-        decision=decision,
-        message=body.message,
-        history=thread,
-        user_id=user.id,
-    )
-    # Append this exchange and persist. Reassign (don't mutate in place) so
-    # SQLAlchemy flags the JSONB column as dirty.
-    updated = [*thread, DecisionChatTurn(who="you", text=body.message),
-               DecisionChatTurn(who="agent", text=answer)]
-    decision.chat = [t.model_dump() for t in updated]
-    await db.commit()
-    return DecisionChatResult(answer=answer, thread=updated)
-
-
-def _load_thread(decision: DecisionRequest) -> list[DecisionChatTurn]:
-    """Parse the persisted ``chat`` column into validated turns (oldest first)."""
-    return [DecisionChatTurn(**t) for t in (decision.chat or []) if isinstance(t, dict)]
-
-
 async def _load_decision(db, user, decision_id: uuid.UUID) -> DecisionRequest:
     from app.models import Membership
 
@@ -214,18 +166,6 @@ async def _apply_note(db, decision: DecisionRequest, note: str | None) -> None:
     )
 
 
-def _render_discussion(thread) -> str:
-    """Render a stored chat thread as ``Founder:`` / ``Agent:`` lines."""
-    lines = []
-    for turn in thread or []:
-        if not isinstance(turn, dict):
-            continue
-        text = (turn.get("text") or "").strip()
-        if text:
-            lines.append(f"{'Founder' if turn.get('who') == 'you' else 'Agent'}: {text}")
-    return "\n".join(lines)
-
-
 async def _post_resolution_dm(
     db, decision: DecisionRequest, *, resolution: str, note: str | None
 ) -> None:
@@ -244,26 +184,6 @@ async def _post_resolution_dm(
     )
 
 
-async def _apply_discussion(db, decision: DecisionRequest, *, resolution: str) -> None:
-    """Surface the *entire* founder↔agent discussion to the agent on resume.
-
-    Beyond the one-line guidance note, the whole back-and-forth from the Discuss
-    panel is written to company memory (embedded, so it's recalled like other
-    learnings), prefixed with how the founder ultimately resolved the decision —
-    so the re-running agent acts with the full conversation in context.
-    """
-    rendered = _render_discussion(decision.chat)
-    if not rendered:
-        return
-    await memory.write(
-        db,
-        company_id=decision.company_id,
-        type=MemoryType.decision,
-        title=f"Founder discussion ({resolution}) on: {decision.summary[:80]}",
-        content=f"The founder {resolution} this decision after discussing it:\n{rendered}",
-    )
-
-
 @router.post("/decisions/{decision_id}/approve", response_model=DecisionOut)
 async def approve(
     decision_id: uuid.UUID,
@@ -276,7 +196,6 @@ async def approve(
     decision.resolved_by_user_id = user.id
     decision.resolved_at = datetime.now(UTC)
     await _apply_note(db, decision, body.note if body else None)
-    await _apply_discussion(db, decision, resolution="approved")
     await _post_resolution_dm(db, decision, resolution="approved", note=body.note if body else None)
 
     # Over-budget approvals carry the shortfall: authorising the spend lifts the
@@ -317,7 +236,6 @@ async def reject(
     decision.resolved_by_user_id = user.id
     decision.resolved_at = datetime.now(UTC)
     await _apply_note(db, decision, body.note if body else None)
-    await _apply_discussion(db, decision, resolution="rejected")
     await _post_resolution_dm(db, decision, resolution="rejected", note=body.note if body else None)
     # If this gated an outbound message, mark its indexed record rejected so the
     # communications log shows it was never sent.

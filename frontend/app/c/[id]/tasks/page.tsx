@@ -50,7 +50,6 @@ export default function TasksPage() {
 function TaskDrawer({ companyId, taskId, onClose }: { companyId: string; taskId: string; onClose: () => void }) {
   const [task, setTask] = useState<TaskDetail | null>(null);
   const [err, setErr] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
 
   const load = () => {
     api.task(companyId, taskId)
@@ -63,19 +62,6 @@ function TaskDrawer({ companyId, taskId, onClose }: { companyId: string; taskId:
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [companyId, taskId]);
-
-  const resolve = async (approve: boolean) => {
-    const d = task?.pending_decision;
-    if (!d) return;
-    setBusy(true);
-    try {
-      if (approve) await api.approveDecision(d.id);
-      else await api.rejectDecision(d.id);
-      load();
-    } finally {
-      setBusy(false);
-    }
-  };
 
   // Pull a readable execution summary + result out of the (free-form) output blob.
   const out = task?.output ?? null;
@@ -104,12 +90,9 @@ function TaskDrawer({ companyId, taskId, onClose }: { companyId: string; taskId:
               <div className="card" style={{ borderColor: "var(--warn)", marginTop: 12 }}>
                 <div className="step" style={{ color: "var(--warn)" }}>⏳ Waiting for your decision</div>
                 <Markdown>{task.pending_decision.summary}</Markdown>
-                <div className="btnrow">
-                  <button disabled={busy} onClick={() => resolve(true)}>Approve</button>
-                  <button className="ghost" disabled={busy} onClick={() => resolve(false)}>Reject</button>
-                  <a className="muted" style={{ fontSize: 12, alignSelf: "center" }}
-                     href={`/c/${companyId}/chat`}>Discuss in Chat →</a>
-                </div>
+                <a href={`/c/${companyId}/chat?decision=${task.pending_decision.id}`}>
+                  Respond in Chat →
+                </a>
               </div>
             )}
             <div className="kv"><span>Agent</span><span>{task.agent_name ?? "—"}{task.agent_role ? ` · ${task.agent_role}` : ""}</span></div>

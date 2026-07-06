@@ -21,48 +21,12 @@ from app.config import settings
 from app.db import SessionLocal
 from app.models import Agent, DecisionRequest, FounderDigest, MemoryEntry, Task
 from app.models.enums import AgentRole, AgentStatus, DecisionStatus
-from app.providers.base import Message, ToolSpec
+from app.providers.base import Message
 from app.runtime.cost_meter import CostMeter
 from app.services import apikeys, platform_requests
 from app.services import budget as budget_svc
 from app.services import memory as memory_svc
 from app.services import runway as runway_svc
-
-# Tools the founder-facing chat can actually act on: filing a capability request
-# or a bug report routes to the Platform agent (it can't role-play "the product
-# team" — there is no such team; this is the real mechanism).
-_PLATFORM_REQUEST_TOOLS: list[ToolSpec] = [
-    ToolSpec(
-        name="request_capability",
-        description="File a request for a new tool/capability the agents lack (routes to the Platform agent).",
-        input_schema={
-            "type": "object",
-            "properties": {
-                "title": {"type": "string"},
-                "details": {
-                    "type": "string",
-                    "description": (
-                        "The business case: what's needed and why — the outcome it enables, "
-                        "not how it should be built."
-                    ),
-                },
-            },
-            "required": ["title", "details"],
-        },
-    ),
-    ToolSpec(
-        name="report_bug",
-        description="File a bug report about something broken (routes to the Platform agent).",
-        input_schema={
-            "type": "object",
-            "properties": {
-                "title": {"type": "string"},
-                "details": {"type": "string"},
-            },
-            "required": ["title", "details"],
-        },
-    ),
-]
 
 _COMMAND_VERBS = (
     "pause", "resume", "stop", "halt", "increase", "decrease", "set", "raise", "lower",
@@ -255,116 +219,6 @@ def _confirm_request(req_kind: str, outcome) -> str:
         f"You'd already requested “{outcome.title}”; it stays at {outcome.votes} "
         "vote(s). I refreshed the details."
     )
-
-
-#: Cap replayed discussion turns so a long thread can't blow the context window.
-_DECISION_CHAT_HISTORY_LIMIT = 20
-
-
-async def discuss_decision(
-    db: AsyncSession,
-    *,
-    company_id: uuid.UUID,
-    decision,
-    message: str,
-    history=None,
-    user_id: uuid.UUID | None = None,
-) -> str:
-    """Answer a founder's question about a specific pending decision.
-
-    Grounded in the decision itself (kind, summary, proposed action) plus current
-    company state, so the founder can interrogate the trade-offs and reshape the
-    call before approving/rejecting it. ``history`` is the prior turns of this
-    discussion (oldest first); replaying them keeps the agent's answers coherent
-    across a multi-turn back-and-forth instead of treating each reply in
-    isolation.
-    """
-    resolved = await apikeys.resolve_provider(db, company_id=company_id)
-    if resolved is None:
-        return "Add a provider API key to discuss decisions with the agent."
-    provider, api_key = resolved
-
-    agent = await db.get(Agent, decision.agent_id) if decision.agent_id else None
-    decision_ctx = (
-        f"You raised this decision for the founder.\n"
-        f"Agent: {agent.name if agent else 'unknown'} "
-        f"({agent.role.value if agent else 'n/a'})\n"
-        f"Kind: {decision.kind.value}\n"
-        f"Summary: {decision.summary}\n"
-        f"Proposed action / details: {json.dumps(decision.payload or {})}"
-    )
-    state = await _company_state(db, company_id)
-
-    # A briefing turn (decision + live company state) anchors the thread, then the
-    # prior turns are replayed verbatim, then the founder's new message. The
-    # founder shows as the "user", the agent as the "assistant".
-    messages: list[Message] = [
-        Message(role="user", content=f"{decision_ctx}\n\nCompany state:\n{state}"),
-        Message(role="assistant", content="Understood — ask me anything about this decision."),
-    ]
-    for turn in (history or [])[-_DECISION_CHAT_HISTORY_LIMIT:]:
-        text = (turn.text or "").strip()
-        if not text:
-            continue
-        role = "user" if turn.who == "you" else "assistant"
-        messages.append(Message(role=role, content=text))
-    messages.append(Message(role="user", content=message))
-
-    meter = CostMeter(SessionLocal)
-    resp = await meter.run_llm(
-        provider,
-        api_key=api_key,
-        company_id=company_id,
-        agent_id=None,
-        task_id=None,
-        model=provider.default_models["cheap"],
-        system=(
-            "You are the agent that raised this decision. Explain your reasoning, answer the "
-            "founder's questions, and help them decide whether to approve, reject, or adjust it. "
-            "Be concise, concrete, and honest about trade-offs and risks. If the founder asks for "
-            "a change, describe exactly what you would do differently.\n"
-            "If the founder asks you to request a new capability/tool or report a bug, actually do "
-            "it by calling `request_capability` or `report_bug` — do NOT claim you'll route it to "
-            "a team or person; those tools are the only real mechanism."
-        ),
-        messages=messages,
-        tools=_PLATFORM_REQUEST_TOOLS,
-        max_tokens=600,
-    )
-
-    # If the agent chose to file a capability/bug request, actually record it.
-    filed = await _handle_platform_tool_calls(
-        db, company_id=company_id, resp=resp, user_id=user_id
-    )
-    if filed:
-        return (resp.text + "\n\n" if resp.text else "") + "\n".join(filed)
-    return resp.text
-
-
-async def _handle_platform_tool_calls(
-    db, *, company_id: uuid.UUID, resp, user_id: uuid.UUID | None = None
-) -> list[str]:
-    """Record any request_capability/report_bug tool calls to the backlog."""
-    confirmations: list[str] = []
-    for call in resp.tool_calls or []:
-        if call.name not in ("request_capability", "report_bug"):
-            continue
-        req_kind = "capability" if call.name == "request_capability" else "bug"
-        args = call.arguments if isinstance(call.arguments, dict) else {}
-        title = str(args.get("title") or "").strip() or (
-            "Capability request" if req_kind == "capability" else "Bug report"
-        )
-        details = str(args.get("details") or "").strip() or title
-        outcome = await platform_requests.file_request(
-            db, company_id=company_id, kind=req_kind, title=title, details=details,
-            user_id=user_id,
-        )
-        noun = "capability request" if req_kind == "capability" else "bug report"
-        if outcome is None:
-            confirmations.append(f"(Couldn't record the {noun}.)")
-        else:
-            confirmations.append("✅ " + _confirm_request(req_kind, outcome))
-    return confirmations
 
 
 async def _pending_decisions(db: AsyncSession, company_id: uuid.UUID) -> int:

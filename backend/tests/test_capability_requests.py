@@ -141,30 +141,6 @@ async def test_copilot_command_records_capability_request(
     assert fr is not None and fr.title == "Real web search" and fr.vote_count == 1
 
 
-# ── decision-discuss tool handling ────────────────────────────────────────────
-
-
-@requires_db
-async def test_discuss_tool_call_records_request(session_factory, company_with_budget):
-    from app.models import FeatureRequest
-
-    resp = SimpleNamespace(
-        text="On it.",
-        tool_calls=[SimpleNamespace(name="request_capability",
-                                    arguments={"title": "Real web search", "details": "..."})],
-    )
-    async with session_factory() as db:
-        confirmations = await copilot._handle_platform_tool_calls(
-            db, company_id=company_with_budget, resp=resp
-        )
-        await db.commit()
-
-    assert confirmations and "backlog" in confirmations[0].lower()
-    async with session_factory() as db:
-        fr = await db.scalar(select(FeatureRequest))
-    assert fr is not None and fr.title == "Real web search"
-
-
 # ── per-company web search key ────────────────────────────────────────────────
 
 

@@ -97,10 +97,6 @@ class DecisionRequest(Base, PKMixin, TenantMixin, TimestampMixin):
     channel_id: Mapped[uuid.UUID | None] = mapped_column(
         PGUUID(as_uuid=True), ForeignKey("chat_channels.id", ondelete="SET NULL"), nullable=True
     )
-    # Persisted founder↔agent discussion thread, oldest first: a list of
-    # ``{"who": "you"|"agent", "text": str}`` turns. Survives reloads/devices so
-    # the conversation (and the agent's context) isn't lost between messages.
-    chat: Mapped[list | None] = mapped_column(JSONB, nullable=True)
     status: Mapped[DecisionStatus] = mapped_column(
         Enum(DecisionStatus, native_enum=False, length=20),
         default=DecisionStatus.pending,
