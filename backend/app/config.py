@@ -391,20 +391,53 @@ class Settings(BaseSettings):
     # deterministically from the founder id (uuid5), so there is never a magic
     # literal to keep in sync across environments.
     galaxia_company_id: str = ""
-    galaxia_company_name: str = "Galaxia"
+    galaxia_company_name: str = "GalaxiaOS"
     # Galaxia's monthly operating budget (cents). Modest by default — its work is
     # platform triage, metered through the same CostMeter as any company.
     galaxia_monthly_budget_cents: int = 50_000
+    # The mission fed to the generator (mission → summary/objectives/KRs → fleet).
+    # Overridable via ABOS_GALAXIA_MISSION, but note the bootstrap reconciles the
+    # stored mission to this on the next boot (see app.services.galaxia), so config
+    # is the source of truth even for an already-provisioned Galaxia.
     galaxia_mission: str = (
-        "Build and operate ABOS itself — the Autonomous Business Operating System "
-        "in this repository — so that any person on the planet can own or create an "
-        "autonomous business on it. Dogfood the product end to end with the same "
-        "agent fleet ABOS gives every founder, and turn the gaps our own agents (and "
-        "every other company's agents) hit into shipped improvements: when an agent "
-        "reports a bug or requests a capability, review the shared feature-request "
-        "backlog and promote the highest-demand asks into real tracker issues on the "
-        "repo, closing the loop from need to shipped code."
+        "Make owning an autonomous business a right, not a privilege. GalaxiaOS is a "
+        "free, open-source operating system that lets any person on the planet stand "
+        "up and run a real company operated by a fleet of AI agents — a CEO and the "
+        "functions a business actually needs (growth, research, product, finance, "
+        "governance, and more) — under a hard budget and a governance layer, with the "
+        "founder acting as a board member rather than an operator. Founders bring "
+        "their own model key (BYOK): owning or creating an autonomous business must "
+        "never depend on a subscription or a gatekeeper.\n\n"
+        "Our business is to build and operate GalaxiaOS itself — we dogfood our own "
+        "product. GalaxiaOS runs as a company on GalaxiaOS: the same agent fleet "
+        "every founder gets operates our own roadmap, growth, research, finance, and "
+        "governance. When any agent — ours, or any other company's on the platform — "
+        "hits a limitation, that unmet need becomes a demand signal, and the "
+        "highest-demand needs are turned into shipped product improvements "
+        "automatically: need → tracker issue → implementation → reviewed, merged, and "
+        "deployed, with no human in the loop except the decisions a founder must own "
+        "(security, money, data access, and irreversible calls). Every founder's "
+        "friction makes the product better for every founder, and the platform's "
+        "capabilities compound as its users' real needs ship continuously.\n\n"
+        "We serve aspiring and solo founders, indie hackers, and small teams "
+        "worldwide who have ideas and intent but not the capital, headcount, or "
+        "technical depth to operate a company — especially the people a paid "
+        "gatekeeper would exclude. We win when a non-technical person, anywhere, can "
+        "describe a mission and a budget and have a functioning, self-improving "
+        "business running the same day.\n\n"
+        "We sustain the open core without ever paywalling the core capability: "
+        "optional hosted/managed convenience, a future agent-and-capability "
+        "marketplace, and support/partnerships. The core stays free, open-source, and "
+        "BYOK so adoption is unconstrained."
     )
+    # Standing constraints attached to Galaxia's mission (the founder's guardrails).
+    galaxia_constraints: list[str] = [
+        "Core product stays free, open-source, and BYOK — never paywall the core capability.",
+        "Reserve budget before spending; never exceed the budget.",
+        "Escalate security, money-movement, data-access, and irreversible changes to the founder.",
+        "Act only through real tools; never fabricate or assume an unverified result.",
+        "Prefer reusing the existing fleet over growing headcount.",
+    ]
 
     # Scheduled promoter: a cron drains the shared feature-request backlog into
     # real tracker issues on Galaxia's behalf, so accrued demand becomes issues
@@ -423,6 +456,30 @@ class Settings(BaseSettings):
     galaxia_reconcile_enabled: bool = True
     galaxia_reconcile_batch: int = 25
     galaxia_reconcile_minute: int = 37  # once/hour at :37 (offset from the promoter)
+
+    # Which deployment this is. The CURRENT default deployment is the *dogfooding*
+    # environment: GalaxiaOS runs here and is allowed to experiment, self-modify,
+    # and deploy. Dev tooling (incl. the Galaxia reset endpoint) is enabled here.
+    #
+    # TODO(production-split): before onboarding the FIRST external users, stand up a
+    # SEPARATE production environment (own Render services + database + secrets) with
+    # environment="production", galaxia_bootstrap_enabled=false, and dev_tools_enabled
+    # =false — so real customer businesses never share infra with GalaxiaOS's own
+    # experimentation/self-deploy loop. See docs/DOGFOODING_OPERATIONS.md#environments.
+    environment: str = "dogfooding"  # dogfooding | production
+
+    # Re-provision Galaxia from fleet creation on the next boot, preserving saved
+    # BYOK keys. A convenience for the heavily-developed phase: set it, redeploy
+    # once, then UNSET it (it fires on every boot while true). Manual, safer path:
+    # POST /dev/galaxia/reset.
+    galaxia_reset_on_boot: bool = False
+
+    # Render deployment observability (so agents can see what's happening with our
+    # own deploys). A read-only Render API key; global because GalaxiaOS owns the
+    # dogfooding Render account. A company may also connect its own via a BYOK
+    # "render" key. Without either, the render_* tools report they're not connected.
+    render_api_key: str = ""
+    render_api_base_url: str = "https://api.render.com/v1"
 
     # Investor review (onboarding): three agentic investors critique the venture.
     investor_review_enabled: bool = True

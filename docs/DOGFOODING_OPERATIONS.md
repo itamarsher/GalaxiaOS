@@ -37,6 +37,7 @@ App-side (Render service env, not GitHub) — required for the loop's app half:
 | `ABOS_GITHUB_TOKEN` | the running app files/reads tracker issues; **without it the promoter no-ops** |
 | `ABOS_GITHUB_REPO` | defaults to `itamarsher/just-launch-it` |
 | `ABOS_MASTER_KEY` | envelope key for BYOK secrets (from a KMS in prod) |
+| `ABOS_RENDER_API_KEY` | read-only Render key so GalaxiaOS's agents can see our deploys (`list_render_services` / `list_render_deploys` / `get_render_deploy`). Offered only to Galaxia; other companies use their own BYOK `render` key. Optional. |
 
 ### 2. Repository variables
 
@@ -116,12 +117,52 @@ and no-op until Galaxia is bootstrapped and a tracker token is set.
 3. `ABOS_GALAXIA_PROMOTE_ENABLED=false` — stop turning demand into new issues.
 4. `ABOS_GALAXIA_BOOTSTRAP_ENABLED=false` — don't provision/operate Galaxia at all.
 
+## Environments
+
+The **current default deployment is the dogfooding environment** (`ABOS_ENVIRONMENT
+=dogfooding`, the default). This is where GalaxiaOS runs on itself: it bootstraps
+the Galaxia company, experiments, self-modifies, and deploys. Dev tooling —
+including the Galaxia reset endpoint — is enabled here on purpose.
+
+> **TODO — production split (before the first external users).** Stand up a
+> **separate production environment** (its own Render services, database, and
+> secrets) so real customer businesses never share infrastructure with GalaxiaOS's
+> own experimentation/self-deploy loop. In that environment set:
+>
+> - `ABOS_ENVIRONMENT=production`
+> - `ABOS_GALAXIA_BOOTSTRAP_ENABLED=false` (Galaxia is the dogfooding company; it
+>   doesn't belong in the customers' environment)
+> - `ABOS_DEV_TOOLS_ENABLED=false` (no reset/delete endpoints in prod)
+> - a fresh `ABOS_MASTER_KEY` from a KMS, its own `ABOS_DATABASE_URL`, and its own
+>   deploy hooks / GitHub token.
+>
+> Keep the dogfooding environment as the place the pipeline lands and validates
+> changes first; promote to production deliberately. This split is the single
+> prerequisite for safely onboarding external users.
+
+## Resetting Galaxia (dogfooding only)
+
+While the product is under heavy development, you can rebuild Galaxia from fleet
+creation **without losing saved keys** (BYOK provider keys survive):
+
+- **Manual (preferred):** `POST /dev/galaxia/reset` (gated by `ABOS_DEV_TOOLS_ENABLED`).
+  Wipes Galaxia's generated state — fleet, mission, objectives, runs, memory — and
+  re-provisions it fresh from config, then restores the stored provider keys.
+- **On boot:** set `ABOS_GALAXIA_RESET_ON_BOOT=true`, redeploy once, then **unset
+  it** — it re-provisions on *every* boot while true.
+
+Ordinary boots (neither of the above) don't reset; they only **reconcile the
+mission text/constraints to config**, so editing `galaxia_mission` in `config.py`
+(or `ABOS_GALAXIA_MISSION`) takes effect on the next deploy without a full reset.
+
 ## Known follow-ups
 
 - **Revision-aware deploy verification + automated rollback.** The current health
   gate confirms the API serves after a release trigger; distinguishing the *new*
   revision and rolling back on failure needs the Render API (a per-deploy build
-  marker + a rollback call). Tracked as the remainder of P1-4.
+  marker + a rollback call) — now partly unblocked by the Render integration
+  (`app/integrations/render.py`). Tracked as the remainder of P1-4.
 - **Deploy status → Galaxia memory.** Feeding merge/deploy outcomes back into the
   company so the fleet can observe its own shipped changes (the app-side half of
-  P1-4/P1-5) is not yet wired.
+  P1-4/P1-5) is not yet wired — the `render_*` tools let an agent read it on demand
+  in the meantime.
