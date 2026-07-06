@@ -67,3 +67,9 @@ class Task(Base, PKMixin, TenantMixin, TimestampMixin):
     # loop surfaces unread channel activity, so each new batch nudges exactly once —
     # on resume (messages that arrived while parked) and during a running task.
     chat_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Set when Galaxia's reliability monitor has picked up this failed task for
+    # investigation, so it is reviewed exactly once (see app.jobs.scheduled
+    # monitor_failed_tasks). NULL = not yet reviewed.
+    reliability_reviewed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )

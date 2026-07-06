@@ -480,6 +480,19 @@ class Settings(BaseSettings):
     # "render" key. Without either, the render_* tools report they're not connected.
     render_api_key: str = ""
     render_api_base_url: str = "https://api.render.com/v1"
+    # Owner (team/user) id for the Render logs API — required by GET /v1/logs, which
+    # the `get_render_logs` debug tool uses. Without it, log reads report they need
+    # configuring (deploy-status tools still work with just the key).
+    render_owner_id: str = ""
+
+    # Reliability monitor: Galaxia watches its OWN failed agent tasks, wakes the
+    # Platform agent to investigate each (reading the code, and the Render deploys
+    # when it looks infrastructure-related), and files a bug report — which flows
+    # through the promoter → tracker issue → Claude Code auto-fix pipeline. Scoped
+    # to Galaxia and to its own failures. ``batch`` caps investigations per tick.
+    galaxia_failure_monitor_enabled: bool = True
+    galaxia_failure_monitor_batch: int = 5
+    galaxia_failure_monitor_minute: int = 22  # once/hour (offset from :07 / :37)
 
     # Investor review (onboarding): three agentic investors critique the venture.
     investor_review_enabled: bool = True

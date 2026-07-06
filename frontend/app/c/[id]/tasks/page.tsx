@@ -90,7 +90,10 @@ function TaskDrawer({ companyId, taskId, onClose }: { companyId: string; taskId:
               <div className="card" style={{ borderColor: "var(--warn)", marginTop: 12 }}>
                 <div className="step" style={{ color: "var(--warn)" }}>⏳ Waiting for your decision</div>
                 <Markdown>{task.pending_decision.summary}</Markdown>
-                <a href={`/c/${companyId}/chat?decision=${task.pending_decision.id}`}>
+                <a
+                  href={`/c/${companyId}/chat?decision=${task.pending_decision.id}`}
+                  style={{ display: "inline-block", marginTop: 8, color: "var(--accent-strong)", fontWeight: 600 }}
+                >
                   Respond in Chat →
                 </a>
               </div>

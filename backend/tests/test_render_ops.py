@@ -73,6 +73,33 @@ async def test_list_and_get_deploys_parse():
 
 
 @pytest.mark.asyncio
+async def test_get_logs_parses_and_collapses_whitespace():
+    def handler(req: httpx.Request) -> httpx.Response:
+        assert req.url.path.endswith("/logs")
+        assert req.url.params.get("ownerId") == "own-1"
+        assert req.url.params.get("resource") == "srv-1"
+        return httpx.Response(
+            200,
+            json={"logs": [{"timestamp": "t1", "message": "line   one"},
+                           {"timestamp": "t2", "message": "boom"}], "hasMore": False},
+        )
+
+    client = RenderClient(api_key="k", owner_id="own-1", transport=httpx.MockTransport(handler))
+    logs = await client.get_logs("srv-1")
+    assert [ln.message for ln in logs] == ["line one", "boom"]
+
+
+@pytest.mark.asyncio
+async def test_get_logs_requires_owner_id():
+    client = RenderClient(
+        api_key="k", owner_id="", transport=httpx.MockTransport(lambda r: httpx.Response(200, json={}))
+    )
+    with pytest.raises(RenderError) as exc:
+        await client.get_logs("srv-1")
+    assert "owner id" in str(exc.value).lower()
+
+
+@pytest.mark.asyncio
 async def test_missing_key_raises():
     with pytest.raises(RenderError):
         await RenderClient(api_key="").list_services()
