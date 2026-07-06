@@ -23,7 +23,7 @@ from tests.conftest import requires_db
 @requires_db
 async def test_bootstrap_provisions_company_and_authorizes_promoter(session_factory):
     async with session_factory() as db:
-        company_id = await galaxia._bootstrap(db)
+        company_id = await galaxia._run(db)
         await db.commit()
 
     assert company_id == galaxia.galaxia_company_id()
@@ -75,10 +75,10 @@ async def test_bootstrap_provisions_company_and_authorizes_promoter(session_fact
 async def test_bootstrap_is_idempotent(session_factory):
     """Running it twice yields one company and one fleet — no duplicate rows."""
     async with session_factory() as db:
-        cid1 = await galaxia._bootstrap(db)
+        cid1 = await galaxia._run(db)
         await db.commit()
     async with session_factory() as db:
-        cid2 = await galaxia._bootstrap(db)
+        cid2 = await galaxia._run(db)
         await db.commit()
 
     assert cid1 == cid2
