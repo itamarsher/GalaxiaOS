@@ -13,6 +13,7 @@ import anthropic
 
 from app.providers import pricing
 from app.providers.base import (
+    ImageBlock,
     LLMProvider,
     LLMResponse,
     Message,
@@ -25,6 +26,11 @@ from app.providers.base import (
     ToolUseBlock,
     Usage,
 )
+
+# Rough per-image token allowance used only to size the pre-call reservation
+# (the real cost reconciles from ``response.usage`` afterwards). A generous
+# upper bound so a reservation never under-covers a vision call.
+_IMAGE_TOKEN_ESTIMATE_CHARS = 6000
 
 # Above this many output tokens the Anthropic SDK refuses a non-streaming
 # request (it estimates the response could exceed the ~10-min HTTP timeout), so
@@ -43,6 +49,8 @@ def _block_text(block: object) -> str:
         return f"{block.name}{block.input}"
     if isinstance(block, ToolResultBlock):
         return block.content
+    if isinstance(block, ImageBlock):
+        return "x" * _IMAGE_TOKEN_ESTIMATE_CHARS
     return str(block)
 
 
@@ -76,6 +84,17 @@ def _render_content(content: str | list) -> str | list[dict]:
                     "tool_use_id": b.tool_use_id,
                     "content": b.content,
                     "is_error": b.is_error,
+                }
+            )
+        elif isinstance(b, ImageBlock):
+            blocks.append(
+                {
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": b.media_type,
+                        "data": b.data,
+                    },
                 }
             )
         else:  # pragma: no cover - defensive
