@@ -663,10 +663,13 @@ async def ensure_ceo_dm(
     the CEO to adjust the plan live. Returns ``None`` if the company has no CEO yet
     (e.g. before the fleet is generated).
     """
+    # Deterministic: if a fleet ever had two CEOs, always resolve the oldest so
+    # every path (this DM, the orchestrator's planner run) uses the SAME CEO and
+    # the founder never ends up with two CEO DMs.
     ceo = await db.scalar(
-        select(Agent).where(
-            Agent.company_id == company_id, Agent.role == AgentRole.ceo
-        )
+        select(Agent)
+        .where(Agent.company_id == company_id, Agent.role == AgentRole.ceo)
+        .order_by(Agent.created_at.asc(), Agent.id.asc())
     )
     if ceo is None:
         return None

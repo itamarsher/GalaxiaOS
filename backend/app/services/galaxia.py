@@ -29,15 +29,27 @@ from __future__ import annotations
 
 import uuid
 
-from sqlalchemy import select, text
+from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.db import SessionLocal
-from app.models import ApiKey, Budget, Company, Membership, Mission, User
+from app.models import (
+    Agent,
+    ApiKey,
+    Budget,
+    ChatChannel,
+    ChatParticipant,
+    Company,
+    Membership,
+    Mission,
+    User,
+)
 from app.models.enums import (
+    AgentRole,
     ApiKeyStatus,
     BudgetPeriod,
+    ChatChannelKind,
     CompanyStatus,
     MembershipRole,
 )
@@ -109,6 +121,9 @@ async def _run(db: AsyncSession) -> uuid.UUID:
         await _reset(db)
     else:
         await _reconcile_mission(db, existing)
+    # Self-heal any legacy duplicate singleton agents (e.g. two CEOs from an older
+    # provisioning path) so the founder never sees two CEO DMs.
+    await _dedupe_singleton_roles(db, company_id)
     return company_id
 
 
@@ -136,6 +151,7 @@ async def _reset(db: AsyncSession) -> uuid.UUID:
     company = await _ensure_company(db)
     await _restore_api_keys(db, company_id, saved_keys)
     await _provision_operating_state(db, company)
+    await _dedupe_singleton_roles(db, company_id)
     _log.info(
         "Galaxia reset complete (company=%s, keys_preserved=%d)",
         company_id,
@@ -280,6 +296,77 @@ async def _restore_api_keys(
         )
     if saved:
         await db.flush()
+
+
+# Roles that must be a singleton in a fleet — exactly one per company. The CEO is
+# the root planner; the rest are the guaranteed oversight roles. Duplicates of any
+# of these are spurious (e.g. two CEOs surface as two founder DMs).
+_SINGLETON_ROLES = (
+    AgentRole.ceo,
+    AgentRole.governance,
+    AgentRole.auditor,
+    AgentRole.data,
+    AgentRole.platform,
+)
+
+
+async def _dedupe_singleton_roles(db: AsyncSession, company_id: uuid.UUID) -> int:
+    """Collapse any duplicate singleton-role agents, keeping the oldest of each.
+
+    Guards against a fleet that ended up with, e.g., two CEOs (which the UI renders
+    as two founder↔CEO DMs). Keeps the earliest-created agent for each singleton
+    role and deletes the extras; deleting an agent cascades its participant rows, so
+    afterwards we sweep any direct channel left with no agent member.
+    """
+    removed = 0
+    for role in _SINGLETON_ROLES:
+        agents = (
+            await db.scalars(
+                select(Agent)
+                .where(Agent.company_id == company_id, Agent.role == role)
+                .order_by(Agent.created_at.asc(), Agent.id.asc())
+            )
+        ).all()
+        for extra in agents[1:]:
+            await db.delete(extra)
+            removed += 1
+    if removed:
+        await db.flush()
+        await _delete_orphan_direct_channels(db, company_id)
+        _log.info(
+            "Galaxia dedupe removed %d duplicate singleton agent(s) (company=%s)",
+            removed,
+            company_id,
+        )
+    return removed
+
+
+async def _delete_orphan_direct_channels(db: AsyncSession, company_id: uuid.UUID) -> None:
+    """Delete direct (DM) channels left with no agent participant after a dedupe.
+
+    When a duplicate agent is removed, its 1:1 DM with the founder loses its only
+    agent member; such an orphan would otherwise linger as an empty thread.
+    """
+    channels = (
+        await db.scalars(
+            select(ChatChannel).where(
+                ChatChannel.company_id == company_id,
+                ChatChannel.kind == ChatChannelKind.direct,
+            )
+        )
+    ).all()
+    for ch in channels:
+        agent_members = await db.scalar(
+            select(func.count())
+            .select_from(ChatParticipant)
+            .where(
+                ChatParticipant.channel_id == ch.id,
+                ChatParticipant.agent_id.is_not(None),
+            )
+        )
+        if not agent_members:
+            await db.delete(ch)
+    await db.flush()
 
 
 async def _ensure_founder(db: AsyncSession) -> User:
