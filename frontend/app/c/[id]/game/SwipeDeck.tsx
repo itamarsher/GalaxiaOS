@@ -59,20 +59,21 @@ export function SwipeDeck({
   const stack = pending.slice(0, 3);
   return (
     <div className="swipe-deck" style={{ marginTop: 10 }}>
-      {stack
-        .map((d, i) => (
-          <SwipeCard
-            key={d.id}
-            decision={d}
-            depth={i}
-            interactive={i === 0}
-            busy={resolvingId === d.id}
-            expanded={i === 0 && expanded}
-            onToggleExpand={() => setExpanded((v) => !v)}
-            onResolve={(approve) => resolve(d, approve)}
-          />
-        ))
-        .reverse()}
+      {/* Top card first in DOM so it's position:relative and sizes the deck;
+          the peeking cards behind are absolutely positioned (z-index paints the
+          top card above them regardless of DOM order). */}
+      {stack.map((d, i) => (
+        <SwipeCard
+          key={d.id}
+          decision={d}
+          depth={i}
+          interactive={i === 0}
+          busy={resolvingId === d.id}
+          expanded={i === 0 && expanded}
+          onToggleExpand={() => setExpanded((v) => !v)}
+          onResolve={(approve) => resolve(d, approve)}
+        />
+      ))}
       <p className="muted swipe-hint">
         Swipe right to approve · left to reject{pending.length > 1 ? ` · ${pending.length} pending` : ""}
       </p>
