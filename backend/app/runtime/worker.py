@@ -12,7 +12,9 @@ from app.jobs.recovery import recover_pending_work
 from app.jobs.scheduled import (
     backfill_memory_embeddings,
     generate_digests,
+    promote_feature_backlog,
     recompute_runway,
+    reconcile_delivered_requests,
     reconcile_site_domains,
     run_business_cycle,
 )
@@ -76,6 +78,12 @@ class WorkerSettings:
         # Heal memories written without a vector (e.g. while a remote embedder was
         # cold-starting); every 10 minutes also keeps that embedder warm.
         cron(backfill_memory_embeddings, minute=set(range(0, 60, 10))),
+        # Galaxia dogfooding loop: promote accrued backlog demand into tracker
+        # issues (:07), then reconcile promoted entries whose issue has closed
+        # into "delivered" and notify requesters (:37, offset so they don't
+        # overlap). Both no-op until Galaxia is bootstrapped and a tracker is set.
+        cron(promote_feature_backlog, minute=settings.galaxia_promote_minute),
+        cron(reconcile_delivered_requests, minute=settings.galaxia_reconcile_minute),
     ]
     on_startup = startup
     redis_settings = redis_settings()

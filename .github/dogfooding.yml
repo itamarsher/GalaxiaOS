@@ -1,0 +1,52 @@
+# Guardrails for Galaxia's autonomous PR pipeline.
+#
+# The auto-merge workflow (.github/workflows/auto-merge.yml) reads this file on
+# every eligible PR. Editing it — or flipping the `DOGFOODING_AUTOMERGE` repo
+# variable to `off` — is how a founder tunes or halts the automation WITHOUT
+# touching workflow YAML. This is the auditable boundary between "agentic" and
+# "founder-escalated": everything outside `escalate_paths` with green CI and a
+# clean reviewer pass merges itself; anything inside goes to a human.
+
+auto_merge:
+  # Master switch. Also short-circuited by the `DOGFOODING_AUTOMERGE=off` repo
+  # variable (a kill switch that needs no commit).
+  enabled: true
+
+  # Only PRs from the agent pipeline are eligible. The issue-implement workflow
+  # labels its PRs `claude-implement`; a PR without one of these labels is never
+  # auto-merged (a human PR is unaffected by this automation).
+  eligible_labels:
+    - claude-implement
+
+  # Runaway backstop: hard cap on autonomous merges in a rolling 24h. When the cap
+  # is hit the workflow escalates instead of merging.
+  max_merges_per_day: 10
+
+  # Minutes to wait after CI goes green before merging, so a founder has a chance
+  # to veto. 0 = merge as soon as CI is green and the review is clean.
+  veto_window_minutes: 0
+
+  # squash | merge | rebase
+  merge_method: squash
+
+# Founder-escalated surface. A PR that touches ANY of these paths is not the
+# pipeline's to merge: the workflow labels it `founder-review`, requests a human,
+# and stops. These are the changes where a wrong call is expensive or
+# irreversible — auth, tenant isolation, money, schema, and the guardrails
+# themselves. Globs are matched against the PR's changed files.
+escalate_paths:
+  - "backend/app/security.py"                 # auth / tokens / password hashing
+  - "backend/app/crypto/**"                   # envelope encryption for BYOK keys
+  - "backend/app/db.py"                        # RLS / tenant-isolation boundary
+  - "backend/migrations/**"                    # schema migrations (data risk)
+  - "backend/app/runtime/cost_meter.py"        # the single budget chokepoint
+  - "backend/app/services/budget.py"           # budget accounting
+  - "backend/app/services/governance.py"       # the escalation engine itself
+  - "backend/app/integrations/stripe_issuing.py"   # real-money spend
+  - "backend/app/integrations/stripe_link.py"
+  - "backend/app/integrations/card_checkout.py"
+  - "backend/app/integrations/wallet.py"
+  - "backend/app/api/stripe_webhooks.py"
+  - "backend/app/services/galaxia.py"          # the dogfooding bootstrap itself
+  - ".github/workflows/**"                     # the pipeline can't rewrite itself unreviewed
+  - ".github/dogfooding.yml"                    # …nor loosen its own guardrails

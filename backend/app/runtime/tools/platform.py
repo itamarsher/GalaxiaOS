@@ -11,8 +11,9 @@ companies becomes one entry with a running demand count.
 A gated promoter — the Platform agent inside the **abos** company (we dogfood our
 own product) — reads that backlog with ``list_feature_requests`` and turns
 accrued demand into real tracker issues with ``promote_feature_request``. Both
-promoter tools are authorized against a hardcoded abos admin user id, so only the
-abos company's agent can file from the cross-company backlog. Promotion routes
+promoter tools are authorized against the Galaxia founder's user id (from config,
+``settings.galaxia_founder_user_id``), so only the Galaxia (abos) company's agent
+can file from the cross-company backlog. Promotion routes
 through the :mod:`app.integrations.issues` seam (``report_issue``), which keeps
 GitHub-side dedup/"+1" voting intact and records an audit-trail memory.
 
@@ -27,52 +28,40 @@ import uuid
 from sqlalchemy import select
 
 from app.config import settings
-from app.integrations.issues import (
-    GitHubIssueTracker,
-    IssueTrackerError,
-    get_issue_tracker,
-)
+from app.integrations.issues import IssueTrackerError
 from app.models import Agent, Membership, Task
-from app.models.enums import FeatureRequestKind, FeatureRequestStatus, MemoryType
+from app.models.enums import FeatureRequestStatus, MemoryType
 from app.providers.base import ToolSpec
 from app.runtime.tools.base import ToolOutcome
-from app.services import apikeys
 from app.services import feature_requests as fr_svc
+from app.services import promoter
 
-#: Provider name under which a company's GitHub token is stored (BYOK).
-GITHUB_PROVIDER = "github"
+#: Provider name under which a company's GitHub token is stored (BYOK). Canonical
+#: definition lives in the promoter service; re-exported here for callers/tests
+#: that reference it via this module.
+GITHUB_PROVIDER = promoter.GITHUB_PROVIDER
 
 # ── abos promoter gate ────────────────────────────────────────────────────────
 # The promoter tools (``list_feature_requests`` / ``promote_feature_request``)
-# only work inside the abos company — the one whose founder is this user. We
-# authorize by checking that this user is a member of the acting company, so a
-# tool call from any other tenant's Platform agent is refused.
+# only work inside the Galaxia (abos) company — the one whose founder is this
+# user. We authorize by checking that this user is a member of the acting
+# company, so a tool call from any other tenant's Platform agent is refused.
 #
-# The abos founder's user id. The promoter tools only work inside a company this
-# user is a member of; any other tenant's Platform agent is refused.
-ABOS_FEATURE_ADMIN_USER_ID = "91da8f48-d302-4921-bb4a-c3f2c18eaf3d"
-
-#: Maps a backlog kind to the tracker label used when filing.
-_KIND_LABEL = {
-    FeatureRequestKind.bug: "bug",
-    FeatureRequestKind.capability: "enhancement",
-}
-
+# The Galaxia founder's user id, sourced from config so the id lives in exactly
+# one place: the same value seeds the deterministic Galaxia bootstrap that creates
+# this user's membership (app.services.galaxia). Keep it a module global so tests
+# can monkeypatch the gate.
+ABOS_FEATURE_ADMIN_USER_ID = settings.galaxia_founder_user_id
 
 async def _resolve_issue_tracker(db, company_id):
-    """Use the company's own GitHub token if it set one, else the global default.
+    """The company's tracker (its own token, else the global default), or ``None``.
 
-    A founder can attach a GitHub token per company (in onboarding or Settings);
-    when present we file real issues against ``settings.github_repo``. Without one
-    we fall back to the configured default tracker, which is ``None`` unless the
-    deployment set a global GitHub token — there is no simulated tracker.
+    Thin delegator to :func:`app.services.promoter.resolve_issue_tracker`, kept as a
+    local seam so both ``open_issue`` and ``promote_feature_request`` resolve the
+    tracker the same way the scheduled promoter does — and so tests can monkeypatch
+    tracker resolution on this module.
     """
-    token = await apikeys.get_plaintext_key(
-        db, company_id=company_id, provider=GITHUB_PROVIDER
-    )
-    if token:
-        return GitHubIssueTracker(token, repo=settings.github_repo)
-    return get_issue_tracker()
+    return await promoter.resolve_issue_tracker(db, company_id)
 
 
 async def _is_abos_admin_company(db, company_id) -> bool:
@@ -315,8 +304,6 @@ async def _list_feature_requests(db, ctx, *, agent: Agent, task: Task, args: dic
 
 
 async def _promote_feature_request(db, ctx, *, agent: Agent, task: Task, args: dict) -> ToolOutcome:
-    from app.services import memory as memory_svc
-
     if not await _is_abos_admin_company(db, task.company_id):
         return ToolOutcome(
             observation=(
@@ -334,10 +321,10 @@ async def _promote_feature_request(db, ctx, *, agent: Agent, task: Task, args: d
     fr = await fr_svc.get(db, fr_id)
     if fr is None:
         return ToolOutcome(observation="No backlog entry with that id.", is_error=True)
-    if fr.status is FeatureRequestStatus.promoted:
+    if fr.status is not FeatureRequestStatus.open:
         return ToolOutcome(
             observation=(
-                f"{fr.title!r} was already promoted "
+                f"{fr.title!r} was already {fr.status.value} "
                 f"(issue #{fr.github_issue_number}, {fr.github_issue_url})."
             )
         )
@@ -352,28 +339,14 @@ async def _promote_feature_request(db, ctx, *, agent: Agent, task: Task, args: d
             is_error=True,
         )
 
-    body = await fr_svc.build_issue_body(db, fr)
-    label = _KIND_LABEL.get(fr.kind, "enhancement")
+    # Shared with the scheduled promoter so interactive and cron promotion behave
+    # identically (same issue body, labels, mark-promoted, and memory audit).
     try:
-        result = await tracker.report_issue(title=fr.title, body=body, labels=[label])
+        result = await promoter.promote_request(
+            db, fr=fr, tracker=tracker, company_id=task.company_id, source_task_id=task.id
+        )
     except IssueTrackerError as exc:
         return ToolOutcome(observation=f"could not file issue: {exc}", is_error=True)
-
-    await fr_svc.mark_promoted(
-        db, fr, issue_number=result.number, issue_url=result.url
-    )
-    await memory_svc.write(
-        db,
-        company_id=task.company_id,
-        type=MemoryType.result,
-        title=f"Feature request promoted: {fr.title[:80]}",
-        content=(
-            f"Backlog entry {fr.id} ({fr.vote_count} vote(s)) "
-            f"{'filed as' if result.created else 'matched existing'} issue "
-            f"#{result.number} via {result.provider}.\nURL: {result.url}\n\n{body}"
-        ),
-        source_task_id=task.id,
-    )
 
     verb = "filed" if result.created else "matched an existing"
     return ToolOutcome(

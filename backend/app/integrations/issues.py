@@ -80,6 +80,15 @@ class IssueTracker(Protocol):
         """
         ...
 
+    async def get_issue_state(self, number: int) -> str | None:
+        """Return an issue's state (``"open"`` / ``"closed"``), or ``None`` if unknown.
+
+        Used by the loop-closing reconciler to tell when a promoted request's fix
+        has merged (GitHub closes the issue). ``None`` on any error, so a tracker
+        hiccup never advances the backlog incorrectly.
+        """
+        ...
+
 
 class GitHubIssueTracker:
     """Real GitHub issue tracker via the REST API (credential-gated)."""
@@ -167,6 +176,31 @@ class GitHubIssueTracker:
             raise IssueTrackerError(f"GitHub request failed: {exc}") from exc
         except ValueError as exc:  # non-JSON body
             raise IssueTrackerError(f"GitHub returned non-JSON: {exc}") from exc
+
+    async def get_issue_state(self, number: int) -> str | None:
+        """Return an issue's ``state`` (``"open"``/``"closed"``), or ``None`` on error.
+
+        Best-effort and read-only: any missing credential, network error, or non-200
+        yields ``None`` so the reconciler simply leaves the entry ``promoted`` and
+        retries next tick rather than mis-advancing it.
+        """
+        if not self._token or not self._repo:
+            return None
+        try:
+            async with self._client() as client:
+                resp = await client.get(
+                    f"{_GITHUB_API}/repos/{self._repo}/issues/{number}",
+                    headers=self._headers(self._token),
+                )
+        except httpx.HTTPError:
+            return None
+        if resp.status_code != 200:
+            return None
+        try:
+            state = resp.json().get("state")
+        except ValueError:
+            return None
+        return str(state) if state else None
 
     @staticmethod
     def _explain_status(exc: httpx.HTTPStatusError, repo: str) -> str:

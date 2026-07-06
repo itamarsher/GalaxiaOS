@@ -3,8 +3,10 @@ name: Issue implement agent
 # Fires only when the triage agent (or a maintainer) applies the
 # `claude-implement` label. Claude reads the issue + the triage agent's
 # "Implementation notes" comment, implements the fix on a branch, and opens a PR
-# that closes the issue. The PR is gated by CI + human review — nothing lands on
-# the default branch automatically.
+# that closes the issue. The PR is then picked up by the auto-review-and-merge
+# workflow (.github/workflows/auto-merge.yml): CI must be green, and anything
+# touching the founder-escalated surface in .github/dogfooding.yml is routed to a
+# human — everything else is reviewed and auto-merged with no human in the loop.
 on:
   issues:
     types: [labeled]

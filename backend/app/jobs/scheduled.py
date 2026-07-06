@@ -83,6 +83,55 @@ async def backfill_memory_embeddings(ctx: dict) -> dict:
     return {"scanned": scanned, "updated": updated}
 
 
+async def promote_feature_backlog(ctx: dict) -> dict:
+    """Drain the shared feature-request backlog into tracker issues on Galaxia's behalf.
+
+    Runs UNSCOPED (no ``set_tenant``): the backlog is a cross-company ledger, so the
+    promoter must see every company's votes. Skips when Galaxia hasn't been
+    bootstrapped or no tracker is connected.
+    """
+    if not settings.galaxia_promote_enabled:
+        return {"skipped": True}
+    from app.models import Company
+    from app.services import galaxia, promoter
+
+    company_id = galaxia.galaxia_company_id()
+    async with SessionLocal() as db:
+        if await db.get(Company, company_id) is None:
+            return {"skipped": "no_galaxia"}
+        result = await promoter.promote_backlog(
+            db,
+            company_id=company_id,
+            min_votes=settings.galaxia_promote_min_votes,
+            limit=settings.galaxia_promote_batch,
+        )
+        await db.commit()
+    return result
+
+
+async def reconcile_delivered_requests(ctx: dict) -> dict:
+    """Flip promoted backlog entries to ``delivered`` once their issue closes.
+
+    Closes the dogfooding loop: when a promoted request's tracker issue is closed
+    (its fix merged), mark it delivered and notify the requesting companies. Runs
+    unscoped for the same cross-company reason as the promoter.
+    """
+    if not settings.galaxia_reconcile_enabled:
+        return {"skipped": True}
+    from app.models import Company
+    from app.services import galaxia, promoter
+
+    company_id = galaxia.galaxia_company_id()
+    async with SessionLocal() as db:
+        if await db.get(Company, company_id) is None:
+            return {"skipped": "no_galaxia"}
+        result = await promoter.reconcile_delivered(
+            db, company_id=company_id, limit=settings.galaxia_reconcile_batch
+        )
+        await db.commit()
+    return result
+
+
 async def run_business_cycle(ctx: dict) -> dict:
     """Kick off a recurring business-cycle run for each active company."""
     if not settings.business_cycle_enabled:
