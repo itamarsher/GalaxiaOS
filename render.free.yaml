@@ -1,0 +1,142 @@
+# Render Blueprint for ABOS — FREE-TIER variant (experiment for $0/mo).
+#
+# Differs from the paid `render.yaml` in three ways, because Render's free tier
+# has no background-worker plan and deletes free Postgres after 30 days:
+#
+#   1. No separate worker service. The API runs the arq worker IN-PROCESS
+#      (`ABOS_RUN_WORKER_IN_PROCESS=true`) — agent loop + cron jobs included.
+#   2. Postgres is NOT a Render database. Use a free, persistent Neon project
+#      (https://neon.tech — pgvector supported) and paste its connection string
+#      into `ABOS_DATABASE_URL` in the dashboard. (`app.config.normalize_db_url`
+#      already rewrites Neon's `?sslmode=require&channel_binding=...` for asyncpg.)
+#   3. Redis is a free Render Key Value instance (25 MB, no persistence — fine
+#      for an ephemeral arq queue).
+#
+# Free web services SPIN DOWN after ~15 min idle: first request after idle is
+# slow, and cron jobs (digest / runway / business cycle) only fire while the
+# instance is awake. For continuous operation, hit `/health` on a schedule
+# (e.g. cron-job.org / UptimeRobot) or graduate to the paid `render.yaml`.
+#
+# Apply: Render Dashboard → "New +" → "Blueprint" → select this file. After the
+# first apply, set the `sync:false` secrets in the dashboard.
+
+services:
+  # Managed Redis-compatible store for the arq queue (free Key Value tier).
+  - type: keyvalue
+    name: abos-redis
+    plan: free
+    ipAllowList: []  # internal-only
+
+  # FastAPI app + in-process arq worker. `entrypoint.sh` runs migrations at
+  # container start (free instances have no preDeployCommand), then binds $PORT.
+  - type: web
+    name: abos-api
+    runtime: docker
+    plan: free
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    dockerCommand: "sh entrypoint.sh"
+    autoDeploy: false
+    healthCheckPath: /health/ready
+    envVars:
+      - key: ABOS_DATABASE_URL
+        sync: false   # paste your Neon connection string (free, persistent)
+      - key: ABOS_REDIS_URL
+        fromService:
+          name: abos-redis
+          type: keyvalue
+          property: connectionString
+      - key: ABOS_RUN_WORKER_IN_PROCESS
+        value: "true"
+      # Memory budget (512MB shared by the API + in-process worker):
+      #  - Offload the local fastembed/ONNX embedder (~150-200MB resident) to the
+      #    separate `abos-embeddings` service below, so the model lives in its own
+      #    512MB and the API stays lean while keeping real semantic recall. (Set
+      #    this to `hashing` instead to drop the extra service entirely — lexical
+      #    recall, <1MB, no model.)
+      - key: ABOS_EMBEDDINGS_PROVIDER
+        value: remote
+      - key: ABOS_EMBEDDINGS_URL
+        fromService:
+          type: web
+          name: abos-embeddings
+          property: host   # bare host; RemoteEmbedder assumes https://
+      - key: ABOS_EMBEDDINGS_REMOTE_SECRET
+        fromService:
+          type: web
+          name: abos-embeddings
+          envVarKey: ABOS_EMBEDDINGS_REMOTE_SECRET
+      #  - Run fewer agent loops at once; each holds a full working set in memory.
+      - key: ABOS_WORKER_MAX_JOBS
+        value: "2"
+      #  - Trim the DB pool so connection buffers don't pin memory.
+      - key: ABOS_DB_POOL_SIZE
+        value: "3"
+      - key: ABOS_DB_MAX_OVERFLOW
+        value: "2"
+      - key: ABOS_MASTER_KEY
+        sync: false   # set in dashboard: `make gen-key`
+      - key: ABOS_JWT_SECRET
+        generateValue: true
+      # Browser origins allowed to call the API. Set to the abos-web origin
+      # (comma-separated for multiple), e.g. https://abos-web.onrender.com.
+      - key: ABOS_CORS_ALLOW_ORIGINS
+        sync: false
+      - fromGroup: abos-shared
+
+  # Local neural embedder (fastembed/ONNX) on its own free instance, so its
+  # ~150-200MB model sits in a separate 512MB budget instead of the API's. Same
+  # image as the API — only the start command differs (it serves
+  # `app.embed_service`, no migrations, no DB). The API reaches it via
+  # ABOS_EMBEDDINGS_URL above. NB: free services spin down after ~15 min idle, so
+  # the first embed after idle cold-starts the model (it's warmed at boot, but a
+  # request that beats the load gets a 503). The service runs in STRICT mode — it
+  # returns a real ONNX vector or a 503, NEVER a hashing one — so a cold start can
+  # never poison the vector space; that one write just stores no vector and recall
+  # falls back to recency. Ping /health on a schedule to keep it warm.
+  - type: web
+    name: abos-embeddings
+    runtime: docker
+    plan: free
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    dockerCommand: "uvicorn app.embed_service:app --host 0.0.0.0 --port $PORT"
+    autoDeploy: false
+    healthCheckPath: /health
+    envVars:
+      # Shared secret the API must present (x-embeddings-secret). Generated here
+      # and copied into abos-api via fromService above, so both always match.
+      - key: ABOS_EMBEDDINGS_REMOTE_SECRET
+        generateValue: true
+      - fromGroup: abos-shared
+
+  # Next.js frontend.
+  - type: web
+    name: abos-web
+    runtime: docker
+    plan: free
+    dockerfilePath: ./frontend/Dockerfile.prod
+    dockerContext: ./frontend
+    autoDeploy: false
+    envVars:
+      # Baked into the client bundle at build time; point at the API's URL.
+      - key: NEXT_PUBLIC_API_BASE_URL
+        sync: false
+
+envVarGroups:
+  - name: abos-shared
+    envVars:
+      - key: ABOS_LOG_JSON
+        value: "true"
+      - key: ABOS_LOG_LEVEL
+        value: INFO
+      - key: ABOS_RATE_LIMIT_ENABLED
+        value: "true"
+      - key: ABOS_RATE_LIMIT_PER_MINUTE
+        value: "120"
+      # Single free instance → in-memory limiter (no Redis dependency for this).
+      - key: ABOS_RATE_LIMIT_BACKEND
+        value: memory
+      # NB: landing-page hosting + domain connection (Cloudflare Pages + DNS) are
+      # bring-your-own-key — each company sets its own Cloudflare API token + account
+      # id in Settings. There are intentionally no global Cloudflare env vars here.

@@ -1,0 +1,185 @@
+"""arq cron entrypoints. Each iterates active companies in its own session."""
+
+from __future__ import annotations
+
+from sqlalchemy import select
+
+from app.config import settings
+from app.db import SessionLocal, set_tenant
+from app.models import Company
+from app.models.enums import CompanyStatus
+from app.runtime import orchestrator
+from app.services import copilot
+from app.services import memory as memory_svc
+from app.services import runway as runway_svc
+from app.services import sites as sites_svc
+
+
+async def _active_company_ids() -> list:
+    async with SessionLocal() as db:
+        rows = await db.scalars(
+            select(Company.id).where(Company.status == CompanyStatus.active)
+        )
+        return list(rows)
+
+
+async def recompute_runway(ctx: dict) -> dict:
+    count = 0
+    for company_id in await _active_company_ids():
+        async with SessionLocal() as db:
+            await set_tenant(db, company_id)
+            await runway_svc.recompute(db, company_id)
+            await db.commit()
+            count += 1
+    return {"companies": count}
+
+
+async def generate_digests(ctx: dict) -> dict:
+    count = 0
+    for company_id in await _active_company_ids():
+        async with SessionLocal() as db:
+            await set_tenant(db, company_id)
+            await copilot.generate_digest(db, company_id=company_id)
+            await db.commit()
+            count += 1
+    return {"companies": count}
+
+
+async def reconcile_site_domains(ctx: dict) -> dict:
+    """Advance in-flight domain connections toward ``live``.
+
+    DNS zone activation and TLS issuance take minutes (and happen out-of-band after
+    a founder delegates nameservers), so a connection can't finish inside the agent
+    task that started it. This periodically pushes each non-terminal ``SiteDomain``
+    one step further (zone active -> attach domain -> HTTPS live).
+    """
+    advanced = 0
+    for company_id in await _active_company_ids():
+        async with SessionLocal() as db:
+            await set_tenant(db, company_id)
+            for sd in await sites_svc.pending_connections(db, company_id=company_id):
+                await sites_svc.advance_connection(db, sd=sd)
+                advanced += 1
+            await db.commit()
+    return {"advanced": advanced}
+
+
+async def backfill_memory_embeddings(ctx: dict) -> dict:
+    """Re-embed memories left without a vector (e.g. written while a remote
+    embedder was cold). Probes the embedder per company and skips quietly when it
+    isn't ready yet, so a cold/down embedding service costs nothing but a retry."""
+    if not settings.embedding_backfill_enabled:
+        return {"skipped": True}
+    scanned = updated = 0
+    for company_id in await _active_company_ids():
+        async with SessionLocal() as db:
+            await set_tenant(db, company_id)
+            res = await memory_svc.backfill_embeddings(
+                db, company_id=company_id, limit=settings.embedding_backfill_batch
+            )
+            await db.commit()
+        scanned += res["scanned"]
+        updated += res["updated"]
+    return {"scanned": scanned, "updated": updated}
+
+
+async def promote_feature_backlog(ctx: dict) -> dict:
+    """Drain the shared feature-request backlog into tracker issues on Galaxia's behalf.
+
+    Runs UNSCOPED (no ``set_tenant``): the backlog is a cross-company ledger, so the
+    promoter must see every company's votes. Skips when Galaxia hasn't been
+    bootstrapped or no tracker is connected.
+    """
+    if not settings.galaxia_promote_enabled:
+        return {"skipped": True}
+    from app.models import Company
+    from app.services import galaxia, promoter
+
+    company_id = galaxia.galaxia_company_id()
+    async with SessionLocal() as db:
+        if await db.get(Company, company_id) is None:
+            return {"skipped": "no_galaxia"}
+        result = await promoter.promote_backlog(
+            db,
+            company_id=company_id,
+            min_votes=settings.galaxia_promote_min_votes,
+            limit=settings.galaxia_promote_batch,
+        )
+        await db.commit()
+    return result
+
+
+async def reconcile_delivered_requests(ctx: dict) -> dict:
+    """Flip promoted backlog entries to ``delivered`` once their issue closes.
+
+    Closes the dogfooding loop: when a promoted request's tracker issue is closed
+    (its fix merged), mark it delivered and notify the requesting companies. Runs
+    unscoped for the same cross-company reason as the promoter.
+    """
+    if not settings.galaxia_reconcile_enabled:
+        return {"skipped": True}
+    from app.models import Company
+    from app.services import galaxia, promoter
+
+    company_id = galaxia.galaxia_company_id()
+    async with SessionLocal() as db:
+        if await db.get(Company, company_id) is None:
+            return {"skipped": "no_galaxia"}
+        result = await promoter.reconcile_delivered(
+            db, company_id=company_id, limit=settings.galaxia_reconcile_batch
+        )
+        await db.commit()
+    return result
+
+
+async def monitor_failed_tasks(ctx: dict) -> dict:
+    """Galaxia watches its own failed tasks and wakes the Platform agent to
+    investigate + report bugs (feeding the Claude Code auto-fix pipeline).
+
+    Skips when Galaxia isn't bootstrapped. Enqueues the investigation tasks it
+    creates so the Platform agent actually runs them.
+    """
+    if not settings.galaxia_failure_monitor_enabled:
+        return {"skipped": True}
+    from app.models import Company
+    from app.runtime.queue import enqueue_task
+    from app.services import galaxia, reliability
+
+    company_id = galaxia.galaxia_company_id()
+    async with SessionLocal() as db:
+        if await db.get(Company, company_id) is None:
+            return {"skipped": "no_galaxia"}
+        result = await reliability.review_failed_tasks(
+            db, company_id=company_id, limit=settings.galaxia_failure_monitor_batch
+        )
+        await db.commit()
+    for task_id in result["review_task_ids"]:
+        await enqueue_task(task_id)
+    return {"reviewed": result["reviewed"], "enqueued": len(result["review_task_ids"])}
+
+
+async def run_business_cycle(ctx: dict) -> dict:
+    """Kick off a recurring business-cycle run for each active company."""
+    if not settings.business_cycle_enabled:
+        return {"skipped": True}
+
+    from app.runtime.queue import enqueue_task
+
+    count = 0
+    enqueued = 0
+    for company_id in await _active_company_ids():
+        async with SessionLocal() as db:
+            await set_tenant(db, company_id)
+            # Skip companies that are already busy — continuous mode keeps a run
+            # going, so the daily cron is only a fallback for idle orgs and must
+            # not stack a second, parallel run on top of a live one.
+            if await orchestrator.has_active_tasks(db, company_id):
+                count += 1
+                continue
+            task_id = await orchestrator.create_scheduled_run(db, company_id)
+            await db.commit()
+        count += 1
+        if task_id is not None:
+            await enqueue_task(task_id)
+            enqueued += 1
+    return {"companies": count, "enqueued": enqueued}

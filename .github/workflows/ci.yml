@@ -1,0 +1,122 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [claude/abos-system-architecture-u9xny4]
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: abos
+          POSTGRES_PASSWORD: abos
+          POSTGRES_DB: abos_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U abos"
+          --health-interval 5s --health-timeout 5s --health-retries 12
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s --health-timeout 3s --health-retries 12
+    env:
+      ABOS_DATABASE_URL: postgresql+asyncpg://abos:abos@localhost:5432/abos_test
+      ABOS_TEST_DATABASE_URL: postgresql+asyncpg://abos:abos@localhost:5432/abos_test
+      ABOS_REDIS_URL: redis://localhost:6379/0
+      # Test-only master key (32 bytes, base64url). Not a real secret.
+      ABOS_MASTER_KEY: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaQ=
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install backend (with dev extras)
+        run: pip install -e ".[dev]"
+      - name: Lint
+        run: ruff check app tests
+      - name: Provider boundary guard
+        working-directory: .
+        run: make check-providers
+      - name: Apply migrations (validates the full chain against pgvector)
+        run: alembic upgrade head
+      - name: Tests
+        run: pytest -q
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          # A `uses:` step ignores the job's working-directory, so point the
+          # action at the frontend manifest (whose "packageManager" pins pnpm).
+          package_json_file: frontend/package.json
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec tsc --noEmit
+      - run: pnpm build
+
+  deploy:
+    needs: [backend, frontend]
+    if: github.ref == 'refs/heads/claude/abos-system-architecture-u9xny4' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger Render deploys (no-op until hooks are configured)
+        env:
+          API_HOOK: ${{ secrets.RENDER_DEPLOY_HOOK_API }}
+          WORKER_HOOK: ${{ secrets.RENDER_DEPLOY_HOOK_WORKER }}
+          WEB_HOOK: ${{ secrets.RENDER_DEPLOY_HOOK_WEB }}
+        run: |
+          if [ -z "$API_HOOK" ]; then
+            echo "Render deploy hooks not configured; skipping deploy."
+            exit 0
+          fi
+          curl -fsS -X POST "$API_HOOK"
+          # The free-tier blueprint folds the worker into the API (no worker
+          # service), so its hook is optional.
+          if [ -n "$WORKER_HOOK" ]; then curl -fsS -X POST "$WORKER_HOOK"; fi
+          curl -fsS -X POST "$WEB_HOOK"
+
+      - name: Verify deploy health
+        # Post-deploy gate: after triggering the release, confirm the API comes
+        # back healthy. Render's own health check (healthCheckPath in render.yaml)
+        # keeps the previous revision live if the new one never passes, so a failure
+        # here means the release did not take — we surface it as a red deploy job
+        # (which notifies) rather than declaring success on a broken deploy. No-op
+        # until ABOS_HEALTHCHECK_URL (the API's /health/ready) is set.
+        env:
+          HEALTH_URL: ${{ secrets.ABOS_HEALTHCHECK_URL }}
+        run: |
+          if [ -z "$HEALTH_URL" ]; then
+            echo "ABOS_HEALTHCHECK_URL not set; skipping post-deploy health gate."
+            exit 0
+          fi
+          echo "Waiting for the new revision to roll out before probing…"
+          sleep 45
+          for i in $(seq 1 20); do
+            code=$(curl -s -o /dev/null -w "%{http_code}" "$HEALTH_URL" || echo 000)
+            if [ "$code" = "200" ]; then
+              echo "Health gate passed (200) on attempt $i."
+              exit 0
+            fi
+            echo "Attempt $i: /health/ready returned $code; retrying in 15s…"
+            sleep 15
+          done
+          echo "::error::Post-deploy health gate failed: $HEALTH_URL never returned 200."
+          exit 1
