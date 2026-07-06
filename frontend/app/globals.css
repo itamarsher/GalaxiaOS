@@ -692,6 +692,13 @@ a.actrow:hover .goal { color: var(--accent-strong); }
   border-radius: var(--radius-sm); background: var(--panel-2);
   padding: 12px 14px; display: flex; flex-direction: column; gap: 8px;
   touch-action: pan-y; will-change: transform; user-select: none;
+  overflow: hidden; /* a long decision can never bleed over the panels below */
+}
+/* Long decision summaries (e.g. a full plan-approval) scroll inside the card
+   rather than growing it unbounded; kind + affordances stay pinned. */
+.swipe-card .decision-note {
+  max-height: 34vh; overflow-y: auto; overscroll-behavior: contain;
+  word-break: break-word;
 }
 /* The top card invites a drag. */
 .swipe-card.swipe-top { cursor: grab; }
