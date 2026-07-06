@@ -30,6 +30,7 @@ from app.models.enums import (
     TaskStatus,
 )
 from app.providers.base import LLMProvider, Message, TextBlock, ToolResultBlock, ToolUseBlock
+from app.runtime import critic as critic_svc
 from app.runtime import skills as skills_lib
 from app.runtime.context import RuntimeContext
 from app.runtime.prompts import ROLE_DESCRIPTIONS, render_agent_system
@@ -637,7 +638,14 @@ class NativeBackend:
         Only results the CEO delegated are audited (see ``task_svc.should_audit``);
         everything else — the CEO's own work, sub-tasks the CEO didn't dispatch, or
         a task that has already exhausted its reopen budget — finishes normally.
+
+        Before either path, an INDEPENDENT devil's-advocate critic reviews the
+        result (see :func:`_maybe_critique`); if it wants changes the task is
+        re-queued with the critique injected, and this returns without finishing.
         """
+        if await self._maybe_critique(ctx, agent, task, output):
+            return {"status": TaskStatus.queued.value, "output": output}
+
         audit_task_id: uuid.UUID | None = None
         async with ctx.session_factory() as db:
             await set_tenant(db, task.company_id)
@@ -649,6 +657,47 @@ class NativeBackend:
             await ctx.enqueue_task(audit_task_id)
             return {"status": TaskStatus.auditing.value, "output": output}
         return await self._finish(ctx, task, TaskStatus.done, output)
+
+    async def _maybe_critique(
+        self, ctx: RuntimeContext, agent: Agent, task: Task, output: dict
+    ) -> bool:
+        """Independent devil's-advocate review of the result before it counts as done.
+
+        A critic (a separate metered LLM call, no access to this agent's reasoning)
+        pushes back on every agent's work. If it finds a real problem and the round
+        cap isn't hit, the task is re-queued with the critique injected as feedback —
+        the same iterate-until-satisfied loop the CEO audit uses, but universal and
+        self-service. Returns ``True`` when it re-queued the task (caller stops).
+
+        Review and its own review tasks (CEO audits, failure reviews) are skipped so
+        the critic doesn't recurse or second-guess the overseer.
+        """
+        if not settings.critic_enabled:
+            return False
+        info = task.input or {}
+        if info.get("audit_target_task_id") or info.get("failure_review"):
+            return False
+        rounds = int(info.get("critic_rounds", 0))
+        if rounds >= settings.critic_max_rounds:
+            return False
+        async with ctx.session_factory() as db:
+            await set_tenant(db, task.company_id)
+            verdict = await critic_svc.review_output(
+                db, ctx, company_id=task.company_id, agent=agent, task=task, output=output
+            )
+            if verdict is None or verdict.approved:
+                return False
+            row = await db.get(Task, task.id)
+            if row is None:  # pragma: no cover - defensive
+                return False
+            new_input = dict(row.input or {})
+            new_input["critic_feedback"] = verdict.feedback()
+            new_input["critic_rounds"] = rounds + 1
+            row.input = new_input
+            row.status = TaskStatus.queued  # re-run with the feedback; transcript is kept
+            await db.commit()
+        await ctx.enqueue_task(task.id)
+        return True
 
     async def _finish(
         self, ctx: RuntimeContext, task: Task, status: TaskStatus, output: dict
@@ -684,37 +733,55 @@ class NativeBackend:
                 db, task=target, status=outcome, output=target.output or {"summary": ""}
             )
 
+    #: Feedback stored on ``task.input`` that must be surfaced to the agent on
+    #: resume (and consumed once): the CEO's audit comments and the independent
+    #: critic's devil's-advocate notes. Each maps to the framing shown to the agent.
+    _FEEDBACK_KEYS: tuple[tuple[str, str], ...] = (
+        (
+            "audit_feedback",
+            "The CEO audited your previous result and REOPENED this task. "
+            "Address this feedback before reporting again:\n",
+        ),
+        (
+            "critic_feedback",
+            "An independent critic reviewed your previous result and was NOT satisfied. "
+            "Treat this as a rewrite: address every point before reporting again:\n",
+        ),
+    )
+
     async def _inject_audit_feedback(
         self, ctx: RuntimeContext, task: Task, messages: list[Message]
     ) -> None:
-        """When the CEO reopened this task, surface its comments as the agent's
-        first instruction after its prior chat history, then consume them so the
-        feedback is injected only once."""
-        feedback = (task.input or {}).get("audit_feedback")
-        if not feedback:
+        """Surface any pending review feedback (CEO audit and/or the independent
+        critic) as the agent's first instruction after its prior history, then
+        consume it so each note is injected only once."""
+        info = task.input or {}
+        notes = [
+            TextBlock(text=header + str(info[key]))
+            for key, header in self._FEEDBACK_KEYS
+            if info.get(key)
+        ]
+        if not notes:
             return
-        note = TextBlock(
-            text=(
-                "The CEO audited your previous result and REOPENED this task. "
-                "Address this feedback before reporting again:\n" + str(feedback)
-            )
-        )
         # Keep user/assistant turns alternating: merge into a trailing user turn
         # rather than appending a second consecutive user message.
         if messages and messages[-1].role == "user":
             content = messages[-1].content
             if isinstance(content, list):
-                content.append(note)
+                content.extend(notes)
             else:
-                messages[-1] = Message(role="user", content=[TextBlock(text=str(content)), note])
+                messages[-1] = Message(
+                    role="user", content=[TextBlock(text=str(content)), *notes]
+                )
         else:
-            messages.append(Message(role="user", content=[note]))
+            messages.append(Message(role="user", content=list(notes)))
 
+        consumed = {key for key, _ in self._FEEDBACK_KEYS}
         async with ctx.session_factory() as db:
             await set_tenant(db, task.company_id)
             row = await db.get(Task, task.id)
-            if row is not None and row.input and "audit_feedback" in row.input:
-                row.input = {k: v for k, v in row.input.items() if k != "audit_feedback"}
+            if row is not None and row.input and consumed & set(row.input):
+                row.input = {k: v for k, v in row.input.items() if k not in consumed}
                 await db.commit()
         if task.input:
-            task.input = {k: v for k, v in task.input.items() if k != "audit_feedback"}
+            task.input = {k: v for k, v in task.input.items() if k not in consumed}
