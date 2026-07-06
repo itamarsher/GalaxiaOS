@@ -237,6 +237,8 @@ async def test_founder_reply_wakes_waiting_agent(session_factory, company_with_b
         await db.commit()
     assert out.park is False
     assert "Go with B." in out.observation
+    # A founder reply always carries the confirmation directive back to the agent.
+    assert chat.FOUNDER_ACK_DIRECTIVE in out.observation
 
     async with session_factory() as db:
         channel = await chat.find_channel_by_name(db, company_id=company_id, name="ask-founder")
@@ -302,6 +304,25 @@ async def test_agent_reply_wakes_other_agent(session_factory, company_with_budge
     async with session_factory() as db:
         row = await db.get(Task, waiter_task.id)
         assert row.status is TaskStatus.queued
+
+    # Resume the waiter: a teammate (non-founder) reply is delivered WITHOUT the
+    # founder confirmation directive — that's reserved for founder messages.
+    async with session_factory() as db:
+        out = await execute_tool(
+            db,
+            FakeCtx(),
+            agent=waiter,
+            task=waiter_task,
+            name="send_chat_message",
+            args={
+                "channel": "collab",
+                "message": "Research, what's the TAM?",
+                "wait_for_reply": True,
+            },
+        )
+        await db.commit()
+    assert "~$2B." in out.observation
+    assert chat.FOUNDER_ACK_DIRECTIVE not in out.observation
 
 
 @requires_db
@@ -919,6 +940,8 @@ async def test_founder_dm_spawns_handler_task_and_coalesces(
         assert t.status is TaskStatus.queued
         assert (t.input or {}).get("founder_dm_channel_id") == str(dm_id)
         assert "enterprise" in t.goal.lower()
+        # The handler is required to confirm back what changed and what's next.
+        assert chat.FOUNDER_ACK_DIRECTIVE in t.goal
 
     # A second message while that task is still open does NOT spawn a duplicate.
     async with session_factory() as db:
