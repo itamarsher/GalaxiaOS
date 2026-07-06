@@ -62,6 +62,19 @@ _ACTIVE_DM_TASK_STATUSES = (
 #: How the founder appears in rendered transcripts / participant lists.
 FOUNDER_LABEL = "Founder"
 
+#: Appended whenever a founder message reaches an agent — on a fresh DM-handler
+#: task or delivered to a resuming parked agent — so the founder ALWAYS gets an
+#: explicit confirmation back: what their message changes and the next step. The
+#: agent replies in the same DM with ``message_teammate`` (to: 'founder').
+FOUNDER_ACK_DIRECTIVE = (
+    "Before anything else, reply to the founder in this DM with `message_teammate` "
+    "(to: 'founder') to confirm you got this. Your confirmation must say (1) how "
+    "this changes things — what you're adjusting or deciding, or your direct answer "
+    "— and (2) what you'll do next (the concrete next step, or that no action is "
+    "needed). Keep it short and specific, and send it even if you still need to ask "
+    "a follow-up question."
+)
+
 #: Sentinel for "no thread filter" (count/read across the whole channel), kept
 #: distinct from ``thread_id=None`` which means "the channel's main timeline".
 _ALL_THREADS = object()
@@ -728,9 +741,9 @@ async def spawn_dm_handler_task(
         f'Read the full thread first with `read_chat_channel` (channel "{channel.name}"). '
         "Then act on what the founder is asking. If it changes priorities or the plan, "
         "adjust accordingly — re-plan, (re-)dispatch or redirect initiatives, revise "
-        "objectives — within the approved budget and governance. Always reply to the founder "
-        "in this same DM with `message_teammate` (to: founder): if you changed something, "
-        "explain what and why; if it's a question, answer it. Then finish with `report_result`."
+        "objectives — within the approved budget and governance.\n\n"
+        f"{FOUNDER_ACK_DIRECTIVE}\n\n"
+        "Then finish with `report_result`."
     )
     task = Task(
         company_id=company_id,

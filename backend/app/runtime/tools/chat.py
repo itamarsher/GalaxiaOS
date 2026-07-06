@@ -363,6 +363,10 @@ async def _post_and_maybe_wait(
                 if rendered
                 else f"Your task resumed but no reply has arrived in {where} yet."
             )
+            # A founder reply (sender_agent_id is None) always earns an explicit
+            # confirmation back — what it changes and the next step.
+            if rendered and any(m.sender_agent_id is None for m in replies):
+                obs += "\n\n" + chat.FOUNDER_ACK_DIRECTIVE
             return ToolOutcome(observation=clip(obs, _MAX_CHARS))
         if existing is not None and existing.status is ChatWaitStatus.pending:
             # Already parked here; keep waiting (don't double-post).
