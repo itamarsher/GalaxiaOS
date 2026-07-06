@@ -69,11 +69,19 @@ async def galaxia_reset(db: DbDep) -> dict:
     TEMP dev tool — do not ship to production.
     """
     _require_enabled()
+    from app.models import Company
     from app.services.galaxia import reset_galaxia
 
     company_id = await reset_galaxia(db)
     await db.commit()
-    return {"reset": True, "company_id": str(company_id)}
+    company = await db.get(Company, company_id)
+    # ``status`` reflects the new provisioning: a rebuilt Galaxia lands at the
+    # onboarding plan-approval phase (``draft``), pending the founder's launch.
+    return {
+        "reset": True,
+        "company_id": str(company_id),
+        "status": company.status.value if company else None,
+    }
 
 
 @router.post("/delete-all-accounts")

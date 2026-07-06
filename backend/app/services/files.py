@@ -70,20 +70,22 @@ _DEFAULT_MIME = "text/markdown"
 
 
 def company_folder_name(company: Company) -> str:
-    """A Drive-safe, per-company-UNIQUE folder name (sanitized name + short id).
+    """A Drive-safe folder named after the company (its human-readable name).
 
-    The short id suffix is what guarantees each company gets its OWN subfolder:
-    the founder's Drive is shared across every business they launch (see
-    ``resolve_file_provider``), and distinct companies routinely share a name —
-    onboarding even creates them all as "Untitled Company" — so keying the folder
-    on the name alone would mix two businesses' files into one folder. The id is
-    unique per company, so the folder never collides; the readable name is kept as
-    a prefix so the founder can still tell the folders apart at a glance.
+    The company's data lives under a folder keyed on its NAME, not its id, so the
+    founder sees ``.galaxia/GalaxiaOS/…`` in their Drive rather than an opaque
+    UUID. Only when a company has no usable name do we fall back to a short-id
+    folder (``company-<short_id>``) so there is always a valid folder.
+
+    Note: the founder's Drive is shared across every business they launch, so two
+    businesses that share the exact same name would share a folder. In practice a
+    company is only written to once it is launched and named (agents don't run
+    while it is a draft), and launched companies carry distinct names — so keying
+    on the name is what the founder wants and collisions are rare.
     """
     cleaned = re.sub(r"[\\/\r\n\t]+", " ", (company.name or "").strip())
     cleaned = re.sub(r"\s+", " ", cleaned).strip()[:100].strip()
-    short_id = str(company.id)[:8]
-    return f"{cleaned} ({short_id})" if cleaned else f"company-{short_id}"
+    return cleaned or f"company-{str(company.id)[:8]}"
 
 
 def category_path(company: Company, category: FileCategory) -> list[str]:

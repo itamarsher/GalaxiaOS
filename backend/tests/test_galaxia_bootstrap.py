@@ -32,7 +32,9 @@ async def test_bootstrap_provisions_company_and_authorizes_promoter(session_fact
         company = await db.get(Company, company_id)
         assert company is not None
         assert company.name == settings.galaxia_company_name
-        assert company.status is CompanyStatus.active  # active → cron picks it up
+        # Lands at the onboarding plan-approval phase: draft with a generated plan,
+        # awaiting the founder's launch (NOT sprung to life pre-approved).
+        assert company.status is CompanyStatus.draft
         assert company.mission_id is not None
 
         # Founder membership under the FIXED promoter-gate id (not just any user).
@@ -61,14 +63,41 @@ async def test_bootstrap_provisions_company_and_authorizes_promoter(session_fact
         assert AgentRole.platform in roles
         assert AgentRole.ceo in roles
 
-        # Governance seeded (default spend policies exist).
+        # Not launched yet: governance is seeded at launch (the founder's approval),
+        # not during provisioning — so the plan-approval phase has no policies.
+        policies = (
+            await db.scalars(select(Policy).where(Policy.company_id == company_id))
+        ).all()
+        assert len(policies) == 0
+
+        # The payoff: the Platform promoter gate authorizes Galaxia (membership-based,
+        # so it works even before launch).
+        assert await _is_abos_admin_company(db, company_id) is True
+
+
+@requires_db
+async def test_founder_launch_activates_the_draft(session_factory):
+    """The founder's launch (plan approval) is what activates the company."""
+    from app.services import onboarding
+
+    async with session_factory() as db:
+        company_id = await galaxia._run(db)
+        await db.commit()
+
+    async with session_factory() as db:
+        company = await db.get(Company, company_id)
+        assert company.status is CompanyStatus.draft
+        await onboarding.launch(db, company=company)
+        await db.commit()
+
+    async with session_factory() as db:
+        company = await db.get(Company, company_id)
+        assert company.status is CompanyStatus.active
+        # Launch seeds governance policies.
         policies = (
             await db.scalars(select(Policy).where(Policy.company_id == company_id))
         ).all()
         assert len(policies) >= 1
-
-        # The payoff: the Platform promoter gate now authorizes Galaxia.
-        assert await _is_abos_admin_company(db, company_id) is True
 
 
 @requires_db
