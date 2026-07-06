@@ -55,8 +55,12 @@ async def _create_ceo_run(
     task_input: dict | None = None,
 ) -> uuid.UUID | None:
     """Create a root run + CEO root task. Returns the CEO task id to enqueue."""
+    # Oldest CEO wins, deterministically, so a fleet that somehow has two CEOs
+    # still runs a single, consistent planner (matches chat.ensure_ceo_dm).
     ceo = await db.scalar(
-        select(Agent).where(Agent.company_id == company_id, Agent.role == AgentRole.ceo)
+        select(Agent)
+        .where(Agent.company_id == company_id, Agent.role == AgentRole.ceo)
+        .order_by(Agent.created_at.asc(), Agent.id.asc())
     )
     if ceo is None:
         return None
@@ -257,7 +261,9 @@ async def _create_ceo_retro_task(
     flows back through the normal wind-down path.
     """
     ceo = await db.scalar(
-        select(Agent).where(Agent.company_id == run.company_id, Agent.role == AgentRole.ceo)
+        select(Agent)
+        .where(Agent.company_id == run.company_id, Agent.role == AgentRole.ceo)
+        .order_by(Agent.created_at.asc(), Agent.id.asc())
     )
     if ceo is None:
         return None

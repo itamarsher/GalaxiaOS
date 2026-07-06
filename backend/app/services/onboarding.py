@@ -442,12 +442,25 @@ async def provision_fleet(
     resolved fleet; run it through :func:`_fleet_specs` first to guarantee the
     oversight roles (incl. the platform agent). Returns a ``role -> agent_id`` map.
     """
+    # Idempotent by role: a non-``custom`` role the company already has is reused
+    # rather than duplicated, so calling this on a non-empty fleet can never create
+    # a second CEO (or governance/auditor/etc.). ``custom`` agents are always added.
+    existing: dict[str, Agent] = {}
+    for a in (
+        await db.scalars(select(Agent).where(Agent.company_id == company.id))
+    ).all():
+        if a.role is not AgentRole.custom:
+            existing.setdefault(a.role.value, a)
+
     role_to_agent: dict[str, uuid.UUID] = {}
     for spec in specs:
         try:
             role = AgentRole(spec.get("role", "custom"))
         except ValueError:
             role = AgentRole.custom
+        if role is not AgentRole.custom and role.value in existing:
+            role_to_agent[role.value] = existing[role.value].id
+            continue
         agent = Agent(
             company_id=company.id,
             role=role,
@@ -458,6 +471,8 @@ async def provision_fleet(
         db.add(agent)
         await db.flush()
         role_to_agent[role.value] = agent.id
+        if role is not AgentRole.custom:
+            existing[role.value] = agent
 
     # Wire functional agents under the CEO.
     ceo_id = role_to_agent.get("ceo")
