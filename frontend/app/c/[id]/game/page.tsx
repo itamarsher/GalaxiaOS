@@ -38,6 +38,7 @@ import { AdvanceButton } from "./AdvanceButton";
 import {
   CaptainsConsole,
   CrewRoster,
+  CycleProgress,
   Legend,
   ModuleSheet,
   ModuleTooltip,
@@ -305,6 +306,9 @@ export default function GalaxiaCommandPage() {
 
       {/* Screen-reader announcer for canvas-only FX and round phases. */}
       <div aria-live="polite" className="sr-only">{announce}</div>
+
+      {/* Live cycle/task progress while a round runs. */}
+      <CycleProgress round={round} />
 
       <div className="gamewrap">
         <div className="station-stage">
