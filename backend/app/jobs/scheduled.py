@@ -132,6 +132,32 @@ async def reconcile_delivered_requests(ctx: dict) -> dict:
     return result
 
 
+async def monitor_failed_tasks(ctx: dict) -> dict:
+    """Galaxia watches its own failed tasks and wakes the Platform agent to
+    investigate + report bugs (feeding the Claude Code auto-fix pipeline).
+
+    Skips when Galaxia isn't bootstrapped. Enqueues the investigation tasks it
+    creates so the Platform agent actually runs them.
+    """
+    if not settings.galaxia_failure_monitor_enabled:
+        return {"skipped": True}
+    from app.models import Company
+    from app.runtime.queue import enqueue_task
+    from app.services import galaxia, reliability
+
+    company_id = galaxia.galaxia_company_id()
+    async with SessionLocal() as db:
+        if await db.get(Company, company_id) is None:
+            return {"skipped": "no_galaxia"}
+        result = await reliability.review_failed_tasks(
+            db, company_id=company_id, limit=settings.galaxia_failure_monitor_batch
+        )
+        await db.commit()
+    for task_id in result["review_task_ids"]:
+        await enqueue_task(task_id)
+    return {"reviewed": result["reviewed"], "enqueued": len(result["review_task_ids"])}
+
+
 async def run_business_cycle(ctx: dict) -> dict:
     """Kick off a recurring business-cycle run for each active company."""
     if not settings.business_cycle_enabled:

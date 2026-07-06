@@ -127,6 +127,72 @@ async def create_scheduled_run(db: AsyncSession, company_id: uuid.UUID) -> uuid.
     )
 
 
+async def create_reliability_review_task(
+    db: AsyncSession, company_id: uuid.UUID, *, failed_task: Task
+) -> uuid.UUID | None:
+    """Wake the Platform agent to investigate a failed task and file a bug.
+
+    Assigns a root task to the (oldest) Platform agent describing the failure, so
+    it can read the code, check Render when it looks infrastructure-related, and
+    call ``report_bug`` — feeding the promoter → tracker issue → Claude Code
+    auto-fix pipeline. The investigation task is pre-stamped
+    ``reliability_reviewed_at`` so the monitor never investigates its own
+    investigation. Returns the task id to enqueue, or ``None`` if there is no
+    Platform agent.
+    """
+    platform = await db.scalar(
+        select(Agent)
+        .where(Agent.company_id == company_id, Agent.role == AgentRole.platform)
+        .order_by(Agent.created_at.asc(), Agent.id.asc())
+    )
+    if platform is None:
+        return None
+
+    error = ""
+    if isinstance(failed_task.output, dict):
+        error = str(
+            failed_task.output.get("error")
+            or failed_task.output.get("blocked_reason")
+            or failed_task.output
+        )
+    goal = (
+        "A task in this company FAILED. Investigate whether it is a real platform bug "
+        "and, if so, file a bug report so it can be auto-fixed.\n\n"
+        f"Failed task goal: {failed_task.goal!r}\n"
+        f"Failure output: {error[:1000] or '(none recorded)'}\n\n"
+        "Investigate: read the relevant code with list_repo_files / read_repo_file to "
+        "pin down the cause. If the failure looks infrastructure- or deploy-related "
+        "(timeouts, 5xx, crashes, DB/connection errors), load the render tools with "
+        "use_tool and check our Render deploys and logs (list_render_services, "
+        "list_render_deploys, get_render_deploy, get_render_logs). If you find a genuine "
+        "platform bug, call `report_bug` with a precise title and details — what failed, "
+        "the error, the suspected root cause, and how to reproduce — so Claude Code can "
+        "auto-fix it. If it is NOT a real bug (a transient/expected failure, a founder or "
+        "configuration issue, or a one-off), do NOT file anything: report_result "
+        "explaining why."
+    )
+    run = AgentRun(company_id=company_id, trigger=RunTrigger.scheduled, status=RunStatus.running)
+    db.add(run)
+    await db.flush()
+    run.root_run_id = run.id
+    task = Task(
+        company_id=company_id,
+        run_id=run.id,
+        root_run_id=run.id,
+        agent_id=platform.id,
+        depth=0,
+        goal=goal,
+        input={"reliability_review": {"failed_task_id": str(failed_task.id)}},
+        status=TaskStatus.queued,
+        loop_signature=breakers.loop_signature(platform.id, f"reliability {failed_task.id}"),
+        # Pre-stamp so the monitor never picks up its own investigation task.
+        reliability_reviewed_at=datetime.now(UTC),
+    )
+    db.add(task)
+    await db.flush()
+    return task.id
+
+
 async def run_task(ctx: RuntimeContext, task_id: uuid.UUID) -> dict:
     """Worker entrypoint for a single task: breaker-gate, then dispatch to backend."""
     async with ctx.session_factory() as db:

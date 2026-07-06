@@ -12,6 +12,7 @@ from app.jobs.recovery import recover_pending_work
 from app.jobs.scheduled import (
     backfill_memory_embeddings,
     generate_digests,
+    monitor_failed_tasks,
     promote_feature_backlog,
     recompute_runway,
     reconcile_delivered_requests,
@@ -84,6 +85,9 @@ class WorkerSettings:
         # overlap). Both no-op until Galaxia is bootstrapped and a tracker is set.
         cron(promote_feature_backlog, minute=settings.galaxia_promote_minute),
         cron(reconcile_delivered_requests, minute=settings.galaxia_reconcile_minute),
+        # Galaxia reliability monitor: investigate its own failed tasks and file
+        # bug reports for the auto-fix pipeline (:22, offset from the others).
+        cron(monitor_failed_tasks, minute=settings.galaxia_failure_monitor_minute),
     ]
     on_startup = startup
     redis_settings = redis_settings()

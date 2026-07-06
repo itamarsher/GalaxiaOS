@@ -77,6 +77,22 @@ SPECS: list[ToolSpec] = [
             "required": ["service_id", "deploy_id"],
         },
     ),
+    ToolSpec(
+        name="get_render_logs",
+        description=(
+            "Read recent log lines for a Render service (by service id) — use this to "
+            "debug a failure: look for stack traces, errors, or crash output around when "
+            "something went wrong. Read-only and free."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "service_id": {"type": "string", "description": "The Render service id (srv-…)."},
+                "limit": {"type": "integer", "description": "Max log lines (default 50)."},
+            },
+            "required": ["service_id"],
+        },
+    ),
 ]
 
 
@@ -160,8 +176,28 @@ async def _get_render_deploy(db, ctx, *, agent: Agent, task: Task, args: dict) -
     )
 
 
+async def _get_render_logs(db, ctx, *, agent: Agent, task: Task, args: dict) -> ToolOutcome:
+    client = await _resolve_client(db, task.company_id)
+    if client is None:
+        return ToolOutcome(observation=_NOT_CONNECTED, is_error=True)
+    service_id = str(args.get("service_id") or "").strip()
+    if not service_id:
+        return ToolOutcome(observation="service_id is required", is_error=True)
+    try:
+        logs = await client.get_logs(service_id, limit=int(args.get("limit") or 50))
+    except RenderError as exc:
+        return ToolOutcome(observation=f"could not read logs: {exc}", is_error=True)
+    if not logs:
+        return ToolOutcome(observation=f"No recent logs for service {service_id}.")
+    lines = [f"{ln.timestamp} {ln.message}" for ln in logs]
+    return ToolOutcome(
+        observation=clip(f"Recent logs for {service_id} (oldest first):\n" + "\n".join(lines), 6000)
+    )
+
+
 HANDLERS = {
     "list_render_services": _list_render_services,
     "list_render_deploys": _list_render_deploys,
     "get_render_deploy": _get_render_deploy,
+    "get_render_logs": _get_render_logs,
 }

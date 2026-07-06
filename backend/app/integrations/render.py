@@ -43,6 +43,12 @@ class RenderDeploy:
     finished_at: str
 
 
+@dataclass(frozen=True)
+class RenderLogEntry:
+    timestamp: str
+    message: str
+
+
 class RenderClient:
     """Read-only Render API v1 client (credential-gated)."""
 
@@ -51,11 +57,13 @@ class RenderClient:
         api_key: str | None = None,
         *,
         base_url: str | None = None,
+        owner_id: str | None = None,
         timeout: float | None = None,
         transport: httpx.BaseTransport | None = None,
     ) -> None:
         self._key = api_key if api_key is not None else settings.render_api_key
         self._base = (base_url or settings.render_api_base_url).rstrip("/")
+        self._owner_id = owner_id if owner_id is not None else settings.render_owner_id
         self._timeout = timeout if timeout is not None else settings.web_search_timeout_seconds
         # Test seam: inject a MockTransport to exercise the API dance offline.
         self._transport = transport
@@ -98,6 +106,31 @@ class RenderClient:
     async def get_deploy(self, service_id: str, deploy_id: str) -> RenderDeploy:
         data = await self._get(f"/services/{service_id}/deploys/{deploy_id}")
         return self._parse_deploy(_unwrap(data, "deploy"))
+
+    async def get_logs(self, resource_id: str, *, limit: int = 50) -> list[RenderLogEntry]:
+        """Recent log lines for a Render resource (service id), newest last.
+
+        Uses GET /v1/logs, which requires the owner id; raises :class:`RenderError`
+        if ``render_owner_id`` isn't configured so the caller can say logs aren't
+        available rather than silently returning nothing.
+        """
+        if not self._owner_id:
+            raise RenderError(
+                "Render owner id missing (set ABOS_RENDER_OWNER_ID) — required to read logs."
+            )
+        data = await self._get(
+            "/logs",
+            {"ownerId": self._owner_id, "resource": resource_id, "limit": max(1, limit)},
+        )
+        rows = data.get("logs") if isinstance(data, dict) else None
+        return [self._parse_log(r) for r in (rows or []) if isinstance(r, dict)]
+
+    @staticmethod
+    def _parse_log(d: dict) -> RenderLogEntry:
+        return RenderLogEntry(
+            timestamp=str(d.get("timestamp") or ""),
+            message=" ".join(str(d.get("message") or "").split()),
+        )
 
     @staticmethod
     def _explain_status(exc: httpx.HTTPStatusError) -> str:

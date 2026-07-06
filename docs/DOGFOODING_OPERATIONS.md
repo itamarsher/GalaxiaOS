@@ -37,7 +37,8 @@ App-side (Render service env, not GitHub) — required for the loop's app half:
 | `ABOS_GITHUB_TOKEN` | the running app files/reads tracker issues; **without it the promoter no-ops** |
 | `ABOS_GITHUB_REPO` | defaults to `itamarsher/just-launch-it` |
 | `ABOS_MASTER_KEY` | envelope key for BYOK secrets (from a KMS in prod) |
-| `ABOS_RENDER_API_KEY` | read-only Render key so GalaxiaOS's agents can see our deploys (`list_render_services` / `list_render_deploys` / `get_render_deploy`). Offered only to Galaxia; other companies use their own BYOK `render` key. Optional. |
+| `ABOS_RENDER_API_KEY` | read-only Render key so GalaxiaOS's agents can see our deploys (`list_render_services` / `list_render_deploys` / `get_render_deploy` / `get_render_logs`). Offered only to Galaxia; other companies use their own BYOK `render` key. Optional. |
+| `ABOS_RENDER_OWNER_ID` | Render owner (team/user) id — required by the Render logs API, so `get_render_logs` can read logs when the reliability monitor debugs an infra failure. Optional (deploy-status tools work without it). |
 
 ### 2. Repository variables
 
@@ -105,6 +106,7 @@ tool it claims to add, should be sent back for changes rather than merged.
 |---|---|---|
 | `promote_feature_backlog` | hourly at :07 | promote backlog demand ≥ `ABOS_GALAXIA_PROMOTE_MIN_VOTES` into issues (`batch` per tick) |
 | `reconcile_delivered_requests` | hourly at :37 | mark promoted entries `delivered` once their issue closes; notify requesters |
+| `monitor_failed_tasks` | hourly at :22 | investigate Galaxia's own failed tasks (Platform agent reads code + Render) and `report_bug` for the auto-fix pipeline |
 | `run_business_cycle` | daily | the fleet's operating run (Galaxia included, once active) |
 
 All are gated (`ABOS_GALAXIA_PROMOTE_ENABLED`, `ABOS_GALAXIA_RECONCILE_ENABLED`)
