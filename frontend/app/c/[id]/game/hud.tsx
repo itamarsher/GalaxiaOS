@@ -8,30 +8,25 @@
 // .btnrow, .decision-panel, .pill) plus a small `Galaxia Command` block added to
 // globals.css.
 
-import { useState } from "react";
 import {
-  api,
-  decisionKindLabel,
   fmtUsd,
   statusLabel,
   type BudgetView,
   type Decision,
   type Runway,
 } from "@/lib/api";
-import { Markdown } from "@/lib/markdown";
-import { sectorStanding, type ModuleView } from "@/lib/game/scene";
+import { type ModuleView } from "@/lib/game/scene";
+import { levelFromScore } from "@/lib/game/score";
+import { SwipeDeck } from "./SwipeDeck";
 
-// ── Captain's Console: the decision inbox as red-alert command orders ─────────
+// ── Captain's Console: the decision inbox as a swipeable order deck ───────────
 export function CaptainsConsole({
-  companyId,
   decisions,
   onResolved,
 }: {
-  companyId: string;
   decisions: Decision[];
   onResolved: () => void;
 }) {
-  void companyId;
   const pending = decisions.filter((d) => d.status === "pending" || d.status === "waiting_approval");
   const alert = pending.length > 0;
   return (
@@ -40,53 +35,7 @@ export function CaptainsConsole({
         {alert && <span className="dot" style={{ background: "var(--danger)" }} />}
         <span>Captain&apos;s Console{alert ? ` · ${pending.length} awaiting orders` : ""}</span>
       </div>
-      {pending.length === 0 ? (
-        <p className="muted" style={{ marginTop: 10 }}>All clear, Captain. No orders pending.</p>
-      ) : (
-        <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 10 }}>
-          {pending.map((d) => (
-            <ConsoleOrder key={d.id} decision={d} onResolved={onResolved} />
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function ConsoleOrder({ decision, onResolved }: { decision: Decision; onResolved: () => void }) {
-  const [busy, setBusy] = useState(false);
-  const [done, setDone] = useState(false);
-
-  const resolve = async (approve: boolean) => {
-    setBusy(true);
-    try {
-      if (approve) await api.approveDecision(decision.id);
-      else await api.rejectDecision(decision.id);
-      setDone(true); // optimistically drop the card
-      onResolved();
-    } catch {
-      setBusy(false); // let them retry on failure
-    }
-  };
-
-  if (done) return null;
-
-  return (
-    <div className="decision-panel">
-      <div className="decision-kind">
-        {decisionKindLabel(decision.kind)}
-        {decision.agent_name ? ` · ${decision.agent_name}` : ""}
-        {decision.agent_role ? ` (${decision.agent_role})` : ""}
-      </div>
-      <Markdown className="decision-note">{decision.summary}</Markdown>
-      <div className="btnrow">
-        <button disabled={busy} onClick={() => resolve(true)}>
-          {busy ? "…" : "Approve order"}
-        </button>
-        <button className="ghost" disabled={busy} onClick={() => resolve(false)}>
-          Reject
-        </button>
-      </div>
+      <SwipeDeck decisions={decisions} onResolved={onResolved} />
     </div>
   );
 }
@@ -166,34 +115,47 @@ export function ReactorGauge({ budget }: { budget: BudgetView | null }) {
   );
 }
 
-// ── Score / sector standing ───────────────────────────────────────────────────
-export function ScorePanel({ health }: { health: number }) {
-  const standing = sectorStanding(health);
+// ── Level / XP / score / streak — the progression meter ───────────────────────
+export function ScorePanel({
+  health,
+  score,
+  streak,
+}: {
+  health: number;
+  score: number;
+  streak: number;
+}) {
+  const { level, label, intoPct } = levelFromScore(score, health);
   const cls = health >= 60 ? "good" : health >= 40 ? "warn" : "danger";
   return (
     <div className="gauge">
       <div className="gauge-head">
-        <span className="step">Sector standing</span>
+        <span className="step">Command level</span>
         <span className={`status ${cls === "good" ? "active" : cls === "warn" ? "paused" : "failed"}`}>
-          {standing}
+          {label}
         </span>
       </div>
-      <div style={{ display: "flex", alignItems: "baseline", gap: 8, margin: "6px 0 4px" }}>
-        <span style={{ fontSize: 30, fontWeight: 800, letterSpacing: "-0.02em" }}>{health}</span>
-        <span className="muted">/ 100 command rating</span>
+      <div style={{ display: "flex", alignItems: "baseline", gap: 8, margin: "4px 0" }}>
+        <span style={{ fontSize: 30, fontWeight: 800, letterSpacing: "-0.02em" }}>Lv {level}</span>
+        <span className="muted">· {score.toLocaleString()} pts</span>
+        {streak > 1 && (
+          <span className="streak-pill" aria-label={`${streak} good cycles in a row`}>
+            🔥 ×{streak}
+          </span>
+        )}
       </div>
+      {/* XP bar toward the next level */}
       <div className="bar">
         <span
           style={{
-            width: `${Math.max(3, health)}%`,
-            background:
-              cls === "good"
-                ? "linear-gradient(90deg, var(--accent), var(--good))"
-                : cls === "warn"
-                  ? "var(--warn)"
-                  : "var(--danger)",
+            width: `${Math.max(3, intoPct)}%`,
+            background: "linear-gradient(90deg, var(--accent), var(--accent-strong))",
           }}
         />
+      </div>
+      <div className="kv" style={{ marginTop: 8 }}>
+        <span className="muted">Command rating</span>
+        <span>{health} / 100</span>
       </div>
     </div>
   );

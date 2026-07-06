@@ -25,6 +25,8 @@ from app.schemas import (
     AgentOut,
     CompanyOut,
     CompanyUpdateRequest,
+    CycleStartOut,
+    CycleStatusOut,
     DecisionOut,
     MemoryOut,
     OrgChartOut,
@@ -39,6 +41,7 @@ from app.schemas import (
 )
 from app.services import company_reset as company_reset_svc
 from app.services import memory as memory_svc
+from app.services import runs as runs_svc
 from app.services import sites as sites_svc
 
 
@@ -126,6 +129,42 @@ async def reset_company(company: CompanyDep, db: DbDep):
     fresh = await company_reset_svc.reset_company(db, company=company)
     await db.commit()
     return fresh
+
+
+@router.post("/cycle", response_model=CycleStartOut)
+async def advance_cycle(company: CompanyDep, db: DbDep):
+    """Start one business cycle for this company on demand — the game's "round".
+
+    Mirrors the ``run_business_cycle`` cron for a single company: guards on active
+    status, an already-running cycle (continuous mode may be looping), and the
+    budget/spend-breaker gate, then kicks a CEO scheduled run. Commits before
+    enqueuing (the cron's ordering) so the queued task always sees the committed
+    row. Returns why it did/didn't start so the UI can label the button.
+    """
+    from app.runtime.queue import enqueue_task
+
+    result = await runs_svc.start_cycle(db, company)
+    if result.started and result.task_id is not None:
+        await db.commit()
+        await enqueue_task(result.task_id)
+    return CycleStartOut(
+        started=result.started,
+        task_id=result.task_id,
+        reason=result.reason,
+        active=result.active,
+    )
+
+
+@router.get("/cycle", response_model=CycleStatusOut)
+async def cycle_status(company: CompanyDep, db: DbDep):
+    """Whether a cycle is in progress and whether a new one can start now."""
+    status_ = await runs_svc.cycle_status(db, company)
+    return CycleStatusOut(
+        active=status_.active,
+        can_start=status_.can_start,
+        reason=status_.reason,
+        active_task_count=status_.active_task_count,
+    )
 
 
 @router.get("/playbook", response_model=PlaybookOut)

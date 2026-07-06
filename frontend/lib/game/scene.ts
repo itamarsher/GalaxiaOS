@@ -445,3 +445,18 @@ export function hitModules(scene: SceneModel): HitModule[] {
     .filter((m) => m.agentId != null)
     .map((m) => ({ key: m.key, agentId: m.agentId, x: m.x, y: m.y, w: m.w, h: m.h }));
 }
+
+/** Centre of a module (or the agent's module) in virtual units, for FX anchoring.
+ *  Falls back to the reactor core when the key isn't found. */
+export function moduleAnchor(scene: SceneModel, key: string | null): { x: number; y: number } {
+  const m = key ? scene.modules.find((mm) => mm.key === key || mm.agentId === key) : null;
+  if (m) return { x: m.x + m.w / 2, y: m.y + m.h / 2 };
+  return { x: REACTOR.x + REACTOR.w / 2, y: REACTOR.y + REACTOR.h / 2 };
+}
+
+/** Anchor for a site/planet by id (for lead-landing FX). */
+export function planetAnchor(scene: SceneModel, siteId: string): { x: number; y: number } {
+  const pl = scene.planets.find((p) => p.id === siteId);
+  if (pl) return { x: pl.x, y: pl.y };
+  return { x: VW / 2, y: VH - 14 };
+}

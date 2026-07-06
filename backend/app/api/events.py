@@ -47,6 +47,7 @@ async def _snapshot(company_id) -> dict:
             {
                 "id": str(t.id),
                 "agent_id": str(t.agent_id),
+                "root_run_id": str(t.root_run_id) if t.root_run_id else None,
                 "goal": t.goal,
                 "status": t.status.value if hasattr(t.status, "value") else str(t.status),
                 "depth": t.depth,
