@@ -66,20 +66,21 @@ export default function Overview() {
     }
   };
 
-  // TEMP dev tool — remove before launch. Re-provisions the Galaxia reference
-  // company from scratch (same as POST /dev/galaxia/reset): wipes its fleet,
-  // mission, objectives, runs and memory, rebuilds a fresh draft, and preserves
-  // saved BYOK keys. Lands at plan-approval, so we return to onboarding.
+  // Reset this company to a fresh draft: wipes its generated org and all
+  // operational state (tasks, runs, budget spend, memory, chat, sites…) and
+  // rebuilds the default fleet, keeping the mission and saved API keys. Lands at
+  // plan-approval, so we return to onboarding to review and relaunch.
   const [resetting, setResetting] = useState(false);
-  const resetGalaxia = async () => {
+  const resetCompany = async () => {
     if (!window.confirm(
-      "Reset Galaxia? This wipes its fleet, mission, objectives, runs and memory and " +
-      "re-provisions a fresh draft. Saved API keys are preserved. This cannot be undone."
+      "Reset this company? This wipes its agents, tasks, budget history, memory and " +
+      "activity and rebuilds a fresh draft to relaunch. Its mission and saved API keys " +
+      "are preserved. This cannot be undone."
     )) return;
     setResetting(true);
     try {
-      const res = await api.galaxiaReset();
-      alert(`Galaxia reset — rebuilt as a fresh ${res.status ?? "draft"}. Saved keys were preserved.`);
+      await api.resetCompany(id);
+      alert("Company reset — rebuilt as a fresh draft. Review the plan and relaunch when ready.");
       router.push("/");
     } catch (e) {
       alert(String(e instanceof Error ? e.message : e));
@@ -199,24 +200,23 @@ export default function Overview() {
       <div className="card danger-zone">
         <div className="step">Danger zone</div>
         <p className="muted">
-          Permanently delete this company and stop all of its agents. This removes every
-          task, budget record, and memory — there is no undo.
+          Reset wipes this company&apos;s agents, tasks, budget history, memory and activity and
+          rebuilds a fresh draft to relaunch — keeping its mission and saved API keys. Delete
+          removes the company and everything under it. Neither can be undone.
         </p>
-        <button className="ghost danger" disabled={deleting} onClick={deleteCompany}>
-          {deleting ? "Deleting…" : "Delete company"}
-        </button>
+        <div className="btnrow">
+          <button className="ghost danger" disabled={resetting || deleting} onClick={resetCompany}>
+            {resetting ? "Resetting…" : "Reset company"}
+          </button>
+          <button className="ghost danger" disabled={deleting || resetting} onClick={deleteCompany}>
+            {deleting ? "Deleting…" : "Delete company"}
+          </button>
+        </div>
 
         {/* TEMP DEV TOOL — remove before launch (backend app/api/dev.py + ABOS_DEV_TOOLS_ENABLED). */}
         {dev.data?.enabled && (
           <div style={{ marginTop: 16, paddingTop: 14, borderTop: "1px dashed var(--border)" }}>
             <p className="muted" style={{ fontSize: 12, margin: "0 0 8px" }}>
-              ⚠️ Dev only — re-provisions Galaxia from scratch (wipes its fleet, mission, runs and
-              memory; keeps saved API keys). Remove before going live.
-            </p>
-            <button className="ghost danger" disabled={resetting} onClick={resetGalaxia}>
-              {resetting ? "Resetting…" : "Reset Galaxia"}
-            </button>
-            <p className="muted" style={{ fontSize: 12, margin: "16px 0 8px" }}>
               ⚠️ Dev only — deletes every account except the default one. Remove before going live.
             </p>
             <button className="ghost danger" onClick={deleteOtherAccounts}>

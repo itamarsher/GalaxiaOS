@@ -37,6 +37,7 @@ from app.schemas import (
     TaskOut,
     TaskTranscriptOut,
 )
+from app.services import company_reset as company_reset_svc
 from app.services import memory as memory_svc
 from app.services import sites as sites_svc
 
@@ -110,6 +111,21 @@ async def delete_company(company: CompanyDep, db: DbDep):
     await db.delete(company)
     await db.commit()
     return None
+
+
+@router.post("/reset", response_model=CompanyOut)
+async def reset_company(company: CompanyDep, db: DbDep):
+    """Reset this company to a fresh draft, preserving its mission and saved keys.
+
+    Wipes the generated org and all operational state (tasks, runs, budget spend,
+    memory, chat, sites, decisions, …) and re-provisions the default fleet,
+    returning the company to the onboarding plan-approval (``draft``) state so the
+    founder can refine, regenerate, or relaunch. Saved BYOK provider keys survive.
+    Same effect as the Galaxia dev reset, but for the caller's own company.
+    """
+    fresh = await company_reset_svc.reset_company(db, company=company)
+    await db.commit()
+    return fresh
 
 
 @router.get("/playbook", response_model=PlaybookOut)

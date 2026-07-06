@@ -195,10 +195,6 @@ export const api = {
   defaultLogin: () => req<TokenResponse>("/dev/default-login", { method: "POST" }),
   deleteOtherAccounts: () =>
     req<{ deleted_accounts: number }>("/dev/delete-all-accounts", { method: "POST" }),
-  galaxiaReset: () =>
-    req<{ reset: boolean; company_id: string; status: string | null }>("/dev/galaxia/reset", {
-      method: "POST",
-    }),
 
   login: async (email: string, password: string) => {
     const form = new URLSearchParams({ username: email, password });
@@ -267,6 +263,8 @@ export const api = {
     req<Company>(`/companies/${companyId}`, { method: "PATCH", body: JSON.stringify(patch) }),
   deleteCompany: (companyId: string) =>
     req<void>(`/companies/${companyId}`, { method: "DELETE" }),
+  resetCompany: (companyId: string) =>
+    req<Company>(`/companies/${companyId}/reset`, { method: "POST" }),
   playbook: (companyId: string) => req<Playbook>(`/companies/${companyId}/playbook`),
   updatePlaybook: (companyId: string, playbook: string) =>
     req<Playbook>(`/companies/${companyId}/playbook`, {
