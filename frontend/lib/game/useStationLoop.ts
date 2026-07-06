@@ -12,6 +12,7 @@
 // re-renders never reset the animation (which is time-based via performance.now).
 
 import { useEffect, type RefObject } from "react";
+import type { FxQueue } from "./fx";
 import { makeStarfield, renderStation, type Star } from "./render";
 import { hitModules, VH, VW, type HitModule, type SceneModel } from "./scene";
 
@@ -27,9 +28,10 @@ interface Options {
   canvasRef: RefObject<HTMLCanvasElement | null>;
   sceneRef: RefObject<SceneModel | null>;
   hitRef: RefObject<HitLayout | null>;
+  fxRef?: RefObject<FxQueue | null>;
 }
 
-export function useStationLoop({ canvasRef, sceneRef, hitRef }: Options): void {
+export function useStationLoop({ canvasRef, sceneRef, hitRef, fxRef }: Options): void {
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -84,15 +86,24 @@ export function useStationLoop({ canvasRef, sceneRef, hitRef }: Options): void {
       // Refresh the interactive hit rectangles from the latest scene.
       layout.modules = hitModules(scene);
 
-      // Draw the scene into the buffer, then blit it up with nearest-neighbor.
-      renderStation(bctx!, scene, stars, now, !!reduceMotion);
+      // Draw the scene + FX into the buffer; FX returns a shake offset (virtual
+      // units) applied to the blit so failures/level-ups jolt the whole scene.
+      const { shakeX, shakeY } = renderStation(
+        bctx!, scene, stars, now, !!reduceMotion, fxRef?.current ?? null,
+      );
 
       const c = el.getContext("2d");
       if (!c) return;
       c.imageSmoothingEnabled = false;
       c.fillStyle = scene.palette.bg;
       c.fillRect(0, 0, el.width, el.height);
-      c.drawImage(buffer, layout.offsetX, layout.offsetY, VW * layout.scale, VH * layout.scale);
+      c.drawImage(
+        buffer,
+        layout.offsetX + shakeX * layout.scale,
+        layout.offsetY + shakeY * layout.scale,
+        VW * layout.scale,
+        VH * layout.scale,
+      );
     }
 
     resize();

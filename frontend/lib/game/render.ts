@@ -8,6 +8,7 @@
 // Sprites are authored as string arrays where each char indexes a small colour
 // ramp — this keeps everything in-repo and in-palette with zero binary assets.
 
+import type { FxEvent, FxQueue } from "./fx";
 import {
   REACTOR,
   VH,
@@ -71,13 +72,16 @@ function hexToRgb(hex: string): [number, number, number] | null {
 const px = Math.floor;
 
 // ── Top-level ────────────────────────────────────────────────────────────────
+// Returns a shake offset (virtual units) the loop applies to the blit so failures
+// and level-ups jolt the whole scene.
 export function renderStation(
   ctx: CanvasRenderingContext2D,
   scene: SceneModel,
   stars: Star[],
   timeMs: number,
   reducedMotion: boolean,
-): void {
+  fx: FxQueue | null,
+): { shakeX: number; shakeY: number } {
   const p = scene.palette;
   const t = reducedMotion ? 0 : timeMs;
 
@@ -95,6 +99,8 @@ export function renderStation(
   for (const orb of scene.missions) drawMissionOrb(ctx, orb, scene, p, t);
 
   if (!scene.stationPowered) drawPoweringUp(ctx, scene, p, t);
+
+  return fx ? drawFx(ctx, fx, p, timeMs, reducedMotion) : { shakeX: 0, shakeY: 0 };
 }
 
 function drawGlow(ctx: CanvasRenderingContext2D, p: Palette) {
@@ -362,4 +368,142 @@ function drawPoweringUp(ctx: CanvasRenderingContext2D, scene: SceneModel, p: Pal
   const fillW = px(((t * 0.03) % barW));
   ctx.fillStyle = mix(p.accent, p.accentStrong, blink);
   ctx.fillRect(barX + 2, barY + 2, Math.max(2, Math.min(barW - 4, fillW)), 2);
+}
+
+// ── Transient FX (drives round playback, score pops, level-ups) ───────────────
+// A tiny 3×5 pixel font — digits + and −, enough for floating "+N" score pops.
+const GLYPHS: Record<string, string[]> = {
+  "0": ["111", "101", "101", "101", "111"],
+  "1": ["010", "110", "010", "010", "111"],
+  "2": ["111", "001", "111", "100", "111"],
+  "3": ["111", "001", "111", "001", "111"],
+  "4": ["101", "101", "111", "001", "001"],
+  "5": ["111", "100", "111", "001", "111"],
+  "6": ["111", "100", "111", "101", "111"],
+  "7": ["111", "001", "010", "010", "010"],
+  "8": ["111", "101", "111", "101", "111"],
+  "9": ["111", "101", "111", "001", "111"],
+  "+": ["000", "010", "111", "010", "000"],
+  "-": ["000", "000", "111", "000", "000"],
+};
+
+function drawGlyphs(ctx: CanvasRenderingContext2D, text: string, x: number, y: number, color: string) {
+  ctx.fillStyle = color;
+  let ox = px(x);
+  for (const ch of text) {
+    const g = GLYPHS[ch];
+    if (g) {
+      for (let row = 0; row < 5; row++) {
+        for (let col = 0; col < 3; col++) {
+          if (g[row][col] === "1") ctx.fillRect(ox + col, px(y) + row, 1, 1);
+        }
+      }
+    }
+    ox += 4; // 3px glyph + 1px space
+  }
+}
+
+// Draw the FX queue, expire dead events (single owner of expiry), and accumulate
+// a screen-shake offset the loop applies to the blit.
+function drawFx(
+  ctx: CanvasRenderingContext2D,
+  fx: FxQueue,
+  p: Palette,
+  nowMs: number,
+  reducedMotion: boolean,
+): { shakeX: number; shakeY: number } {
+  let shakeX = 0;
+  let shakeY = 0;
+  const alive: FxEvent[] = [];
+
+  for (const e of fx.events) {
+    const age = nowMs - e.bornMs;
+    if (age > e.ttlMs) continue; // expired — drop
+    alive.push(e);
+    // Clamp progress: born/now come from slightly different performance.now()
+    // reads (differ vs rAF), so age can be a hair negative on the first frame.
+    const k = Math.max(0, Math.min(1, age / e.ttlMs)); // 0..1 progress
+    const d = e.data;
+    const num = (key: string) => (typeof d[key] === "number" ? (d[key] as number) : 0);
+
+    switch (e.kind) {
+      case "taskBurst": {
+        const col = d.good ? p.good : p.danger;
+        const r = 1 + k * 7;
+        const a = 1 - k;
+        ctx.fillStyle = mix(p.bg, col, a);
+        // ring of 8 pixels expanding outward
+        for (let i = 0; i < 8; i++) {
+          const ang = (i / 8) * Math.PI * 2;
+          ctx.fillRect(px(num("x") + Math.cos(ang) * r), px(num("y") + Math.sin(ang) * r), 1, 1);
+        }
+        break;
+      }
+      case "orbLaunch": {
+        const rise = reducedMotion ? 0 : k * 8;
+        ctx.fillStyle = mix(p.bg, p.accentStrong, 1 - k);
+        ctx.fillRect(px(num("x")), px(num("y") - rise), 1, 2);
+        break;
+      }
+      case "leadLand": {
+        const fall = reducedMotion ? 6 : k * 8;
+        ctx.fillStyle = mix(p.bg, p.good, 1 - Math.abs(k - 0.5) * 2);
+        ctx.fillRect(px(num("x")), px(num("y") - 8 + fall), 1, 2);
+        break;
+      }
+      case "scorePop": {
+        const rise = reducedMotion ? 0 : k * 12;
+        const col = d.good === false ? p.danger : p.accentStrong;
+        const val = num("value");
+        const text = `${val >= 0 ? "+" : "-"}${Math.abs(val)}`;
+        drawGlyphs(ctx, text, num("x"), num("y") - rise, mix(p.bg, col, Math.max(0.2, 1 - k)));
+        break;
+      }
+      case "rankUp": {
+        const rise = reducedMotion ? 3 : k * 6;
+        ctx.fillStyle = mix(p.bg, p.warn, 1 - k);
+        for (let i = -1; i <= 1; i++) ctx.fillRect(px(num("x") + i * 2), px(num("y") - 4 - rise), 1, 1);
+        break;
+      }
+      case "cycleStart": {
+        // A light sweep ring expanding from the CEO module along the hull.
+        const r = k * VW * 0.5;
+        ctx.strokeStyle = mix(p.bg, p.accent, 1 - k);
+        ctx.beginPath();
+        ctx.arc(num("x"), num("y"), r, 0, Math.PI * 2);
+        ctx.stroke();
+        break;
+      }
+      case "levelUp": {
+        // Full-width banner sweep + upward chevrons + a brief palette flash.
+        const flash = k < 0.15 ? (0.15 - k) / 0.15 : 0;
+        if (flash > 0) {
+          ctx.fillStyle = mix(p.bg, p.accentStrong, flash * 0.5);
+          ctx.fillRect(0, 0, VW, VH);
+        }
+        const by = px(VH * 0.5 - 8);
+        ctx.fillStyle = mix(p.bg, p.accent, 0.6 * (1 - k));
+        ctx.fillRect(0, by, VW, 16);
+        ctx.fillStyle = mix(p.bg, p.accentStrong, 1 - k);
+        const sweep = reducedMotion ? VW / 2 : (k * VW * 1.4) % VW;
+        for (let i = 0; i < 3; i++) {
+          const cx = px(sweep - i * 6);
+          ctx.fillRect(cx, by + 8, 1, -4); // up-chevron stem
+          ctx.fillRect(cx - 1, by + 6, 1, 1);
+          ctx.fillRect(cx + 1, by + 6, 1, 1);
+        }
+        break;
+      }
+      case "shake": {
+        const mag = num("mag") * (1 - k);
+        // Deterministic wobble from the event id + time so it's stable per-frame.
+        shakeX += Math.round(Math.sin(nowMs * 0.05 + e.id) * mag);
+        shakeY += Math.round(Math.cos(nowMs * 0.07 + e.id) * mag);
+        break;
+      }
+    }
+  }
+
+  fx.events = alive;
+  return { shakeX, shakeY };
 }
