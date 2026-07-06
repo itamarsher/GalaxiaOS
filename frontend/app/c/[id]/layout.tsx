@@ -16,6 +16,7 @@ import { Avatar, channelDisplayName, founderIsMember, isCeoDm } from "@/lib/chat
 // in the footer.
 const SPACES = [
   ["", "Home"],
+  ["game", "Command"],
   ["org", "Org"],
   ["budget", "Budget"],
   ["tasks", "Tasks"],
