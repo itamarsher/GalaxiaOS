@@ -9,7 +9,7 @@ piece exists; this one is the *checklist* to operate it.
 
 ```
 agent hits a gap → feature-request backlog → [cron: promote] → GitHub issue
-   → issue-triage → issue-implement (PR) → CI → [auto-merge: review + arm]
+   → issue-triage → issue-implement (PR) → CI → [auto-merge: review + merge]
    → merge → deploy (Render) → health gate → [cron: reconcile] → backlog "delivered"
    → requesters notified
 ```
@@ -44,20 +44,26 @@ App-side (Render service env, not GitHub) — required for the loop's app half:
 |---|---|
 | `DOGFOODING_AUTOMERGE` | kill switch. Set to `off` to halt all auto-merges immediately, no commit needed. Missing/anything-else = on. |
 
-### 3. Branch protection (this is what makes auto-merge *safe*)
+### 3. Branch protection — OPTIONAL (the CI gate lives in the workflow)
 
-On the default branch (`claude/abos-system-architecture-u9xny4`), add a ruleset:
+Branch protection/rulesets are **paid on private repos**, so the pipeline does not
+require them: `auto-merge.yml` triggers only after the **CI workflow completes
+successfully** for a PR, re-verifies the checks with `gh pr checks`, and merges
+directly. The CI-green gate is enforced *in the workflow*, not by GitHub — so
+nothing here needs a paid plan.
 
-- **Require status checks to pass:** the CI jobs (`backend`, `frontend`). This is
-  the guarantee that armed auto-merge only completes on green — the workflow
-  *arms* the merge, GitHub *withholds* it until checks pass.
-- **Require a pull request review before merging:** 1 approval. The auto-merge
-  reviewer supplies it for eligible PRs; a founder-escalated PR needs a human's.
-- **Do not allow bypassing** the above, so neither the automation nor a human can
-  land red or unreviewed code.
+When you make the repo **public** (branch protection becomes free), add a ruleset
+on the default branch (`claude/abos-system-architecture-u9xny4`) for defence in
+depth — it complements the workflow, it isn't required by it:
 
-Without branch protection the pipeline still works, but "auto-merge" degrades to
-"merge as soon as armed" — protection is what enforces the CI gate.
+- **Require status checks to pass:** the CI jobs (`backend`, `frontend`).
+- **Require a pull request review before merging:** 1 approval.
+- **Do not allow bypassing**, so no human can land red/unreviewed code either.
+
+Until then, the one thing branch protection would add that the workflow can't is
+stopping a *human* from pushing directly to the default branch — an acceptable gap
+for a solo-owned repo, since the automation (not human bypass) is what we're
+guarding.
 
 ## Guardrails (`.github/dogfooding.yml`)
 
@@ -65,7 +71,7 @@ The auto-merge workflow reads this file on every PR. Tune it — don't edit YAML
 
 - `auto_merge.enabled` — soft master switch (the repo variable is the hard one).
 - `auto_merge.max_merges_per_day` — runaway backstop; over it, PRs escalate.
-- `auto_merge.veto_window_minutes` — delay before arming, for a founder to veto.
+- `auto_merge.veto_window_minutes` — delay before merging, for a founder to veto.
 - `escalate_paths` — the founder-escalated surface (auth, crypto, RLS, migrations,
   budget/CostMeter, governance, real-money paths, the workflows themselves, and
   the bootstrap). A PR touching any of these is labeled `founder-review` and left

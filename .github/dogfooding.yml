@@ -22,8 +22,8 @@ auto_merge:
   # is hit the workflow escalates instead of merging.
   max_merges_per_day: 10
 
-  # Minutes to wait after CI goes green before the merge is armed, so a founder has
-  # a chance to veto. 0 = arm immediately (GitHub still waits for required checks).
+  # Minutes to wait after CI goes green before merging, so a founder has a chance
+  # to veto. 0 = merge as soon as CI is green and the review is clean.
   veto_window_minutes: 0
 
   # squash | merge | rebase

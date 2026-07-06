@@ -130,7 +130,8 @@ tools and the promote-when-demand-crosses-N policy.
 ### P0-3 — PR approval + merge is not automated (the explicitly-requested gap) — ✅ IMPLEMENTED
 
 > **Status: done (code); requires GitHub-side config to activate.** `.github/workflows/auto-merge.yml`
-> reviews eligible agent PRs and arms GitHub auto-merge; `.github/dogfooding.yml` encodes the
+> reviews eligible agent PRs and merges them (gated on CI completing green, no branch protection
+> required — the workflow is the gate); `.github/dogfooding.yml` encodes the
 > escalation boundary + guardrails it consults. Activating it needs branch protection + secrets
 > (operator-side, not code) — see `docs/DOGFOODING_OPERATIONS.md`. The reviewer escalates any PR
 > touching the founder surface and honours a kill switch + daily merge cap.
