@@ -65,6 +65,7 @@ export default function GalaxiaCommandPage() {
   const sites = usePoll(() => api.sites(id), 15000, [id]);
   const cycle = usePoll(() => api.cycleStatus(id), 8000, [id]);
   const objectives = usePoll(() => api.objectives(id), 15000, [id]);
+  const chatChannels = usePoll(() => api.chatChannels(id), 5000, [id]);
   const tasks = useLiveTasks(id);
 
   const agents = useMemo(() => org.data?.agents ?? [], [org.data]);
@@ -361,6 +362,14 @@ export default function GalaxiaCommandPage() {
 
   const decisionList = decisions.data ?? [];
   const cycleData = cycle.data;
+  // Agents can also park a task waiting for a plain chat reply (no formal
+  // decision) — that still counts as "awaiting you" in the cycle strip, so the
+  // console must point the founder to Chat rather than claiming "all clear".
+  // Count only pure chat-waits (a channel whose pending_decision is already in
+  // the decision deck isn't double-counted here).
+  const chatWaiting = (chatChannels.data ?? [])
+    .filter((c) => c.pending_decision == null)
+    .reduce((n, c) => n + c.waiting_agents.length, 0);
 
   return (
     <div>
@@ -405,7 +414,12 @@ export default function GalaxiaCommandPage() {
 
         <div className="hud-grid">
           <div className="hud-primary">
-            <CaptainsConsole decisions={decisionList} onResolved={() => decisions.reload()} />
+            <CaptainsConsole
+              decisions={decisionList}
+              chatWaiting={chatWaiting}
+              companyId={id}
+              onResolved={() => decisions.reload()}
+            />
           </div>
           <div className="hud-gauges">
             <ScorePanel health={scene.health} score={score} streak={streak} />
