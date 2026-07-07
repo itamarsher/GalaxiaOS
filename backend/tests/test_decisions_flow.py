@@ -97,6 +97,48 @@ async def test_request_decision_parks_detached_task(session_factory, company_wit
 
 
 @requires_db
+async def test_submit_plan_is_idempotent_on_rerun(session_factory, company_with_budget):
+    """Re-running a still-``running`` CEO task (e.g. after a restart) must not
+    create a second plan_approval decision — the founder should see one plan."""
+    company_id = company_with_budget
+    agent, task = await _make_running_task(session_factory, company_id)
+
+    async def _submit():
+        async with session_factory() as db:
+            outcome = await execute_tool(
+                db,
+                object(),
+                agent=agent,
+                task=task,
+                name="submit_plan",
+                args={"plan": "## Objective\n- ship the MVP"},
+            )
+            await db.commit()
+            return outcome
+
+    first = await _submit()
+    # Second call mirrors the restart re-run: same task, plan already pending.
+    second = await _submit()
+
+    assert first.park is True
+    assert second.park is True
+    async with session_factory() as db:
+        count = await db.scalar(
+            select(func.count())
+            .select_from(DecisionRequest)
+            .where(
+                DecisionRequest.task_id == task.id,
+                DecisionRequest.kind == DecisionKind.plan_approval,
+                DecisionRequest.status == DecisionStatus.pending,
+            )
+        )
+        # Exactly one pending plan_approval, not two.
+        assert count == 1
+        row = await db.get(Task, task.id)
+        assert row.status is TaskStatus.waiting_approval
+
+
+@requires_db
 async def test_approval_grant_is_one_shot(session_factory, company_with_budget):
     """An approved decision lets the gated action proceed exactly once on resume."""
     company_id = company_with_budget
