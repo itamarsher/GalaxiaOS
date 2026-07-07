@@ -49,6 +49,10 @@ export interface QuestView {
   total: number; // matched tasks seen this cycle
   running: number; // matched tasks in flight right now
   agentIds: string[]; // agents currently working this quest (for graph linkage)
+  // The concrete work behind the (often aspirational) objective title, so the
+  // board shows what is *actually being done*, not just what's promised.
+  activity: string | null; // freshest in-flight task goal, or null when idle
+  activities: string[]; // distinct in-flight task goals (for the expanded view)
 }
 
 const SETTLED = new Set(["done", "failed"]);
@@ -78,6 +82,13 @@ export function buildQuests(objectives: Objective[], tasks: Task[]): QuestView[]
     let total = 0;
     let running = 0;
     const agentIds = new Set<string>();
+    // Concrete in-flight work behind this objective. Tasks arrive newest-first, so
+    // the first running goal we see is the freshest "happening now"; we keep the
+    // full in-flight list (deduped, running before queued) for the expanded view.
+    const activities: string[] = [];
+    const seenGoals = new Set<string>();
+    let activity: string | null = null;
+    let activityRank = 0; // running = 2, other in-flight = 1
     for (const { t, kw } of taskKeys) {
       let overlap = 0;
       for (const w of kw) if (okw.has(w)) overlap++;
@@ -87,6 +98,16 @@ export function buildQuests(objectives: Objective[], tasks: Task[]): QuestView[]
       if (IN_FLIGHT.has(t.status)) {
         if (t.agent_id) agentIds.add(t.agent_id);
         if (t.status === "running") running++;
+        const goal = t.goal?.trim();
+        if (goal && !seenGoals.has(goal)) {
+          seenGoals.add(goal);
+          activities.push(goal);
+        }
+        const rank = t.status === "running" ? 2 : 1;
+        if (rank > activityRank) {
+          activity = goal ?? activity;
+          activityRank = rank;
+        }
       }
     }
     const backendDone = DONE_STATUSES.has((obj.status ?? "").toLowerCase());
@@ -105,6 +126,8 @@ export function buildQuests(objectives: Objective[], tasks: Task[]): QuestView[]
       total,
       running,
       agentIds: [...agentIds],
+      activity,
+      activities,
     };
   });
 
