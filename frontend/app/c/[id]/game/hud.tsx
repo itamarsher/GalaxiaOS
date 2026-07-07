@@ -9,6 +9,7 @@
 // globals.css.
 
 import { useState } from "react";
+import Link from "next/link";
 import {
   fmtUsd,
   statusLabel,
@@ -218,20 +219,43 @@ export function QuestLog({
 // ── Captain's Console: the decision inbox as a swipeable order deck ───────────
 export function CaptainsConsole({
   decisions,
+  chatWaiting = 0,
+  companyId,
   onResolved,
 }: {
   decisions: Decision[];
+  chatWaiting?: number;
+  companyId?: string;
   onResolved: () => void;
 }) {
   const pending = decisions.filter((d) => d.status === "pending" || d.status === "waiting_approval");
-  const alert = pending.length > 0;
+  const alert = pending.length > 0 || chatWaiting > 0;
+  // What the header says is waiting: formal decisions take priority, then chat replies.
+  const note =
+    pending.length > 0
+      ? ` · ${pending.length} awaiting orders`
+      : chatWaiting > 0
+        ? ` · ${chatWaiting} awaiting your reply`
+        : "";
   return (
     <div className={`card${alert ? " console-alert" : ""}`}>
       <div className="step" style={{ display: "flex", alignItems: "center", gap: 8 }}>
         {alert && <span className="dot" style={{ background: "var(--danger)" }} />}
-        <span>Captain&apos;s Console{alert ? ` · ${pending.length} awaiting orders` : ""}</span>
+        <span>Captain&apos;s Console{note}</span>
       </div>
-      <SwipeDeck decisions={decisions} onResolved={onResolved} />
+      {/* Suppress the "all clear" line when a chat reply is owed — the CTA below
+          covers it, so the console never contradicts the "awaiting you" count. */}
+      <SwipeDeck decisions={decisions} onResolved={onResolved} showEmpty={chatWaiting === 0} />
+      {chatWaiting > 0 && companyId && (
+        <Link href={`/c/${companyId}/chat`} className="console-chat-cta">
+          <span aria-hidden>💬</span>
+          <span>
+            {chatWaiting === 1 ? "An agent is" : `${chatWaiting} agents are`} waiting for your
+            reply in Chat
+          </span>
+          <span className="console-chat-arrow" aria-hidden>→</span>
+        </Link>
+      )}
     </div>
   );
 }
