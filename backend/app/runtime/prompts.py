@@ -339,6 +339,7 @@ Current real-world metrics (act on these; do not assume outcomes):
 {language}
 
 Company mission: {mission}
+{objectives}
 Your current task: {goal}
 """
 
@@ -409,6 +410,7 @@ def render_agent_system(
     memory: str,
     metrics: str,
     skills: str = "",
+    objectives: str = "",
     file_store_connected: bool = False,
 ) -> str:
     """Compose an agent's full launch system prompt for one task.
@@ -424,6 +426,7 @@ def render_agent_system(
         directive=agent_directive_block(agent_directive),
         playbook=effective_playbook(playbook),
         mission=mission,
+        objectives=objectives,
         goal=goal,
         memory=memory,
         metrics=metrics,
