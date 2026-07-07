@@ -98,14 +98,13 @@ SPECS: list[ToolSpec] = [
                 "objective": {
                     "type": "integer",
                     "description": (
-                        "The number of the company objective this initiative advances "
-                        "(from the objectives list in your briefing). Optional but "
-                        "strongly preferred — it links the work to the objective so the "
-                        "founder sees real progress."
+                        "REQUIRED: the number of the company objective this initiative "
+                        "advances (from the objectives list in your briefing). This links "
+                        "the work to the objective so the founder sees real progress."
                     ),
                 },
             },
-            "required": ["role", "goal"],
+            "required": ["role", "goal", "objective"],
         },
     ),
     ToolSpec(
@@ -131,12 +130,12 @@ SPECS: list[ToolSpec] = [
                             "objective": {
                                 "type": "integer",
                                 "description": (
-                                    "Number of the company objective this initiative advances "
-                                    "(from your briefing). Optional but strongly preferred."
+                                    "REQUIRED: number of the company objective this initiative "
+                                    "advances (from your briefing)."
                                 ),
                             },
                         },
-                        "required": ["role", "goal"],
+                        "required": ["role", "goal", "objective"],
                     },
                 }
             },
@@ -324,6 +323,32 @@ async def _spawn_child(
     await ctx.enqueue_task(child.id)
 
 
+# Sentinel: a dispatch that must be objective-tagged but resolved to nothing.
+_MISSING_OBJECTIVE = object()
+
+_OBJECTIVE_REQUIRED = (
+    "Every initiative must be tagged with the objective it advances. Set `objective` "
+    "to the number of the relevant objective from your briefing's objectives list, "
+    "then dispatch again."
+)
+
+
+async def _resolve_dispatch_objective(db, task: Task, handle: object) -> object:
+    """The objective a dispatched task should carry: the dispatcher's chosen handle,
+    else the dispatching task's own objective (so sub-delegation stays linked).
+
+    Returns the objective id, or ``None`` when the company has no objectives yet (an
+    untagged task is fine then), or :data:`_MISSING_OBJECTIVE` when objectives DO
+    exist but this dispatch named none — the caller turns that into a retry prompt.
+    """
+    objective_id = await objectives_svc.resolve_objective_id(db, task.company_id, handle)
+    if objective_id is None:
+        objective_id = task.objective_id  # inherit from the dispatching task
+    if objective_id is None and await objectives_svc.has_objectives(db, task.company_id):
+        return _MISSING_OBJECTIVE
+    return objective_id
+
+
 async def _plan_is_approved(db, task_id) -> bool:
     """True once the founder has approved this task's plan (a plan_approval grant)."""
     return (
@@ -352,9 +377,9 @@ async def _dispatch_task(db, ctx, *, agent: Agent, task: Task, args: dict) -> To
             ),
             is_error=True,
         )
-    objective_id = await objectives_svc.resolve_objective_id(
-        db, task.company_id, args.get("objective")
-    )
+    objective_id = await _resolve_dispatch_objective(db, task, args.get("objective"))
+    if objective_id is _MISSING_OBJECTIVE:
+        return ToolOutcome(observation=_OBJECTIVE_REQUIRED, is_error=True)
     await _spawn_child(db, ctx, task, agent, args["role"], args["goal"], objective_id)
     return ToolOutcome(observation=f"dispatched {args['role']}: {args['goal'][:80]}")
 
@@ -377,20 +402,33 @@ async def _dispatch_tasks(db, ctx, *, agent: Agent, task: Task, args: dict) -> T
             observation="dispatch_tasks needs a non-empty 'tasks' list of {role, goal}.",
             is_error=True,
         )
-    dispatched: list[str] = []
-    for entry in entries:
+    # Resolve every entry's objective first so the whole batch is all-or-nothing:
+    # if any initiative can't be tagged, reject without dispatching a partial set.
+    resolved: list[tuple[dict, object]] = []
+    untagged: list[int] = []
+    for i, entry in enumerate(entries):
         if not isinstance(entry, dict) or "role" not in entry or "goal" not in entry:
             continue
-        objective_id = await objectives_svc.resolve_objective_id(
-            db, task.company_id, entry.get("objective")
+        objective_id = await _resolve_dispatch_objective(db, task, entry.get("objective"))
+        if objective_id is _MISSING_OBJECTIVE:
+            untagged.append(i + 1)
+        resolved.append((entry, objective_id))
+    if untagged:
+        return ToolOutcome(
+            observation=(
+                f"{_OBJECTIVE_REQUIRED} Missing on task(s): {untagged} (1-based)."
+            ),
+            is_error=True,
         )
-        await _spawn_child(db, ctx, task, agent, entry["role"], entry["goal"], objective_id)
-        dispatched.append(f"{entry['role']}: {str(entry['goal'])[:60]}")
-    if not dispatched:
+    if not resolved:
         return ToolOutcome(
             observation="No valid {role, goal} entries in 'tasks'; nothing dispatched.",
             is_error=True,
         )
+    dispatched: list[str] = []
+    for entry, objective_id in resolved:
+        await _spawn_child(db, ctx, task, agent, entry["role"], entry["goal"], objective_id)
+        dispatched.append(f"{entry['role']}: {str(entry['goal'])[:60]}")
     body = "\n".join(f"- {d}" for d in dispatched)
     return ToolOutcome(
         observation=f"dispatched {len(dispatched)} sub-tasks in parallel:\n{body}"

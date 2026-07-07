@@ -48,6 +48,19 @@ async def ordered_objectives(
     )
 
 
+async def has_objectives(db: AsyncSession, company_id: uuid.UUID) -> bool:
+    """Whether the company has any objectives at all.
+
+    Lets the dispatch gate stay quiet for a company with none yet (nothing to tag)
+    while still requiring a tag once objectives exist.
+    """
+    return (
+        await db.scalar(
+            select(Objective.id).where(Objective.company_id == company_id).limit(1)
+        )
+    ) is not None
+
+
 async def resolve_objective_id(
     db: AsyncSession, company_id: uuid.UUID, handle: object
 ) -> uuid.UUID | None:
