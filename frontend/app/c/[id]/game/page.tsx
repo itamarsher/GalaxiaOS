@@ -365,11 +365,18 @@ export default function GalaxiaCommandPage() {
   // Agents can also park a task waiting for a plain chat reply (no formal
   // decision) — that still counts as "awaiting you" in the cycle strip, so the
   // console must point the founder to Chat rather than claiming "all clear".
-  // Count only pure chat-waits (a channel whose pending_decision is already in
+  // Consider only pure chat-waits (a channel whose pending_decision is already in
   // the decision deck isn't double-counted here).
-  const chatWaiting = (chatChannels.data ?? [])
-    .filter((c) => c.pending_decision == null)
-    .reduce((n, c) => n + c.waiting_agents.length, 0);
+  const waitingChannels = (chatChannels.data ?? []).filter(
+    (c) => c.pending_decision == null && c.waiting_agents.length > 0,
+  );
+  const chatWaiting = waitingChannels.reduce((n, c) => n + c.waiting_agents.length, 0);
+  // Deep-link straight to the waiting conversation (?channel=…); the chat page's
+  // own default would otherwise open the CEO DM, not where the reply is owed.
+  const chatHref =
+    waitingChannels.length > 0
+      ? `/c/${id}/chat?channel=${waitingChannels[0].id}`
+      : `/c/${id}/chat`;
 
   return (
     <div>
@@ -417,7 +424,7 @@ export default function GalaxiaCommandPage() {
             <CaptainsConsole
               decisions={decisionList}
               chatWaiting={chatWaiting}
-              companyId={id}
+              chatHref={chatHref}
               onResolved={() => decisions.reload()}
             />
           </div>

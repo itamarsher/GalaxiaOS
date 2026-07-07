@@ -220,12 +220,12 @@ export function QuestLog({
 export function CaptainsConsole({
   decisions,
   chatWaiting = 0,
-  companyId,
+  chatHref,
   onResolved,
 }: {
   decisions: Decision[];
   chatWaiting?: number;
-  companyId?: string;
+  chatHref?: string;
   onResolved: () => void;
 }) {
   const pending = decisions.filter((d) => d.status === "pending" || d.status === "waiting_approval");
@@ -246,8 +246,8 @@ export function CaptainsConsole({
       {/* Suppress the "all clear" line when a chat reply is owed — the CTA below
           covers it, so the console never contradicts the "awaiting you" count. */}
       <SwipeDeck decisions={decisions} onResolved={onResolved} showEmpty={chatWaiting === 0} />
-      {chatWaiting > 0 && companyId && (
-        <Link href={`/c/${companyId}/chat`} className="console-chat-cta">
+      {chatWaiting > 0 && chatHref && (
+        <Link href={chatHref} className="console-chat-cta">
           <span aria-hidden>💬</span>
           <span>
             {chatWaiting === 1 ? "An agent is" : `${chatWaiting} agents are`} waiting for your
