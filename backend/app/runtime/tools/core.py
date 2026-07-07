@@ -377,6 +377,27 @@ async def _submit_plan(db, ctx, *, agent: Agent, task: Task, args: dict) -> Tool
                 "initiatives to the functional agents."
             )
         )
+    # Idempotency: a plan may already be awaiting approval — e.g. after a restart
+    # re-runs this still-``running`` task (see app.jobs.recovery). Don't create a
+    # second decision; re-park on the existing one so the founder sees a single
+    # plan to approve. Mirrors the chat flow's "already parked, don't double-post".
+    existing = await db.scalar(
+        select(DecisionRequest).where(
+            DecisionRequest.task_id == task.id,
+            DecisionRequest.kind == DecisionKind.plan_approval,
+            DecisionRequest.status == DecisionStatus.pending,
+        )
+    )
+    if existing is not None:
+        row = await db.get(Task, task.id)
+        if row is not None:
+            row.status = TaskStatus.waiting_approval
+        task.status = TaskStatus.waiting_approval
+        await db.flush()
+        return ToolOutcome(
+            observation="Your plan is already awaiting the founder's approval.",
+            park=True,
+        )
     decision = DecisionRequest(
         company_id=task.company_id,
         agent_id=agent.id,
