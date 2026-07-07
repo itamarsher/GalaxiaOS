@@ -17,11 +17,13 @@ import {
   buildScene,
   moduleAnchor,
   sectorStanding,
+  REACTOR,
   VH,
   VW,
   type ModuleView,
   type SceneModel,
 } from "@/lib/game/scene";
+import { buildQuests } from "@/lib/game/quests";
 import { useStationLoop, type HitLayout } from "@/lib/game/useStationLoop";
 import { makeFxQueue, FX_TTL, type FxQueue } from "@/lib/game/fx";
 import { deriveRound, phaseLabel, type RoundState } from "@/lib/game/round";
@@ -42,6 +44,7 @@ import {
   Legend,
   ModuleSheet,
   ModuleTooltip,
+  QuestLog,
   ReactorGauge,
   RunwayGauge,
   ScorePanel,
@@ -61,9 +64,16 @@ export default function GalaxiaCommandPage() {
   const reputation = usePoll(() => api.reputation(id), 15000, [id]);
   const sites = usePoll(() => api.sites(id), 15000, [id]);
   const cycle = usePoll(() => api.cycleStatus(id), 8000, [id]);
+  const objectives = usePoll(() => api.objectives(id), 15000, [id]);
   const tasks = useLiveTasks(id);
 
   const agents = useMemo(() => org.data?.agents ?? [], [org.data]);
+
+  // Business objectives → live quest board, progress derived from this cycle's tasks.
+  const quests = useMemo(
+    () => buildQuests(objectives.data ?? [], tasks),
+    [objectives.data, tasks],
+  );
 
   const scene: SceneModel = useMemo(
     () =>
@@ -113,6 +123,23 @@ export default function GalaxiaCommandPage() {
   const prevPhase = useRef<string>("idle");
   const prevRootKey = useRef<string | null>(null);
   const [announce, setAnnounce] = useState("");
+
+  // Quest transitions: ids that just appeared / just cleared drive one-shot CSS
+  // flourishes in the QuestLog. They live in state briefly, then self-expire.
+  const [newQuestIds, setNewQuestIds] = useState<Set<string>>(new Set());
+  const [clearedQuestIds, setClearedQuestIds] = useState<Set<string>>(new Set());
+  const questMounted = useRef(false);
+  const prevQuestStatus = useRef<Map<string, string>>(new Map());
+  const expireIds = (setter: typeof setNewQuestIds, ids: string[], ms: number) => {
+    setter((prev) => new Set([...prev, ...ids]));
+    setTimeout(() => {
+      setter((prev) => {
+        const next = new Set(prev);
+        for (const idv of ids) next.delete(idv);
+        return next;
+      });
+    }, ms);
+  };
 
   useEffect(() => {
     const fx = fxRef.current;
@@ -215,6 +242,56 @@ export default function GalaxiaCommandPage() {
     prevPhase.current = round.phase;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tasks, scene, round, id]);
+
+  // ── Quest differ → new/cleared flourishes + canvas celebration FX ────────────
+  useEffect(() => {
+    const fx = fxRef.current;
+    const now = typeof performance !== "undefined" ? performance.now() : 0;
+    const core = { x: REACTOR.x + REACTOR.w / 2, y: REACTOR.y + REACTOR.h / 2 };
+
+    // First run: seed statuses without firing a flood of "new quest" FX.
+    if (!questMounted.current) {
+      for (const q of quests) prevQuestStatus.current.set(q.id, q.status);
+      questMounted.current = true;
+      return;
+    }
+
+    const appeared: string[] = [];
+    const cleared: string[] = [];
+    const seen = new Set<string>();
+    for (const q of quests) {
+      seen.add(q.id);
+      const prev = prevQuestStatus.current.get(q.id);
+      if (prev === undefined) appeared.push(q.id);
+      else if (prev !== "complete" && q.status === "complete") cleared.push(q.id);
+      prevQuestStatus.current.set(q.id, q.status);
+    }
+    for (const k of [...prevQuestStatus.current.keys()]) {
+      if (!seen.has(k)) prevQuestStatus.current.delete(k);
+    }
+
+    if (appeared.length > 0) {
+      if (fx) fx.push("questNew", FX_TTL.questNew, { x: core.x, y: core.y }, now);
+      expireIds(setNewQuestIds, appeared, 1400);
+      const first = quests.find((q) => q.id === appeared[0]);
+      setAnnounce(
+        appeared.length > 1
+          ? `${appeared.length} new quests posted.`
+          : `New quest posted: ${first?.title ?? ""}.`,
+      );
+    }
+    if (cleared.length > 0) {
+      if (fx) {
+        fx.push("questDone", FX_TTL.questDone, { x: core.x, y: core.y }, now);
+        fx.push("scorePop", FX_TTL.scorePop, { x: core.x, y: core.y - 14, value: 25, good: true }, now);
+        fx.push("shake", FX_TTL.shake, { mag: 2 }, now);
+      }
+      expireIds(setClearedQuestIds, cleared, 1800);
+      const first = quests.find((q) => q.id === cleared[0]);
+      setAnnounce(`Quest cleared: ${first?.title ?? ""}.`);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [quests]);
 
   // ── Pointer interaction (module pause/resume) ────────────────────────────────
   const coarse =
@@ -323,6 +400,8 @@ export default function GalaxiaCommandPage() {
           />
           {hover && <ModuleTooltip module={hover.module} left={hover.left} top={hover.top} />}
         </div>
+
+        <QuestLog quests={quests} newIds={newQuestIds} clearedIds={clearedQuestIds} />
 
         <div className="hud-grid">
           <div className="hud-primary">

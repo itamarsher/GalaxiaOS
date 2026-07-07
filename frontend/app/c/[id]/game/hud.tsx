@@ -8,6 +8,7 @@
 // .btnrow, .decision-panel, .pill) plus a small `Galaxia Command` block added to
 // globals.css.
 
+import { useState } from "react";
 import {
   fmtUsd,
   statusLabel,
@@ -16,6 +17,7 @@ import {
   type Runway,
 } from "@/lib/api";
 import { type ModuleView } from "@/lib/game/scene";
+import { type QuestView } from "@/lib/game/quests";
 import { levelFromScore } from "@/lib/game/score";
 import { phaseLabel, type RoundState } from "@/lib/game/round";
 import { SwipeDeck } from "./SwipeDeck";
@@ -64,6 +66,130 @@ export function CycleProgress({ round }: { round: RoundState }) {
           </span>
         )}
       </div>
+    </div>
+  );
+}
+
+// ── Quest board: mission objectives reframed as active quests ─────────────────
+// Sits directly under the station viewport as part of the "visual graph": a live
+// quest log whose bars track how far the fleet has advanced each objective. New
+// quests slide in; cleared quests get a one-shot flourish (driven by the id sets
+// the page hands down when it detects the transition), then settle to a done
+// state. Mobile-first: collapsed to the top few, tap a quest to expand its brief.
+export function QuestLog({
+  quests,
+  newIds,
+  clearedIds,
+}: {
+  quests: QuestView[];
+  newIds: Set<string>;
+  clearedIds: Set<string>;
+}) {
+  const [openId, setOpenId] = useState<string | null>(null);
+  const [showAll, setShowAll] = useState(false);
+  if (quests.length === 0) return null;
+
+  const clearedCount = quests.filter((q) => q.status === "complete").length;
+  const CAP = 4;
+  // Collapse to the top few, but never hide a quest mid-flourish — a just-added or
+  // just-cleared quest stays on screen so its animation is always visible.
+  const visible = showAll
+    ? quests
+    : quests.filter((q, i) => i < CAP || newIds.has(q.id) || clearedIds.has(q.id));
+  const hidden = quests.length - visible.length;
+
+  return (
+    <div className="quest-board">
+      <div className="quest-board-head">
+        <span className="step" style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <span className="quest-crest" aria-hidden>
+            ✦
+          </span>
+          Active quests
+        </span>
+        <span className="muted" style={{ fontSize: 12 }}>
+          {clearedCount}/{quests.length} cleared
+        </span>
+      </div>
+
+      <ul className="quest-list">
+        {visible.map((q) => {
+          const open = openId === q.id;
+          const pct = Math.round(q.progress * 100);
+          const isNew = newIds.has(q.id);
+          const isClearing = clearedIds.has(q.id);
+          const done = q.status === "complete";
+          return (
+            <li
+              key={q.id}
+              className={
+                "quest" +
+                (done ? " done" : "") +
+                (isNew ? " enter" : "") +
+                (isClearing ? " clearing" : "")
+              }
+            >
+              <button
+                type="button"
+                className="quest-main"
+                aria-expanded={open}
+                onClick={() => setOpenId(open ? null : q.id)}
+              >
+                <span className={`quest-pips p${q.priority}`} aria-label={`priority ${q.priority} of 3`}>
+                  <i />
+                  <i />
+                  <i />
+                </span>
+                <span className="quest-body">
+                  <span className="quest-title-row">
+                    <span className="quest-title">{q.title}</span>
+                    <span className="quest-badge">
+                      {done ? (
+                        <span className="quest-check" aria-label="quest cleared">
+                          ✓
+                        </span>
+                      ) : q.running > 0 ? (
+                        <span className="quest-live" aria-label={`${q.running} on it`}>
+                          ● {q.running}
+                        </span>
+                      ) : (
+                        <span className="quest-pct">{pct}%</span>
+                      )}
+                    </span>
+                  </span>
+                  <span className="quest-bar" aria-hidden>
+                    <span
+                      className={"quest-fill" + (q.running > 0 && !done ? " active" : "")}
+                      style={{ width: `${Math.max(done ? 100 : 3, pct)}%` }}
+                    />
+                  </span>
+                </span>
+              </button>
+              {open && (
+                <div className="quest-detail">
+                  {q.rationale && <p className="muted">{q.rationale}</p>}
+                  <div className="quest-meta">
+                    <span className="cycle-chip done">{q.done} done</span>
+                    {q.running > 0 && <span className="cycle-chip run">● {q.running} running</span>}
+                    <span className="cycle-chip">{q.total} tasks this cycle</span>
+                    {q.agentIds.length > 0 && (
+                      <span className="cycle-chip">
+                        {q.agentIds.length} crew on it
+                      </span>
+                    )}
+                  </div>
+                </div>
+              )}
+            </li>
+          );
+        })}
+      </ul>
+
+      {(hidden > 0 || showAll) && quests.length > CAP && (
+        <button className="quest-more" onClick={() => setShowAll((s) => !s)}>
+          {showAll ? "Show fewer" : `Show all ${quests.length} quests`}
+        </button>
+      )}
     </div>
   );
 }
@@ -242,6 +368,24 @@ export function CrewRoster({
                   {m.label} · {m.role}
                   {m.budgetCents != null ? ` · ${fmtUsd(m.budgetCents)}/mo` : ""}
                 </div>
+                {m.currentGoal ? (
+                  <div className="crew-doing" title={m.currentGoal}>
+                    <span className="crew-doing-dot" aria-hidden />
+                    <span className="crew-doing-goal">{m.currentGoal}</span>
+                  </div>
+                ) : m.taskTotal > 0 ? (
+                  <div className="muted crew-progress-line">
+                    {m.taskDone}/{m.taskTotal} tasks this cycle
+                  </div>
+                ) : null}
+                {m.taskTotal > 0 && (
+                  <span className="crew-bar" aria-hidden>
+                    <span
+                      className={"crew-fill" + (m.working ? " active" : "")}
+                      style={{ width: `${Math.max(3, Math.round(m.taskProgress * 100))}%` }}
+                    />
+                  </span>
+                )}
               </div>
               <div style={{ display: "flex", alignItems: "center", gap: 8, flex: "0 0 auto" }}>
                 <span className={`status ${m.status}`}>{statusLabel(m.status)}</span>
@@ -299,6 +443,16 @@ export function ModuleTooltip({ module, left, top }: { module: ModuleView; left:
       <div style={{ marginTop: 4 }}>
         <span className={`status ${module.status}`}>{statusLabel(module.status)}</span>
       </div>
+      {module.currentGoal && (
+        <div className="mod-goal muted" style={{ marginTop: 4 }}>
+          ▸ {module.currentGoal}
+        </div>
+      )}
+      {module.taskTotal > 0 && (
+        <div className="muted" style={{ fontSize: 11, marginTop: 3 }}>
+          {module.taskDone}/{module.taskTotal} tasks this cycle
+        </div>
+      )}
       {module.rankStars > 0 && (
         <div className="rank-stars" style={{ marginTop: 4 }}>
           {"★".repeat(module.rankStars)}
@@ -335,6 +489,33 @@ export function ModuleSheet({
           <div className="rank-stars" style={{ marginTop: 6 }}>
             {"★".repeat(module.rankStars)}
             <span className="rank-dim">{"★".repeat(5 - module.rankStars)}</span>
+          </div>
+        )}
+        {(module.currentGoal || module.taskTotal > 0) && (
+          <div className="mod-mission">
+            <div className="step" style={{ fontSize: 11 }}>Current mission</div>
+            {module.currentGoal ? (
+              <p style={{ margin: "4px 0 0", fontSize: 13 }}>{module.currentGoal}</p>
+            ) : (
+              <p className="muted" style={{ margin: "4px 0 0", fontSize: 13 }}>
+                No active task — standing by.
+              </p>
+            )}
+            {module.taskTotal > 0 && (
+              <>
+                <div className="bar" style={{ marginTop: 8, height: 6 }}>
+                  <span
+                    style={{
+                      width: `${Math.max(3, Math.round(module.taskProgress * 100))}%`,
+                      background: "linear-gradient(90deg, var(--accent), var(--good))",
+                    }}
+                  />
+                </div>
+                <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>
+                  {module.taskDone} of {module.taskTotal} tasks done this cycle
+                </div>
+              </>
+            )}
           </div>
         )}
         <div className="btnrow" style={{ marginTop: 12 }}>

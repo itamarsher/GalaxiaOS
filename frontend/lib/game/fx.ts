@@ -14,6 +14,8 @@ export type FxKind =
   | "levelUp" // sector standing rose a band: { label }
   | "rankUp" // a droid's rank increased: { x, y }
   | "cycleStart" // a new round began: { x, y } (CEO module)
+  | "questNew" // a new quest was posted: { x, y }
+  | "questDone" // a quest was cleared: { x, y }
   | "shake"; // screen-shake pulse: { mag }
 
 export interface FxEvent {
@@ -54,5 +56,7 @@ export const FX_TTL: Record<FxKind, number> = {
   levelUp: 2200,
   rankUp: 900,
   cycleStart: 1200,
+  questNew: 1100,
+  questDone: 1600,
   shake: 500,
 };

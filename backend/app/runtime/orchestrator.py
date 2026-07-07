@@ -27,12 +27,16 @@ from app.models.enums import (
     RunTrigger,
     TaskStatus,
 )
+from app.observability import get_logger
 from app.runtime import breakers, prompts
 from app.runtime.backends import get_backend
 from app.runtime.context import RuntimeContext
 from app.runtime.tools.base import clip
 from app.services import budget as budget_svc
+from app.services import objectives as objectives_svc
 from app.services import tasks as task_svc
+
+_log = get_logger("abos.orchestrator")
 
 #: Task statuses that mean the run is still doing (or waiting to do) work.
 #: ``auditing`` counts as active: a delegated result is parked there pending the
@@ -412,6 +416,17 @@ async def _maybe_continue_cycle(
         else:
             # No retrospective to run (disabled, not a cycle, already done, no work,
             # or no CEO) — close the run and continue to the next cycle as usual.
+            # As the cycle closes, authoritatively mark any objective the fleet fully
+            # delivered this run as completed, so the founder's quest board clears it.
+            closed = await objectives_svc.close_delivered_objectives(
+                db, company_id=company_id, root_run_id=root_run_id
+            )
+            if closed:
+                _log.info(
+                    "Cycle closed %d objective(s) as completed (company=%s)",
+                    len(closed),
+                    company_id,
+                )
             run.status = RunStatus.done
             await db.flush()
             if await _can_continue(db, company_id):

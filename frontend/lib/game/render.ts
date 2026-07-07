@@ -285,6 +285,27 @@ function drawModule(ctx: CanvasRenderingContext2D, m: ModuleView, p: Palette, t:
     ctx.fillStyle = mix(p.danger, p.warn, flash);
     ctx.fillRect(px(m.x + m.w - 5), px(m.y + 1), 3, 3);
   }
+
+  // Per-station progress rail (just under the hull): how far this crew has got
+  // through its work this cycle. A dim track with a green fill; while a task is
+  // actively running a brighter head pulses at the fill's leading edge so the bar
+  // reads as live even mid-task.
+  if (m.taskTotal > 0) {
+    const railY = m.y + m.h + 1;
+    const railW = m.w;
+    ctx.fillStyle = mix(p.border, p.bg, 0.35);
+    ctx.fillRect(px(m.x), px(railY), railW, 1);
+    const fillW = Math.round(railW * Math.max(0, Math.min(1, m.taskProgress)));
+    if (fillW > 0) {
+      ctx.fillStyle = m.working ? mix(p.good, p.accentStrong, 0.25) : p.good;
+      ctx.fillRect(px(m.x), px(railY), fillW, 1);
+    }
+    if (m.working) {
+      const head = 0.5 + 0.5 * Math.sin(t * 0.012);
+      ctx.fillStyle = mix(p.accent, p.accentStrong, head);
+      ctx.fillRect(px(m.x + Math.min(railW - 1, fillW)), px(railY), 1, 1);
+    }
+  }
 }
 
 // ── Droid sprite ─────────────────────────────────────────────────────────────
@@ -538,6 +559,51 @@ function drawFx(
           ctx.fillRect(cx - 1, by + 6, 1, 1);
           ctx.fillRect(cx + 1, by + 6, 1, 1);
         }
+        break;
+      }
+      case "questNew": {
+        // A quest is posted: a single accent ring pings outward from the core and
+        // a bright marker rises — "new orders on the board".
+        const r = 2 + k * 20;
+        ctx.strokeStyle = mix(p.bg, p.accentStrong, 1 - k);
+        ctx.beginPath();
+        ctx.arc(num("x"), num("y"), r, 0, Math.PI * 2);
+        ctx.stroke();
+        const rise = reducedMotion ? 0 : k * 10;
+        ctx.fillStyle = mix(p.bg, p.accentStrong, 1 - k);
+        ctx.fillRect(px(num("x")), px(num("y") - 6 - rise), 1, 3);
+        break;
+      }
+      case "questDone": {
+        // A quest is cleared: twin golden rings bloom, a checkmark pops, and
+        // sparks fan upward — the celebratory beat the founder should feel.
+        const good = p.good;
+        for (let ring = 0; ring < 2; ring++) {
+          const rk = Math.max(0, k - ring * 0.12);
+          const r = 2 + rk * 26;
+          ctx.strokeStyle = mix(p.bg, ring === 0 ? good : p.warn, (1 - rk) * 0.9);
+          ctx.beginPath();
+          ctx.arc(num("x"), num("y"), r, 0, Math.PI * 2);
+          ctx.stroke();
+        }
+        // Rising spark motes around the burst.
+        const motes = reducedMotion ? 0 : 6;
+        for (let i = 0; i < motes; i++) {
+          const ang = (i / 6) * Math.PI * 2;
+          const rad = 4 + k * 14;
+          ctx.fillStyle = mix(p.bg, i % 2 ? good : p.warn, 1 - k);
+          ctx.fillRect(px(num("x") + Math.cos(ang) * rad), px(num("y") + Math.sin(ang) * rad - k * 6), 1, 1);
+        }
+        // Checkmark pops in the first half, then fades.
+        const ca = k < 0.5 ? 1 : Math.max(0, 1 - (k - 0.5) * 2);
+        ctx.fillStyle = mix(p.bg, good, ca);
+        const cx = px(num("x"));
+        const cy = px(num("y"));
+        ctx.fillRect(cx - 2, cy, 1, 1);
+        ctx.fillRect(cx - 1, cy + 1, 1, 1);
+        ctx.fillRect(cx, cy, 1, 1);
+        ctx.fillRect(cx + 1, cy - 1, 1, 1);
+        ctx.fillRect(cx + 2, cy - 2, 1, 1);
         break;
       }
       case "shake": {
