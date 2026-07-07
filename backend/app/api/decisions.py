@@ -17,29 +17,8 @@ from app.services import budget as budget_svc
 from app.services import chat as chat_svc
 from app.services import external_messages as ext
 
-# Objective↔task keyword linkage lives with the objective-completion sweep so the
-# inbox and the quest board agree on what "relates to this objective" means.
-# Re-exported here under its historical name for existing callers and tests.
-from app.services.objectives import keywords as _keywords
-
 # Listing is company-scoped; resolve actions are by decision id (re-checked against membership).
 router = APIRouter(tags=["decisions"])
-
-
-def _best_objective(text_words: set[str], objectives: list[Objective]) -> str | None:
-    """Best-effort link a decision's context to an objective by keyword overlap.
-
-    Tasks carry no explicit objective foreign key, so we pick the objective whose
-    title/rationale shares the most distinctive words with the triggering ask.
-    Requires at least two overlapping words so a weak coincidence isn't surfaced
-    as the "related objective".
-    """
-    best: tuple[int, str] | None = None
-    for obj in objectives:
-        overlap = len(text_words & _keywords(obj.title, obj.rationale))
-        if overlap >= 2 and (best is None or overlap > best[0]):
-            best = (overlap, obj.title)
-    return best[1] if best else None
 
 
 async def _to_out(db, decisions: list[DecisionRequest]) -> list[DecisionOut]:
@@ -70,14 +49,17 @@ async def _to_out(db, decisions: list[DecisionRequest]) -> list[DecisionOut]:
             for t in (await db.scalars(select(Task).where(Task.id.in_(parent_ids)))).all()
         }
 
-    # Objectives per company, for best-effort objective linkage.
-    company_ids = {d.company_id for d in decisions}
-    objectives: dict = {}
-    if company_ids:
-        for o in (
-            await db.scalars(select(Objective).where(Objective.company_id.in_(company_ids)))
-        ).all():
-            objectives.setdefault(o.company_id, []).append(o)
+    # Objective linkage is explicit: a task carries the objective_id the CEO tagged
+    # it with, so we just look the title up by id (no keyword guessing).
+    objective_ids = {t.objective_id for t in tasks.values() if t.objective_id}
+    objective_titles: dict = {}
+    if objective_ids:
+        objective_titles = {
+            o.id: o.title
+            for o in (
+                await db.scalars(select(Objective).where(Objective.id.in_(objective_ids)))
+            ).all()
+        }
 
     out = []
     for d in decisions:
@@ -93,10 +75,7 @@ async def _to_out(db, decisions: list[DecisionRequest]) -> list[DecisionOut]:
             # The initiative is the parent task's goal (the higher-level work the
             # CEO dispatched); a root task is its own initiative.
             item.initiative = parent.goal if parent is not None else task.goal
-            item.objective_title = _best_objective(
-                _keywords(task.goal, parent.goal if parent else None, d.summary),
-                objectives.get(d.company_id, []),
-            )
+            item.objective_title = objective_titles.get(task.objective_id)
         out.append(item)
     return out
 

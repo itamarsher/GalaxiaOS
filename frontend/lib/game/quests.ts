@@ -1,40 +1,17 @@
 // Galaxia Command — business objectives → active quests.
 //
-// A "quest" is one mission objective reframed as a game goal. Objectives carry no
-// explicit task foreign key (see backend app/api/decisions.py), so — exactly like
-// the founder decision inbox does server-side — we link each objective to the
-// live tasks whose goals share the most distinctive words with it, and read a
-// quest's progress off those matched tasks. This is framework-free (no React) and
-// deterministic (no Date/Math.random), so the same inputs always yield the same
-// board and the page differ can trust id/status transitions to fire FX.
+// A "quest" is one mission objective reframed as a game goal. Each task carries an
+// explicit `objective_id` (the CEO tags every dispatched initiative and sub-tasks
+// inherit it), so a quest's progress is a direct roll-up of the tasks tagged to
+// its objective — no guessing. This is framework-free (no React) and deterministic
+// (no Date/Math.random), so the same inputs always yield the same board and the
+// page differ can trust id/status transitions to fire FX.
 
 import type { Objective, Task } from "@/lib/api";
 
-// Objective statuses the backend may stamp once an objective is fulfilled. We
-// treat any of these as "cleared" even if no matched task remains on screen.
+// Objective statuses the backend stamps once an objective is fulfilled. We treat
+// any of these as "cleared" even if no tagged task remains on screen.
 const DONE_STATUSES = new Set(["completed", "complete", "done", "achieved"]);
-
-// Words too generic to signal which objective a task belongs to — mirrors the
-// backend stop-list so the client links quests the same way the server links
-// decisions to objectives.
-const STOPWORDS = new Set(
-  `the and for with that this from your you our are will into them they then than
-   have has had who what when where which while about over under above below
-   company business mission objective objectives plan agent agents task work
-   initiative initiatives founder approve approval budget spend decision goal
-   launch build make create run running first`.split(/\s+/),
-);
-
-function keywords(...texts: (string | null | undefined)[]): Set<string> {
-  const words = new Set<string>();
-  for (const text of texts) {
-    for (const raw of (text ?? "").toLowerCase().replace(/\//g, " ").split(/\s+/)) {
-      const token = raw.replace(/[^a-z0-9]/g, "");
-      if (token.length >= 4 && !STOPWORDS.has(token)) words.add(token);
-    }
-  }
-  return words;
-}
 
 export type QuestStatus = "active" | "complete";
 
@@ -73,11 +50,16 @@ function pips(priority: number, count: number): number {
  * float above idle ones and cleared quests sink to the bottom.
  */
 export function buildQuests(objectives: Objective[], tasks: Task[]): QuestView[] {
-  // Pre-key every task's goal once.
-  const taskKeys = tasks.map((t) => ({ t, kw: keywords(t.goal) }));
+  // Group tasks by the objective they were tagged with (newest-first order kept).
+  const tasksByObjective = new Map<string, Task[]>();
+  for (const t of tasks) {
+    if (!t.objective_id) continue;
+    const arr = tasksByObjective.get(t.objective_id);
+    if (arr) arr.push(t);
+    else tasksByObjective.set(t.objective_id, [t]);
+  }
 
   const quests: QuestView[] = objectives.map((obj, i) => {
-    const okw = keywords(obj.title, obj.rationale);
     let done = 0;
     let total = 0;
     let running = 0;
@@ -89,10 +71,7 @@ export function buildQuests(objectives: Objective[], tasks: Task[]): QuestView[]
     const seenGoals = new Set<string>();
     let activity: string | null = null;
     let activityRank = 0; // running = 2, other in-flight = 1
-    for (const { t, kw } of taskKeys) {
-      let overlap = 0;
-      for (const w of kw) if (okw.has(w)) overlap++;
-      if (overlap < 2) continue; // weak coincidence — not this quest's work
+    for (const t of tasksByObjective.get(obj.id) ?? []) {
       if (SETTLED.has(t.status) || IN_FLIGHT.has(t.status)) total++;
       if (t.status === "done") done++;
       if (IN_FLIGHT.has(t.status)) {
@@ -111,8 +90,8 @@ export function buildQuests(objectives: Objective[], tasks: Task[]): QuestView[]
       }
     }
     const backendDone = DONE_STATUSES.has((obj.status ?? "").toLowerCase());
-    // A quest is cleared when the backend says so, or when every task we linked
-    // to it this cycle has landed done (and at least one did).
+    // A quest is cleared when the backend says so, or when every task tagged to it
+    // this cycle has landed done (and at least one did).
     const complete = backendDone || (total > 0 && done === total);
     const progress = backendDone ? 1 : total > 0 ? done / total : 0;
     return {

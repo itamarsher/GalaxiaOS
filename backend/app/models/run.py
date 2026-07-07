@@ -47,6 +47,15 @@ class Task(Base, PKMixin, TenantMixin, TimestampMixin):
     parent_task_id: Mapped[uuid.UUID | None] = mapped_column(
         PGUUID(as_uuid=True), ForeignKey("tasks.id", ondelete="SET NULL"), nullable=True
     )
+    # The objective this work serves, tagged by the CEO at dispatch and inherited
+    # by sub-tasks. Drives objective completion and the founder's quest board — an
+    # explicit link, so nothing has to guess which objective a task belongs to.
+    objective_id: Mapped[uuid.UUID | None] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("objectives.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     depth: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     goal: Mapped[str] = mapped_column(Text, nullable=False)
     input: Mapped[dict | None] = mapped_column(JSONB, nullable=True)

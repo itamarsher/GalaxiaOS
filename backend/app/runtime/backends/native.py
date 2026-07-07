@@ -48,6 +48,7 @@ from app.services import external_messages as ext
 from app.services import governance as gov
 from app.services import integrations as integrations_svc
 from app.services import mcp as mcp_svc
+from app.services import objectives as objectives_svc
 from app.services import tasks as task_svc
 from app.services.budget import BudgetExceeded
 
@@ -146,6 +147,11 @@ class NativeBackend:
                 select(Mission).where(Mission.company_id == task.company_id).limit(1)
             )
             mission_text = mission.generated_summary or mission.raw_text if mission else ""
+            # The company's objectives, numbered, so the agent can tag a dispatched
+            # initiative with the objective it advances (dispatch_task `objective`).
+            objectives_block = objectives_svc.objectives_prompt_block(
+                await objectives_svc.ordered_objectives(db, task.company_id)
+            )
             # The company's global operating playbook (best practices + emerging
             # directives) is injected into every agent's launch prompt, so editing it
             # updates the whole fleet on their next run.
@@ -199,6 +205,7 @@ class NativeBackend:
             memory=memory_summary,
             metrics=metrics_summary,
             skills=skills_lib.index_for_role(agent.role.value),
+            objectives=objectives_block,
             file_store_connected=file_store_connected,
         )
         messages = self._resume_or_seed(task)

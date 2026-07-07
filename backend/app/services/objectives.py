@@ -1,16 +1,16 @@
-"""Objective progress: link objectives to delivered work, close the fulfilled ones.
+"""Objective progress: close the objectives the fleet actually delivered.
 
-Objectives (the mission's OKRs) carry no explicit task foreign key, so — like the
-founder decision inbox does when it labels a decision with its related objective —
-we link an objective to the tasks whose goals share the most distinctive words
-with it. :func:`close_delivered_objectives` runs when a business cycle's run winds
-down: any active objective whose matched work this cycle all succeeded is marked
-``completed``, authoritatively and durably. That status is what the dashboard's
-quest board reads to fire its "quest cleared" celebration.
+Every task carries an explicit ``objective_id`` — the CEO tags each dispatched
+initiative with the objective it serves and sub-tasks inherit it (see
+``app.runtime.tools.core``). So completion is a direct roll-up, not a guess:
+:func:`close_delivered_objectives` runs when a business cycle's run winds down and
+marks ``completed`` any active objective whose tagged work this cycle all
+succeeded. That status is what the dashboard's quest board reads to fire its
+"quest cleared" celebration.
 
-The tokenizer here is the single source of truth for objective↔task keyword
-linkage; ``app.api.decisions`` imports it so the inbox and the quest board agree
-on what "related to this objective" means.
+This module also owns the small helpers the CEO needs to reference objectives by a
+stable 1-based handle when dispatching: :func:`ordered_objectives` (the canonical
+priority order) and :func:`resolve_objective_id` (handle → id).
 """
 
 from __future__ import annotations
@@ -27,56 +27,80 @@ from app.models.enums import TaskStatus
 OBJECTIVE_ACTIVE = "active"
 OBJECTIVE_COMPLETED = "completed"
 
-# Minimum distinctive-word overlap for a task to count toward an objective. Two,
-# so a single coincidental word never links unrelated work (mirrors the decision
-# inbox's threshold).
-_MIN_OVERLAP = 2
 
-# Words too generic to signal which objective a task belongs to.
-STOPWORDS = frozenset(
+async def ordered_objectives(
+    db: AsyncSession, company_id: uuid.UUID
+) -> list[Objective]:
+    """The company's objectives in the canonical order (priority asc, then id).
+
+    The CEO references objectives by their 1-based position in this list, so both
+    the prompt that lists them and :func:`resolve_objective_id` must use the same
+    ordering — hence one place that defines it.
     """
-    the and for with that this from your you our are will into them they then than
-    have has had who what when where which while about over under above below
-    company business mission objective objectives plan agent agents task work
-    initiative initiatives founder approve approval budget spend decision goal
-    """.split()
-)
+    return list(
+        (
+            await db.scalars(
+                select(Objective)
+                .where(Objective.company_id == company_id)
+                .order_by(Objective.priority, Objective.id)
+            )
+        ).all()
+    )
 
 
-def keywords(*texts: str | None) -> set[str]:
-    """Distinctive lowercase word tokens (≥4 chars, non-stopword) across ``texts``."""
-    words: set[str] = set()
-    for text in texts:
-        for raw in (text or "").lower().replace("/", " ").split():
-            token = "".join(ch for ch in raw if ch.isalnum())
-            if len(token) >= 4 and token not in STOPWORDS:
-                words.add(token)
-    return words
+async def resolve_objective_id(
+    db: AsyncSession, company_id: uuid.UUID, handle: object
+) -> uuid.UUID | None:
+    """Map a CEO-supplied 1-based objective handle to an objective id, or None.
+
+    Accepts an int or a numeric string (what an LLM tends to emit). Out-of-range
+    or non-numeric handles resolve to None — the task simply goes untagged rather
+    than erroring, so a stray value never breaks a dispatch.
+    """
+    if handle is None:
+        return None
+    try:
+        idx = int(handle)
+    except (TypeError, ValueError):
+        return None
+    if idx < 1:
+        return None
+    objectives = await ordered_objectives(db, company_id)
+    if idx > len(objectives):
+        return None
+    return objectives[idx - 1].id
+
+
+def objectives_prompt_block(objectives: list[Objective]) -> str:
+    """A numbered objectives list for the agent prompt, or "" when there are none.
+
+    The number is the handle the CEO passes as ``objective`` to ``dispatch_task``,
+    so a dispatched initiative links to the objective it advances.
+    """
+    if not objectives:
+        return ""
+    lines = [f"  {i + 1}. {o.title}" for i, o in enumerate(objectives)]
+    return (
+        "Company objectives (when you dispatch an initiative, set `objective` to the "
+        "number of the objective it advances so progress is tracked):\n"
+        + "\n".join(lines)
+    )
 
 
 def delivered_objective_ids(
-    objectives: list[Objective],
-    done_goals: list[str],
-    failed_goals: list[str],
+    objective_ids: list[uuid.UUID],
+    done_objective_ids: list[uuid.UUID | None],
+    failed_objective_ids: list[uuid.UUID | None],
 ) -> list[uuid.UUID]:
     """Pure core: which active objectives were fully delivered this cycle.
 
-    An objective is delivered when at least one completed task links to it and no
-    *failed* task does — i.e. the work the fleet did toward it this cycle all
+    An objective is delivered when at least one completed task is tagged with it
+    and no *failed* task is — i.e. the work the fleet did toward it this cycle all
     landed. Kept database-free so the rule is unit-testable in isolation.
     """
-    done_kw = [keywords(g) for g in done_goals]
-    failed_kw = [keywords(g) for g in failed_goals]
-    delivered: list[uuid.UUID] = []
-    for obj in objectives:
-        okw = keywords(obj.title, obj.rationale)
-        if not okw:
-            continue
-        done_hits = sum(1 for kw in done_kw if len(kw & okw) >= _MIN_OVERLAP)
-        failed_hits = sum(1 for kw in failed_kw if len(kw & okw) >= _MIN_OVERLAP)
-        if done_hits >= 1 and failed_hits == 0:
-            delivered.append(obj.id)
-    return delivered
+    done = {oid for oid in done_objective_ids if oid is not None}
+    failed = {oid for oid in failed_objective_ids if oid is not None}
+    return [oid for oid in objective_ids if oid in done and oid not in failed]
 
 
 async def close_delivered_objectives(
@@ -85,39 +109,46 @@ async def close_delivered_objectives(
     """Mark every active objective fully delivered by this run as ``completed``.
 
     Called at cycle wind-down. Returns the ids of the objectives just closed (for
-    logging/announcement); flushes but leaves the commit to the caller so it joins
-    the same transaction that closes the run.
+    logging); flushes but leaves the commit to the caller so it joins the same
+    transaction that closes the run.
     """
-    objectives = (
+    active = (
         await db.scalars(
-            select(Objective).where(
+            select(Objective.id).where(
                 Objective.company_id == company_id,
                 Objective.status == OBJECTIVE_ACTIVE,
             )
         )
     ).all()
-    if not objectives:
+    if not active:
         return []
 
     settled = (
-        await db.scalars(
-            select(Task).where(
+        await db.execute(
+            select(Task.objective_id, Task.status).where(
                 Task.root_run_id == root_run_id,
+                Task.objective_id.is_not(None),
                 Task.status.in_([TaskStatus.done, TaskStatus.failed]),
             )
         )
     ).all()
-    done_goals = [t.goal for t in settled if t.status == TaskStatus.done]
-    failed_goals = [t.goal for t in settled if t.status == TaskStatus.failed]
-    if not done_goals:
+    done_ids = [oid for oid, status in settled if status == TaskStatus.done]
+    failed_ids = [oid for oid, status in settled if status == TaskStatus.failed]
+    if not done_ids:
         return []
 
-    delivered = set(delivered_objective_ids(list(objectives), done_goals, failed_goals))
+    delivered = set(delivered_objective_ids(list(active), done_ids, failed_ids))
+    if not delivered:
+        return []
+    objectives = (
+        await db.scalars(
+            select(Objective).where(Objective.id.in_(delivered))
+        )
+    ).all()
     closed: list[uuid.UUID] = []
     for obj in objectives:
-        if obj.id in delivered:
-            obj.status = OBJECTIVE_COMPLETED
-            closed.append(obj.id)
+        obj.status = OBJECTIVE_COMPLETED
+        closed.append(obj.id)
     if closed:
         await db.flush()
     return closed
