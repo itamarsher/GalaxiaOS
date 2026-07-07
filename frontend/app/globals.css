@@ -572,6 +572,11 @@ a.actrow:hover .goal { color: var(--accent-strong); }
 }
 .hud-gauges { display: flex; flex-direction: column; gap: 16px; }
 .hud-secondary { display: flex; flex-direction: column; gap: 16px; }
+/* Grid items default to min-width:auto, so a long unbreakable crew goal/role
+   line would set a huge min-content width and blow the single 1fr track (and
+   every card in it) wider than the viewport. Let the items shrink so that text
+   ellipsizes instead. */
+.hud-grid, .hud-grid > * { min-width: 0; }
 
 /* A gauge is a compact card variant (reuses .bar, .kv, .step, .status). */
 .gauge {
@@ -859,7 +864,7 @@ a.actrow:hover .goal { color: var(--accent-strong); }
 
 /* ── Crew "what am I doing" line (roster) + module mission detail ───────────── */
 .crew-doing {
-  display: flex; align-items: center; gap: 6px; margin-top: 4px;
+  display: flex; align-items: center; gap: 6px; margin-top: 4px; min-width: 0;
   font-size: 12px; color: color-mix(in srgb, var(--accent-strong) 88%, var(--text));
 }
 .crew-doing-dot {
