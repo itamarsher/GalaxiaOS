@@ -17,9 +17,14 @@ const V_MIN = 0.5; // px/ms flick velocity to commit regardless of distance
 export function SwipeDeck({
   decisions,
   onResolved,
+  showEmpty = true,
 }: {
   decisions: Decision[];
   onResolved: () => void;
+  // When false, render nothing instead of the "all clear" line — the caller is
+  // showing another kind of pending item (e.g. a chat reply) and shouldn't be
+  // contradicted by "no orders pending".
+  showEmpty?: boolean;
 }) {
   // Locally hide optimistically-resolved cards until the parent poll catches up.
   const [removed, setRemoved] = useState<Set<string>>(new Set());
@@ -52,6 +57,7 @@ export function SwipeDeck({
   };
 
   if (pending.length === 0) {
+    if (!showEmpty) return null;
     return <p className="muted" style={{ marginTop: 10 }}>All clear, Captain. No orders pending.</p>;
   }
 
