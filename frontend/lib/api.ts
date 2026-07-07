@@ -81,7 +81,7 @@ export interface BudgetView {
   by_category: Record<string, number>;
   by_agent: Record<string, number>;
 }
-export interface Task { id: string; agent_id: string; root_run_id: string | null; goal: string; status: string; depth: number; cost_cents: number; output: Record<string, unknown> | null }
+export interface Task { id: string; agent_id: string; objective_id: string | null; root_run_id: string | null; goal: string; status: string; depth: number; cost_cents: number; output: Record<string, unknown> | null }
 // The game's "round" trigger + status (backend app/services/runs.py).
 export interface CycleStart { started: boolean; task_id: string | null; reason: string; active: boolean }
 export interface CycleStatus { active: boolean; can_start: boolean; reason: string; active_task_count: number }

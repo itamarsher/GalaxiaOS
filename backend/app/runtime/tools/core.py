@@ -6,6 +6,8 @@ area-specific tools (sales/marketing/ops/finance/legal) live in sibling modules.
 
 from __future__ import annotations
 
+import uuid
+
 from sqlalchemy import select
 
 from app.config import settings
@@ -33,6 +35,7 @@ from app.runtime.tools.base import (
 )
 from app.services import chat
 from app.services import metrics as metrics_svc
+from app.services import objectives as objectives_svc
 
 SPECS: list[ToolSpec] = [
     ToolSpec(
@@ -92,6 +95,15 @@ SPECS: list[ToolSpec] = [
                     "enum": ["growth", "research", "product", "finance", "governance", "auditor", "data"],
                 },
                 "goal": {"type": "string", "description": "What that agent should accomplish."},
+                "objective": {
+                    "type": "integer",
+                    "description": (
+                        "The number of the company objective this initiative advances "
+                        "(from the objectives list in your briefing). Optional but "
+                        "strongly preferred — it links the work to the objective so the "
+                        "founder sees real progress."
+                    ),
+                },
             },
             "required": ["role", "goal"],
         },
@@ -116,6 +128,13 @@ SPECS: list[ToolSpec] = [
                                 "enum": ["growth", "research", "product", "finance", "governance", "auditor", "data"],
                             },
                             "goal": {"type": "string", "description": "What that agent should accomplish."},
+                            "objective": {
+                                "type": "integer",
+                                "description": (
+                                    "Number of the company objective this initiative advances "
+                                    "(from your briefing). Optional but strongly preferred."
+                                ),
+                            },
                         },
                         "required": ["role", "goal"],
                     },
@@ -267,7 +286,10 @@ SPECS: list[ToolSpec] = [
 ]
 
 
-async def _spawn_child(db, ctx, parent: Task, agent: Agent, role: str, goal: str) -> None:
+async def _spawn_child(
+    db, ctx, parent: Task, agent: Agent, role: str, goal: str,
+    objective_id: uuid.UUID | None = None,
+) -> None:
     # Prefer an active agent of the role: paused agents are parked (their work is
     # blocked anyway), and after the CEO hires extra capacity there may be more
     # than one — dispatch to the earliest-created active one for determinism.
@@ -289,6 +311,9 @@ async def _spawn_child(db, ctx, parent: Task, agent: Agent, role: str, goal: str
         root_run_id=parent.root_run_id,
         agent_id=child_agent.id,
         parent_task_id=parent.id,
+        # The dispatcher's chosen objective, else inherit the parent's — so an
+        # initiative's whole sub-tree stays linked to the objective it serves.
+        objective_id=objective_id if objective_id is not None else parent.objective_id,
         depth=parent.depth + 1,
         goal=goal,
         status=TaskStatus.queued,
@@ -327,7 +352,10 @@ async def _dispatch_task(db, ctx, *, agent: Agent, task: Task, args: dict) -> To
             ),
             is_error=True,
         )
-    await _spawn_child(db, ctx, task, agent, args["role"], args["goal"])
+    objective_id = await objectives_svc.resolve_objective_id(
+        db, task.company_id, args.get("objective")
+    )
+    await _spawn_child(db, ctx, task, agent, args["role"], args["goal"], objective_id)
     return ToolOutcome(observation=f"dispatched {args['role']}: {args['goal'][:80]}")
 
 
@@ -353,7 +381,10 @@ async def _dispatch_tasks(db, ctx, *, agent: Agent, task: Task, args: dict) -> T
     for entry in entries:
         if not isinstance(entry, dict) or "role" not in entry or "goal" not in entry:
             continue
-        await _spawn_child(db, ctx, task, agent, entry["role"], entry["goal"])
+        objective_id = await objectives_svc.resolve_objective_id(
+            db, task.company_id, entry.get("objective")
+        )
+        await _spawn_child(db, ctx, task, agent, entry["role"], entry["goal"], objective_id)
         dispatched.append(f"{entry['role']}: {str(entry['goal'])[:60]}")
     if not dispatched:
         return ToolOutcome(

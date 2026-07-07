@@ -361,6 +361,7 @@ class TaskOut(ORMModel):
     id: uuid.UUID
     agent_id: uuid.UUID
     parent_task_id: uuid.UUID | None
+    objective_id: uuid.UUID | None = None
     root_run_id: uuid.UUID | None
     depth: int
     goal: str
