@@ -14,6 +14,7 @@ from app.models import (
     Company,
     DecisionRequest,
     Membership,
+    Objective,
     SiteDomain,
     Task,
 )
@@ -29,6 +30,7 @@ from app.schemas import (
     CycleStatusOut,
     DecisionOut,
     MemoryOut,
+    ObjectiveOut,
     OrgChartOut,
     PlaybookOut,
     PlaybookUpdateRequest,
@@ -202,6 +204,25 @@ async def org_chart(company: CompanyDep, db: DbDep):
         agents=[_agent_out(a) for a in agents],
         edges=[AgentEdgeOut.model_validate(e) for e in edges],
     )
+
+
+@router.get("/objectives", response_model=list[ObjectiveOut])
+async def list_objectives(company: CompanyDep, db: DbDep):
+    """The company's mission objectives — the source for the game's active quests.
+
+    Ordered by priority (highest-priority objective first) so the quest log leads
+    with what matters most. Both active and completed objectives are returned; the
+    client keeps active ones on the board and files completed ones under a
+    "cleared" section.
+    """
+    objectives = (
+        await db.scalars(
+            select(Objective)
+            .where(Objective.company_id == company.id)
+            .order_by(Objective.priority)
+        )
+    ).all()
+    return [ObjectiveOut.model_validate(o) for o in objectives]
 
 
 @router.get("/agents", response_model=list[AgentOut])

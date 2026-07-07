@@ -750,3 +750,148 @@ a.actrow:hover .goal { color: var(--accent-strong); }
   .swipe-card.swipe-nudge { animation: none; }
   .advance-btn { box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 40%, transparent); }
 }
+
+/* ── Quest board (mission objectives as live quests) ─────────────────────────
+   Sits right under the station viewport, styled as a glowing HUD readout so it
+   reads as part of the visual graph. Each quest is a progress rail; new quests
+   slide in, cleared ones flare green then settle to a done state. */
+.quest-board {
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--accent) 7%, var(--panel)), var(--panel));
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--border));
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 12px 14px 6px;
+}
+.quest-board-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  margin-bottom: 6px;
+}
+.quest-crest {
+  color: var(--accent-strong); font-size: 13px;
+  text-shadow: 0 0 8px color-mix(in srgb, var(--accent) 70%, transparent);
+}
+.quest-list { list-style: none; margin: 0; padding: 0; }
+
+.quest { border-top: 1px solid var(--border-soft); }
+.quest:first-child { border-top: 0; }
+.quest-main {
+  all: unset; box-sizing: border-box; cursor: pointer;
+  display: flex; align-items: center; gap: 10px;
+  width: 100%; padding: 9px 2px; min-height: 44px;
+}
+.quest-main:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 6px; }
+
+/* Priority pips — three little rungs; more filled = more urgent. */
+.quest-pips { display: inline-flex; align-items: flex-end; gap: 2px; flex: 0 0 auto; height: 14px; }
+.quest-pips i { width: 3px; border-radius: 1px; background: var(--border); display: block; }
+.quest-pips i:nth-child(1) { height: 6px; }
+.quest-pips i:nth-child(2) { height: 10px; }
+.quest-pips i:nth-child(3) { height: 14px; }
+.quest-pips.p1 i:nth-child(1) { background: var(--accent); }
+.quest-pips.p2 i:nth-child(1), .quest-pips.p2 i:nth-child(2) { background: var(--accent); }
+.quest-pips.p3 i { background: var(--accent); }
+.quest-pips.p3 i:nth-child(3) { background: var(--accent-strong); }
+
+.quest-body { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+.quest-title-row { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.quest-title {
+  font-size: 14px; font-weight: 600; color: var(--text);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0;
+}
+.quest-badge { flex: 0 0 auto; font-size: 12px; font-weight: 700; }
+.quest-pct { color: var(--muted); }
+.quest-live { color: var(--accent-strong); }
+.quest-check {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 16px; height: 16px; border-radius: 50%;
+  background: color-mix(in srgb, var(--good) 22%, transparent);
+  color: var(--good); font-size: 11px;
+}
+
+.quest-bar {
+  display: block; height: 6px; border-radius: 999px; overflow: hidden;
+  background: color-mix(in srgb, var(--muted) 16%, transparent);
+}
+.quest-fill {
+  display: block; height: 100%; border-radius: 999px;
+  background: linear-gradient(90deg, var(--accent), var(--good));
+  transition: width 0.6s cubic-bezier(0.2, 0.8, 0.3, 1);
+}
+.quest-fill.active {
+  background-image: linear-gradient(90deg, var(--accent), var(--good)),
+    repeating-linear-gradient(45deg,
+      rgba(255, 255, 255, 0.18) 0 6px, rgba(255, 255, 255, 0) 6px 12px);
+  animation: cycle-stripes 0.7s linear infinite;
+}
+
+/* Cleared quest: dim the title, green the rail, keep it on the board as a trophy. */
+.quest.done .quest-title { color: var(--muted); }
+.quest.done .quest-fill { background: var(--good); }
+.quest.done .quest-pips i { background: color-mix(in srgb, var(--good) 40%, var(--border)); }
+
+.quest-detail { padding: 0 2px 10px 32px; }
+.quest-detail p { margin: 0 0 8px; font-size: 13px; line-height: 1.4; }
+.quest-meta { display: flex; flex-wrap: wrap; gap: 6px; }
+
+.quest-more {
+  all: unset; box-sizing: border-box; cursor: pointer;
+  display: block; width: 100%; text-align: center; padding: 8px; min-height: 40px;
+  font-size: 12px; font-weight: 600; color: var(--accent-strong);
+  border-top: 1px solid var(--border-soft);
+}
+.quest-more:hover { color: var(--text); }
+
+/* New quest slides in with an accent flash. */
+.quest.enter { animation: quest-enter 0.55s cubic-bezier(0.2, 0.8, 0.3, 1); }
+@keyframes quest-enter {
+  0% { opacity: 0; transform: translateY(-8px); box-shadow: inset 0 0 0 100px color-mix(in srgb, var(--accent) 18%, transparent); }
+  60% { opacity: 1; transform: translateY(0); }
+  100% { box-shadow: inset 0 0 0 100px transparent; }
+}
+/* Cleared quest flares green, then settles. */
+.quest.clearing { animation: quest-clear 1.6s ease-out; border-radius: 8px; }
+@keyframes quest-clear {
+  0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--good) 55%, transparent); background: color-mix(in srgb, var(--good) 18%, transparent); }
+  40% { box-shadow: 0 0 22px 3px color-mix(in srgb, var(--good) 45%, transparent); }
+  100% { box-shadow: 0 0 0 0 transparent; background: transparent; }
+}
+
+/* ── Crew "what am I doing" line (roster) + module mission detail ───────────── */
+.crew-doing {
+  display: flex; align-items: center; gap: 6px; margin-top: 4px;
+  font-size: 12px; color: color-mix(in srgb, var(--accent-strong) 88%, var(--text));
+}
+.crew-doing-dot {
+  width: 6px; height: 6px; border-radius: 50%; flex: 0 0 auto;
+  background: var(--accent); box-shadow: 0 0 6px color-mix(in srgb, var(--accent) 80%, transparent);
+  animation: pulse 1.4s ease-in-out infinite;
+}
+.crew-doing-goal { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.crew-progress-line { font-size: 12px; margin-top: 4px; }
+.crew-bar {
+  display: block; height: 4px; border-radius: 999px; overflow: hidden; margin-top: 6px;
+  background: color-mix(in srgb, var(--muted) 16%, transparent);
+}
+.crew-fill {
+  display: block; height: 100%; border-radius: 999px;
+  background: linear-gradient(90deg, var(--accent), var(--good));
+  transition: width 0.6s cubic-bezier(0.2, 0.8, 0.3, 1);
+}
+.crew-fill.active {
+  background-image: linear-gradient(90deg, var(--accent), var(--good)),
+    repeating-linear-gradient(45deg,
+      rgba(255, 255, 255, 0.18) 0 6px, rgba(255, 255, 255, 0) 6px 12px);
+  animation: cycle-stripes 0.7s linear infinite;
+}
+.mod-goal { max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mod-mission {
+  margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border-soft);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .quest-fill.active, .crew-fill.active { animation: none; }
+  .quest.enter, .quest.clearing { animation: none; }
+  .crew-doing-dot { animation: none; }
+  .quest-fill, .crew-fill { transition: none; }
+}

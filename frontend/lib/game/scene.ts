@@ -158,6 +158,12 @@ export interface ModuleView {
   rankStars: number; // 0..5 from reputation trust
   status: string; // raw agent status (for the roster pill)
   budgetCents: number | null;
+  // Live per-agent task summary (this cycle) — powers the module's progress bar
+  // and the expandable "what is this station doing?" detail.
+  currentGoal: string | null; // most relevant in-flight task goal, or null when idle
+  taskDone: number; // settled-done tasks this cycle
+  taskTotal: number; // done + failed + in-flight tasks this cycle
+  taskProgress: number; // 0..1 (taskDone / taskTotal)
 }
 
 export interface DroidView {
@@ -320,6 +326,32 @@ export function buildScene(inp: SceneInputs): SceneModel {
   const roundActive = activeCount > 0;
   const roundProgress = totalSeen > 0 ? settledCount / totalSeen : 0;
 
+  // Per-agent task rollup for this cycle: what each station is doing and how far
+  // it has got. Tasks arrive newest-first, so the first in-flight one we see is
+  // the freshest "current goal".
+  const IN_FLIGHT = ["running", "queued", "waiting_approval", "auditing"];
+  const agentSummary = new Map<
+    string,
+    { done: number; total: number; goal: string | null; goalRank: number }
+  >();
+  for (const t of inp.tasks) {
+    if (!t.agent_id) continue;
+    const s =
+      agentSummary.get(t.agent_id) ?? { done: 0, total: 0, goal: null, goalRank: 0 };
+    const settled = t.status === "done" || t.status === "failed";
+    const inFlight = IN_FLIGHT.includes(t.status);
+    if (settled || inFlight) s.total++;
+    if (t.status === "done") s.done++;
+    // Freshest in-flight goal wins, preferring a running task over a queued one.
+    // Tasks are newest-first, so a strict `>` keeps the first (newest) at each rank.
+    const rank = t.status === "running" ? 2 : inFlight ? 1 : 0;
+    if (rank > s.goalRank) {
+      s.goal = t.goal;
+      s.goalRank = rank;
+    }
+    agentSummary.set(t.agent_id, s);
+  }
+
   // Assign agents to slots: canonical role slot if free, else an aux slot.
   const usedRoleSlots = new Set<string>();
   const modules: ModuleView[] = [];
@@ -337,6 +369,7 @@ export function buildScene(inp: SceneInputs): SceneModel {
     }
     const rep = repByAgent.get(a.id);
     const paused = a.status === "paused";
+    const sum = agentSummary.get(a.id);
     modules.push({
       key: a.id,
       agentId: a.id,
@@ -354,6 +387,10 @@ export function buildScene(inp: SceneInputs): SceneModel {
       rankStars: rankFromReputation(rep),
       status: a.status,
       budgetCents: a.monthly_budget_cents,
+      currentGoal: sum?.goal ?? null,
+      taskDone: sum?.done ?? 0,
+      taskTotal: sum?.total ?? 0,
+      taskProgress: sum && sum.total > 0 ? sum.done / sum.total : 0,
     });
   }
 
@@ -378,6 +415,10 @@ export function buildScene(inp: SceneInputs): SceneModel {
         rankStars: 0,
         status: "offline",
         budgetCents: null,
+        currentGoal: null,
+        taskDone: 0,
+        taskTotal: 0,
+        taskProgress: 0,
       });
     }
   }

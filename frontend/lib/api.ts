@@ -279,6 +279,8 @@ export const api = {
       body: JSON.stringify({ playbook }),
     }),
 
+  objectives: (companyId: string) => req<Objective[]>(`/companies/${companyId}/objectives`),
+
   org: (companyId: string) => req<{ agents: Agent[]; edges: AgentEdge[] }>(`/companies/${companyId}/org`),
   agents: (companyId: string) => req<Agent[]>(`/companies/${companyId}/agents`),
   pauseAgent: (companyId: string, agentId: string) =>

@@ -17,29 +17,13 @@ from app.services import budget as budget_svc
 from app.services import chat as chat_svc
 from app.services import external_messages as ext
 
+# Objective↔task keyword linkage lives with the objective-completion sweep so the
+# inbox and the quest board agree on what "relates to this objective" means.
+# Re-exported here under its historical name for existing callers and tests.
+from app.services.objectives import keywords as _keywords
+
 # Listing is company-scoped; resolve actions are by decision id (re-checked against membership).
 router = APIRouter(tags=["decisions"])
-
-
-# Words too generic to signal which objective a task belongs to.
-_STOPWORDS = frozenset(
-    """
-    the and for with that this from your you our are will into them they then than
-    have has had who what when where which while about over under above below
-    company business mission objective objectives plan agent agents task work
-    initiative initiatives founder approve approval budget spend decision goal
-    """.split()
-)
-
-
-def _keywords(*texts: str | None) -> set[str]:
-    words: set[str] = set()
-    for text in texts:
-        for raw in (text or "").lower().replace("/", " ").split():
-            token = "".join(ch for ch in raw if ch.isalnum())
-            if len(token) >= 4 and token not in _STOPWORDS:
-                words.add(token)
-    return words
 
 
 def _best_objective(text_words: set[str], objectives: list[Objective]) -> str | None:
