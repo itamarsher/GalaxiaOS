@@ -157,6 +157,14 @@ export function QuestLog({
                       )}
                     </span>
                   </span>
+                  {/* What's actually happening now — grounds the aspirational
+                      objective in the concrete task a crew is on. */}
+                  {!done && q.activity && (
+                    <span className="quest-now" title={q.activity}>
+                      <span className="quest-now-dot" aria-hidden />
+                      <span className="quest-now-text">{q.activity}</span>
+                    </span>
+                  )}
                   <span className="quest-bar" aria-hidden>
                     <span
                       className={"quest-fill" + (q.running > 0 && !done ? " active" : "")}
@@ -168,6 +176,19 @@ export function QuestLog({
               {open && (
                 <div className="quest-detail">
                   {q.rationale && <p className="muted">{q.rationale}</p>}
+                  {q.activities.length > 0 && (
+                    <div className="quest-tasks">
+                      <div className="quest-tasks-label">Working on now</div>
+                      <ul>
+                        {q.activities.slice(0, 4).map((g, i) => (
+                          <li key={i}>{g}</li>
+                        ))}
+                        {q.activities.length > 4 && (
+                          <li className="muted">+{q.activities.length - 4} more</li>
+                        )}
+                      </ul>
+                    </div>
+                  )}
                   <div className="quest-meta">
                     <span className="cycle-chip done">{q.done} done</span>
                     {q.running > 0 && <span className="cycle-chip run">● {q.running} running</span>}

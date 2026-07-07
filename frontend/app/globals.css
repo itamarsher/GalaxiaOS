@@ -839,6 +839,36 @@ a.actrow:hover .goal { color: var(--accent-strong); }
 .quest-detail p { margin: 0 0 8px; font-size: 13px; line-height: 1.4; }
 .quest-meta { display: flex; flex-wrap: wrap; gap: 6px; }
 
+/* "Happening now" — the concrete task under the objective's headline goal. */
+.quest-now { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.quest-now-dot {
+  width: 5px; height: 5px; border-radius: 50%; flex: 0 0 auto;
+  background: var(--accent); box-shadow: 0 0 5px color-mix(in srgb, var(--accent) 80%, transparent);
+  animation: pulse 1.4s ease-in-out infinite;
+}
+.quest-now-text {
+  font-size: 12px; color: var(--muted); min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+/* Expanded: the real tasks the fleet is running toward this objective. */
+.quest-tasks { margin: 2px 0 10px; }
+.quest-tasks-label {
+  font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase;
+  color: var(--muted); font-weight: 700; margin-bottom: 5px;
+}
+.quest-tasks ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 5px; }
+.quest-tasks li {
+  font-size: 13px; line-height: 1.35; padding-left: 14px; position: relative; color: var(--text);
+}
+.quest-tasks li::before {
+  content: ""; position: absolute; left: 3px; top: 7px;
+  width: 4px; height: 4px; border-radius: 50%; background: var(--accent-strong);
+}
+.quest-tasks li.muted { color: var(--muted); }
+.quest-tasks li.muted::before { background: var(--muted); }
+
+@media (prefers-reduced-motion: reduce) { .quest-now-dot { animation: none; } }
+
 .quest-more {
   all: unset; box-sizing: border-box; cursor: pointer;
   display: block; width: 100%; text-align: center; padding: 8px; min-height: 40px;
