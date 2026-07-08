@@ -371,6 +371,8 @@ export default function GalaxiaCommandPage() {
     (c) => c.pending_decision == null && c.waiting_agents.length > 0,
   );
   const chatWaiting = waitingChannels.reduce((n, c) => n + c.waiting_agents.length, 0);
+  // Formatted "Name (role)" labels so the console can name a lone waiting agent.
+  const chatWaitingAgents = waitingChannels.flatMap((c) => c.waiting_agents);
   // Deep-link straight to the waiting conversation (?channel=…); the chat page's
   // own default would otherwise open the CEO DM, not where the reply is owed.
   const chatHref =
@@ -424,6 +426,7 @@ export default function GalaxiaCommandPage() {
             <CaptainsConsole
               decisions={decisionList}
               chatWaiting={chatWaiting}
+              chatWaitingAgents={chatWaitingAgents}
               chatHref={chatHref}
               onResolved={() => decisions.reload()}
             />
