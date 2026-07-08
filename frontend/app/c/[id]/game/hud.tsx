@@ -220,11 +220,15 @@ export function QuestLog({
 export function CaptainsConsole({
   decisions,
   chatWaiting = 0,
+  chatWaitingAgents = [],
   chatHref,
   onResolved,
 }: {
   decisions: Decision[];
   chatWaiting?: number;
+  // Formatted "Name (role)" labels for the agents parked on a chat reply, so the
+  // console CTA can name who's waiting instead of a generic "an agent".
+  chatWaitingAgents?: string[];
   chatHref?: string;
   onResolved: () => void;
 }) {
@@ -250,8 +254,14 @@ export function CaptainsConsole({
         <Link href={chatHref} className="console-chat-cta">
           <span aria-hidden>💬</span>
           <span>
-            {chatWaiting === 1 ? "An agent is" : `${chatWaiting} agents are`} waiting for your
-            reply in Chat
+            {/* Name the agent when exactly one is waiting; otherwise fall back to
+                the count so the line stays readable for multiple waits. */}
+            {chatWaiting === 1 && chatWaitingAgents[0]
+              ? `${chatWaitingAgents[0]} is`
+              : chatWaiting === 1
+                ? "An agent is"
+                : `${chatWaiting} agents are`}{" "}
+            waiting for your reply in Chat
           </span>
           <span className="console-chat-arrow" aria-hidden>→</span>
         </Link>
