@@ -189,7 +189,14 @@ SPECS: list[ToolSpec] = [
     ),
     ToolSpec(
         name="request_decision",
-        description="Escalate a decision to the founder. Pauses this task until they respond.",
+        description=(
+            "Escalate a founder/board-level decision to the founder — a risky or irreversible "
+            "external action, or a genuine strategic pivot. Pauses this task until they respond. "
+            "Do NOT use this for operational blockers, missing inputs, or work another agent owns "
+            "or is producing (e.g. a deliverable being made in parallel): the founder is a board "
+            "member, not an operator — take those to the CEO or the owning teammate with "
+            "`message_teammate` instead."
+        ),
         input_schema={
             "type": "object",
             "properties": {
