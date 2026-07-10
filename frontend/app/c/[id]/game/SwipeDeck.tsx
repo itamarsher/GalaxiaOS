@@ -13,6 +13,7 @@ import { Markdown } from "@/lib/markdown";
 
 const THRESHOLD = 90; // px of horizontal travel to commit
 const V_MIN = 0.5; // px/ms flick velocity to commit regardless of distance
+const AXIS_LOCK = 8; // px of travel before we decide swipe (horizontal) vs scroll (vertical)
 
 export function SwipeDeck({
   decisions,
@@ -105,9 +106,16 @@ function SwipeCard({
   onResolve: (approve: boolean) => void;
 }) {
   const cardRef = useRef<HTMLDivElement | null>(null);
-  const drag = useRef<{ startX: number; startT: number; dx: number; active: boolean }>({
-    startX: 0, startT: 0, dx: 0, active: false,
-  });
+  const drag = useRef<{
+    startX: number;
+    startY: number;
+    startT: number;
+    dx: number;
+    active: boolean;
+    // Locked once the gesture reveals its dominant direction: 'x' is a swipe we
+    // own, 'y' is a scroll we let the browser handle (see onPointerMove).
+    axis: "x" | "y" | null;
+  }>({ startX: 0, startY: 0, startT: 0, dx: 0, active: false, axis: null });
   const [dx, setDx] = useState(0);
   const [flyOff, setFlyOff] = useState<0 | 1 | -1>(0);
 
@@ -118,7 +126,7 @@ function SwipeCard({
   useEffect(() => {
     setDx(0);
     setFlyOff(0);
-    drag.current = { startX: 0, startT: 0, dx: 0, active: false };
+    drag.current = { startX: 0, startY: 0, startT: 0, dx: 0, active: false, axis: null };
   }, [decision.id]);
 
   const commit = (approve: boolean) => {
@@ -130,22 +138,47 @@ function SwipeCard({
 
   const onPointerDown = (e: React.PointerEvent) => {
     if (!interactive || busy) return;
-    (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
-    drag.current = { startX: e.clientX, startT: e.timeStamp, dx: 0, active: true };
+    // Don't capture the pointer yet: capturing here would hijack a vertical drag
+    // that's meant to scroll the card's text. We only claim the pointer once the
+    // gesture proves to be horizontal (a swipe) in onPointerMove — until then the
+    // browser is free to scroll the text up/down natively (touch-action: pan-y).
+    drag.current = {
+      startX: e.clientX, startY: e.clientY, startT: e.timeStamp,
+      dx: 0, active: true, axis: null,
+    };
   };
   const onPointerMove = (e: React.PointerEvent) => {
     if (!drag.current.active) return;
     const d = e.clientX - drag.current.startX;
+    const dy = e.clientY - drag.current.startY;
+    if (drag.current.axis === null) {
+      // Decide direction only once the finger/mouse has travelled enough to make
+      // the intent clear, so a swipe that begins on the text still registers.
+      if (Math.max(Math.abs(d), Math.abs(dy)) < AXIS_LOCK) return;
+      if (Math.abs(d) > Math.abs(dy)) {
+        // Horizontal → a decision swipe. Take over the pointer so we keep getting
+        // moves even if it strays off the card (matters for mouse drags).
+        drag.current.axis = "x";
+        (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
+      } else {
+        // Vertical → text scroll. Bow out and let the browser own the gesture.
+        drag.current.axis = "y";
+        drag.current.active = false;
+        return;
+      }
+    }
+    if (drag.current.axis !== "x") return;
     drag.current.dx = d;
     setDx(d);
   };
   const onPointerUp = (e: React.PointerEvent) => {
-    if (!drag.current.active) return;
+    if (!drag.current.active) { setDx(0); return; }
+    const axis = drag.current.axis;
     const d = drag.current.dx;
     const v = d / Math.max(1, e.timeStamp - drag.current.startT);
     drag.current.active = false;
-    if (Math.abs(d) < 6) {
-      // A tap, not a swipe → toggle detail.
+    if (axis !== "x") {
+      // Never locked into a horizontal swipe → it was a tap. Toggle detail.
       onToggleExpand();
       setDx(0);
       return;
@@ -193,7 +226,7 @@ function SwipeCard({
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
-      onPointerCancel={() => { drag.current.active = false; setDx(0); }}
+      onPointerCancel={() => { drag.current.active = false; drag.current.axis = null; setDx(0); }}
     >
       {interactive && (
         <>

@@ -65,6 +65,43 @@ async def consume_approval_grant(db, *, task_id: uuid.UUID, tool: str) -> bool:
     return False
 
 
+async def consume_rejection_grant(
+    db, *, task_id: uuid.UUID, tool: str, args: dict | None
+) -> DecisionRequest | None:
+    """Use up a founder *rejection* of ``tool(args)`` on this task, if one is pending.
+
+    The mirror of :func:`consume_approval_grant` for the decline path: when the
+    founder rejects a concrete gated action the task now resumes (so it can
+    acknowledge and adapt) instead of dying. On resume the agent may re-issue the
+    very call that was declined; without this the gate would just escalate it to
+    the founder again, looping. Matching on tool *and* args (an exact repeat of the
+    rejected action, not merely the same tool) means an adapted or unrelated later
+    call still goes through. One-shot, like the approval grant.
+
+    Returns the consumed decision (so the caller can surface the founder's reason),
+    or ``None`` when this exact action was not rejected.
+    """
+    rejections = (
+        await db.scalars(
+            select(DecisionRequest).where(
+                DecisionRequest.task_id == task_id,
+                DecisionRequest.status == DecisionStatus.rejected,
+            )
+        )
+    ).all()
+    for rej in rejections:
+        payload = rej.payload or {}
+        if (
+            payload.get("tool") == tool
+            and payload.get("args") == (args or {})
+            and not payload.get("consumed")
+        ):
+            rej.payload = {**payload, "consumed": True}
+            await db.flush()
+            return rej
+    return None
+
+
 def truncation_notice(omitted: int, unit: str = "characters") -> str:
     """The marker appended to any output we had to cut short.
 
@@ -123,6 +160,7 @@ __all__ = [
     "Handler",
     "Any",
     "consume_approval_grant",
+    "consume_rejection_grant",
     "unsupported_capability",
     "clip",
     "truncation_notice",
