@@ -255,6 +255,51 @@ async def test_founder_reply_wakes_waiting_agent(session_factory, company_with_b
 
 
 @requires_db
+async def test_long_founder_reply_still_carries_ack_directive(session_factory, company_with_budget):
+    """A long founder reply must not clip the acknowledgment directive off the tail.
+
+    Regression: the directive was appended after the reply and the whole string
+    clipped to a length cap, so any reply near the cap truncated the directive away
+    and the agent never acknowledged. It now leads the observation and survives.
+    """
+    company_id = company_with_budget
+    agent, task = await _agent_and_task(session_factory, company_id)
+
+    async with session_factory() as db:
+        await chat.create_channel(
+            db, company_id=company_id, name="ask-founder", created_by_agent_id=agent.id
+        )
+        await db.commit()
+
+    async with session_factory() as db:
+        await execute_tool(
+            db, FakeCtx(), agent=agent, task=task, name="send_chat_message",
+            args={"channel": "ask-founder", "message": "Which way?", "wait_for_reply": True},
+        )
+        await db.commit()
+
+    # Founder replies with a body longer than the observation cap.
+    long_reply = "Do the thing. " * 800  # ~11k chars, well over _MAX_CHARS (6000)
+    async with session_factory() as db:
+        channel = await chat.find_channel_by_name(db, company_id=company_id, name="ask-founder")
+        await chat.post_message(
+            db, company_id=company_id, channel_id=channel.id,
+            sender_agent_id=None, body=long_reply,
+        )
+        await db.commit()
+
+    async with session_factory() as db:
+        out = await execute_tool(
+            db, FakeCtx(), agent=agent, task=task, name="send_chat_message",
+            args={"channel": "ask-founder", "message": "Which way?", "wait_for_reply": True},
+        )
+        await db.commit()
+    # The directive survives the long reply AND leads, so the agent acts on it first.
+    assert chat.FOUNDER_ACK_DIRECTIVE in out.observation
+    assert out.observation.startswith(chat.FOUNDER_ACK_DIRECTIVE)
+
+
+@requires_db
 async def test_agent_reply_wakes_other_agent(session_factory, company_with_budget):
     """An agent posting wakes another agent waiting in the channel, but not itself."""
     company_id = company_with_budget
