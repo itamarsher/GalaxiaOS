@@ -209,7 +209,7 @@ class NativeBackend:
             file_store_connected=file_store_connected,
         )
         messages = self._resume_or_seed(task)
-        await self._inject_audit_feedback(ctx, task, messages)
+        await self._inject_resume_notes(ctx, task, messages)
         # Tool discovery: a task starts with only the core toolset and grows as the
         # agent hot-loads tools with `use_tool`. Seed the live set from the transcript
         # so a task resumed in a fresh process keeps the tools it already discovered.
@@ -740,9 +740,12 @@ class NativeBackend:
                 db, task=target, status=outcome, output=target.output or {"summary": ""}
             )
 
-    #: Feedback stored on ``task.input`` that must be surfaced to the agent on
-    #: resume (and consumed once): the CEO's audit comments and the independent
-    #: critic's devil's-advocate notes. Each maps to the framing shown to the agent.
+    #: Notes stored on ``task.input`` that must be surfaced to the agent on resume
+    #: (and consumed once): the CEO's audit comments, the independent critic's
+    #: devil's-advocate notes, and a founder-acknowledgment directive when the
+    #: founder just resolved this task's escalation. Each maps to the framing shown
+    #: to the agent (an empty framing means the stored value is already a full
+    #: instruction — see ``founder_ack``, built in ``app.api.decisions``).
     _FEEDBACK_KEYS: tuple[tuple[str, str], ...] = (
         (
             "audit_feedback",
@@ -754,14 +757,15 @@ class NativeBackend:
             "An independent critic reviewed your previous result and was NOT satisfied. "
             "Treat this as a rewrite: address every point before reporting again:\n",
         ),
+        ("founder_ack", ""),
     )
 
-    async def _inject_audit_feedback(
+    async def _inject_resume_notes(
         self, ctx: RuntimeContext, task: Task, messages: list[Message]
     ) -> None:
-        """Surface any pending review feedback (CEO audit and/or the independent
-        critic) as the agent's first instruction after its prior history, then
-        consume it so each note is injected only once."""
+        """Surface any pending resume notes (CEO audit, the independent critic, or a
+        founder-acknowledgment directive) as the agent's first instruction after its
+        prior history, then consume them so each note is injected only once."""
         info = task.input or {}
         notes = [
             TextBlock(text=header + str(info[key]))

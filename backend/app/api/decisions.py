@@ -129,6 +129,23 @@ async def _apply_note(db, decision: DecisionRequest, note: str | None) -> None:
     )
 
 
+def _ack_note(decision: DecisionRequest, *, note: str | None) -> str:
+    """The directive that makes a resuming agent acknowledge the founder's decision.
+
+    Stored on ``task.input['founder_ack']`` and surfaced once on resume (see
+    ``NativeBackend._inject_resume_notes``): an agent that escalated to the founder
+    and is now unparked by an approval should confirm back in the DM *before* it
+    carries out the approved action — so a founder who answers always gets an
+    immediate acknowledgment, not silence while the agent works.
+    """
+    note = (note or "").strip()
+    tail = f' They added a note: "{note[:400]}".' if note else ""
+    return (
+        f'The founder APPROVED your request: "{decision.summary[:200]}".{tail} '
+        + chat_svc.FOUNDER_ACK_DIRECTIVE
+    )
+
+
 async def _post_resolution_dm(
     db, decision: DecisionRequest, *, resolution: str, note: str | None
 ) -> None:
@@ -181,6 +198,14 @@ async def approve(
         ):
             task.status = TaskStatus.queued
             resumed_task_id = task.id
+            # When the escalation was surfaced in the agent↔founder DM, have the
+            # resuming agent confirm back there first — an approval is the founder
+            # replying, and they should hear "got it, doing X" right away.
+            if decision.channel_id is not None:
+                task.input = {
+                    **(task.input or {}),
+                    "founder_ack": _ack_note(decision, note=body.note if body else None),
+                }
     await db.commit()
     if resumed_task_id is not None:
         await enqueue_task(resumed_task_id)

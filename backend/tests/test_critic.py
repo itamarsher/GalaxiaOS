@@ -378,7 +378,7 @@ async def test_inject_feedback_surfaces_both_audit_and_critic(session_factory, c
 
     ctx = _Ctx(_FakeCostMeter({}), session_factory=session_factory)
     messages = [Message(role="user", content="original goal")]
-    await NativeBackend()._inject_audit_feedback(ctx, task, messages)
+    await NativeBackend()._inject_resume_notes(ctx, task, messages)
 
     injected = messages[-1].content
     texts = " ".join(b.text for b in injected if isinstance(b, TextBlock))

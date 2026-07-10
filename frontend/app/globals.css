@@ -718,6 +718,11 @@ a.actrow:hover .goal { color: var(--accent-strong); }
 .swipe-card .decision-note {
   max-height: 34vh; overflow-y: auto; overscroll-behavior: contain;
   word-break: break-word;
+  /* Reserve vertical drags for scrolling this text, but hand horizontal drags to
+     the swipe handler — so a decision swipe that starts on the text still works
+     (matching the card itself). Without this the browser claims the gesture and
+     the swipe never fires. */
+  touch-action: pan-y;
 }
 /* The top card invites a drag. */
 .swipe-card.swipe-top { cursor: grab; }
