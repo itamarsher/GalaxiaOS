@@ -146,6 +146,25 @@ def _ack_note(decision: DecisionRequest, *, note: str | None) -> str:
     )
 
 
+def _reject_note(decision: DecisionRequest, *, note: str | None) -> str:
+    """The directive a resuming agent gets when the founder DECLINES its request.
+
+    A rejection no longer kills the task: it resumes so the agent can acknowledge
+    and adapt (the concrete action stays blocked — see ``consume_rejection_grant``).
+    This tells it what was declined, the founder's reason, and to confirm back and
+    take a different path rather than silently stopping or re-requesting the same
+    thing.
+    """
+    note = (note or "").strip()
+    tail = f' Their reason: "{note[:400]}".' if note else ""
+    return (
+        f'The founder DECLINED your request: "{decision.summary[:200]}".{tail} '
+        "Do not carry out that action or re-request it unchanged — adapt: take a "
+        "different approach, or ask them a clarifying follow-up. "
+        + chat_svc.FOUNDER_ACK_DIRECTIVE
+    )
+
+
 async def _post_resolution_dm(
     db, decision: DecisionRequest, *, resolution: str, note: str | None
 ) -> None:
@@ -228,14 +247,25 @@ async def reject(
     # If this gated an outbound message, mark its indexed record rejected so the
     # communications log shows it was never sent.
     await ext.mark_decision_resolved(db, decision_id=decision.id, approved=False)
+    resumed_task_id: uuid.UUID | None = None
     if decision.task_id:
         task = await db.get(Task, decision.task_id)
         if task is not None and task.status in (
             TaskStatus.waiting_approval,
             TaskStatus.running,
         ):
-            task.status = TaskStatus.failed
-            task.output = {"rejected": True}
-            task.transcript = None  # terminal: drop the working-memory checkpoint
+            # A rejection is the founder replying "no", not a dead end: resume the
+            # task so the agent acknowledges the decline and adapts (its transcript
+            # is kept so it continues with context). The declined action itself
+            # stays blocked at the gate (consume_rejection_grant).
+            task.status = TaskStatus.queued
+            resumed_task_id = task.id
+            if decision.channel_id is not None:
+                task.input = {
+                    **(task.input or {}),
+                    "founder_ack": _reject_note(decision, note=body.note if body else None),
+                }
     await db.commit()
+    if resumed_task_id is not None:
+        await enqueue_task(resumed_task_id)
     return (await _to_out(db, [decision]))[0]

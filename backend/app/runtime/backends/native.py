@@ -42,6 +42,7 @@ from app.runtime.tools import (
 )
 from app.runtime.tools.base import ToolOutcome, clip
 from app.runtime.tools.base import consume_approval_grant as _consume_approval_grant
+from app.runtime.tools.base import consume_rejection_grant as _consume_rejection_grant
 from app.runtime.transcript import dump_messages, load_messages, sanitize_messages, transcript_lines
 from app.services import apikeys, chat, memory, metrics, reputation
 from app.services import external_messages as ext
@@ -493,6 +494,24 @@ class NativeBackend:
             if effect is PolicyEffect.require_approval and not await _consume_approval_grant(
                 db, task_id=task.id, tool=call.name
             ):
+                # The founder may already have DECLINED this exact action (the task
+                # resumes on a rejection so it can adapt). Don't re-escalate the same
+                # call — tell the agent it was declined so it takes another path.
+                rejected = await _consume_rejection_grant(
+                    db, task_id=task.id, tool=call.name, args=call.arguments
+                )
+                if rejected is not None:
+                    await db.commit()
+                    reason = (rejected.payload or {}).get("founder_note")
+                    return {
+                        "terminal": False,
+                        "observation": (
+                            f"The founder DECLINED {call.name} — do NOT retry it as-is."
+                            + (f' Their reason: "{reason}".' if reason else "")
+                            + " Take a different approach or ask them a follow-up."
+                        ),
+                        "is_error": True,
+                    }
                 # No standing approval for this action — park the task and ask the
                 # founder. (If a grant existed, it was just consumed and we fall
                 # through to execute, so an approved action isn't re-escalated.)
