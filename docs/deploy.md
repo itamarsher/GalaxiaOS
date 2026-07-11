@@ -58,6 +58,34 @@ merge.
 - `abos-worker` can scale out; arq coordinates via Redis. The cron jobs (runway
   recompute, daily digest) are safe to run from a single worker.
 
+## LLM models — Anthropic or open-source (BYOK)
+
+The fleet is provider-agnostic: the LLM vendor is chosen by which key a founder
+stores in **Settings** (BYOK, envelope-encrypted). No Render service or GPU is
+required for any of these — the key is per-company, never a global env var.
+
+- **Anthropic (Claude)** — the launch default (`sk-ant-…`).
+- **Open-source models via a hosted aggregator** (recommended cheaper default):
+  paste an **OpenRouter** (`sk-or-…`), **Groq** (`gsk_…`), or **Together** key in
+  Settings. One key unlocks Llama 3.3, DeepSeek R1, Qwen, gpt-oss, etc. — served
+  over OpenAI-compatible APIs. Typical OSS text models run **~$0.10–$1.20 / Mtok**
+  vs Claude's $1–$25 / Mtok (Haiku→Opus), i.e. roughly **5–50× cheaper per token**,
+  and cost $0 at idle. Endpoint URLs are baked in; **nothing in `render.yaml`
+  changes.**
+- **Self-hosted open-source models** (vLLM / Ollama / TGI): run the model on an
+  external GPU host (Render has no GPU tier), then set
+  `ABOS_OPENAI_COMPAT_BASE_URL` + the three `ABOS_OPENAI_COMPAT_MODEL_*` slugs on
+  `abos-api` **and** `abos-worker`; the founder stores that server's token under
+  the `openai_compat` provider. Only worth it above ~50–100M tokens/month
+  sustained (or when privacy forces on-prem); below that a hosted aggregator is
+  cheaper and simpler.
+
+Steer founders to tool-calling + JSON-capable OSS models (Llama 3.3, DeepSeek
+V3/R1, Qwen3, gpt-oss) — the agent loop relies on structured output. Model slugs
+and prices in `backend/app/providers/oss.py` are best-effort snapshots
+(overridable per-agent via `Agent.model_pref`); real spend always reconciles from
+`usage` after each call.
+
 ## Security follow-ups
 
 - **Master key in KMS.** `ABOS_MASTER_KEY` wraps every BYOK provider key

@@ -147,6 +147,17 @@ class Settings(BaseSettings):
     model_planner: str = Field(default="claude-sonnet-4-6")
     model_strategic: str = Field(default="claude-opus-4-8")
 
+    # Self-hosted OpenAI-compatible LLM endpoint (vLLM/Ollama/TGI) for running
+    # the fleet on open-source models. Hosted OSS aggregators (OpenRouter, Groq,
+    # Together) need no config — they're BYOK with baked-in URLs. This is only
+    # for pointing at your own server: set the base URL and the per-tier model
+    # slugs it serves. Empty base URL => the "openai_compat" provider is not
+    # offered (see providers/registry.py).
+    openai_compat_base_url: str = ""
+    openai_compat_model_cheap: str = ""
+    openai_compat_model_planner: str = ""
+    openai_compat_model_strategic: str = ""
+
     # External integrations
     domain_registrar: str = "simulated"  # simulated | rdap | namecheap | card_checkout
     rdap_timeout_seconds: float = 4.0
