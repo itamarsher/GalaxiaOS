@@ -32,6 +32,36 @@ def test_ceo_role_owns_ingestion_and_the_implement_or_request_fork() -> None:
     assert "request_capability" in ceo
 
 
+def test_ceo_role_splits_company_prompt_from_system_prompt() -> None:
+    """The learning fork is framed as two prompt levels with different approval.
+
+    Company prompt (the playbook) is the CEO's own, adopted with complete autonomy;
+    the system prompt lives in code and only changes through a capability request.
+    """
+    ceo = prompts.ROLE_DESCRIPTIONS[AgentRole.ceo].lower()
+    assert "company prompt" in ceo
+    assert "system prompt" in ceo
+    # The CEO's autonomy over the company prompt is explicit…
+    assert "complete freedom and autonomy" in ceo
+    # …while the system prompt is code, not the CEO's to edit — it's requested instead.
+    assert "code" in ceo
+
+
+def test_retrospective_ceo_goal_splits_company_prompt_from_system_prompt() -> None:
+    goal = prompts.RETROSPECTIVE_CEO_GOAL.format(roles="growth")
+    lower = goal.lower()
+    assert "company prompt" in lower and "system prompt" in lower
+    # Company-prompt changes are adopted directly; system-prompt changes are requested.
+    assert "update_company_playbook" in goal
+    assert "request_capability" in goal
+
+
+def test_agent_loop_names_the_two_prompt_levels_in_the_retrospective() -> None:
+    body = prompts.AGENT_LOOP_SYSTEM.lower()
+    assert "company prompt" in body
+    assert "system prompt" in body
+
+
 def test_retrospective_ceo_goal_formats_with_worked_roles() -> None:
     goal = prompts.RETROSPECTIVE_CEO_GOAL.format(roles="growth, research")
     assert "growth, research" in goal
