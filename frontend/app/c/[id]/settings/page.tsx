@@ -9,12 +9,36 @@ import { CloudflareCard, GoogleDriveCard } from "@/lib/connectors";
 // The keys GalaxiaOS understands today. The BYOK LLM provider key is required to
 // run; the rest are optional integrations. (GitHub issue filing is handled centrally
 // by the deployment's own token, so there's no per-company GitHub key here.)
+//
+// The LLM provider is chosen by whichever LLM key you set — Anthropic (Claude) or
+// one of the open-source hosts below. Set exactly one: adding a new LLM key
+// switches your whole fleet to that provider. Open-source hosts serve models like
+// Llama 3.3, DeepSeek R1, Qwen, and gpt-oss — typically far cheaper per token than
+// Claude, with no infrastructure to run.
 const SLOTS: { provider: string; label: string; hint: string; placeholder: string }[] = [
   {
     provider: "anthropic",
     label: "Anthropic API key",
-    hint: "Required. The BYOK key your agents use to think. Encrypted at rest; only a fingerprint is shown.",
+    hint: "The BYOK key your agents use to think (Claude). Encrypted at rest; only a fingerprint is shown. Set one LLM key — this or an open-source host below.",
     placeholder: "sk-ant-…",
+  },
+  {
+    provider: "openrouter",
+    label: "OpenRouter API key (open-source models)",
+    hint: "Open-source alternative to Claude. One key routes to 300+ models (Llama 3.3, DeepSeek R1, Qwen, gpt-oss) — usually far cheaper per token. Setting this switches your fleet to open-source models.",
+    placeholder: "sk-or-…",
+  },
+  {
+    provider: "groq",
+    label: "Groq API key (open-source models)",
+    hint: "Open-source alternative to Claude, optimized for very low latency (Llama 3.3, gpt-oss, DeepSeek distills). Setting this switches your fleet to open-source models.",
+    placeholder: "gsk_…",
+  },
+  {
+    provider: "together",
+    label: "Together AI API key (open-source models)",
+    hint: "Open-source alternative to Claude with a broad model catalog (Llama, DeepSeek, Qwen). Setting this switches your fleet to open-source models.",
+    placeholder: "…",
   },
   {
     provider: "tavily",
