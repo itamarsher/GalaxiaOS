@@ -9,8 +9,8 @@ roles: product, platform
 Jira is where the fleet's delivery is planned and tracked when a team runs on Atlassian — epics, stories, sprints, and boards. This skill is the ABOS-adapted path to using it well: **connect it as a tool first, never assume it's wired**, then resist the urge to over-configure it.
 
 ## Connect before you plan
-1. **Find the tool.** `discover_tools` with query `jira`; Jira exposes as `mcp__jira__*` once the founder has connected it. Load what you need with `use_tool` (create an issue, transition it, run a JQL search).
-2. **Not connected? Ask — don't fake it.** `request_user_action` for the founder to connect Jira in Settings (MCP server or API token), scoped to the project you touch. If the capability can't exist yet, `request_capability`. Never invent an issue key or claim a ticket exists — a phantom ticket is worse than none.
+1. **Find the tool.** `discover_tools` with query `jira`; Jira exposes as `mcp__jira__*` once it's connected (by you or the founder). Load what you need with `use_tool` (create an issue, transition it, run a JQL search).
+2. **Not connected? Connect it yourself — don't fake it.** You can onboard this yourself — sign up for the service and self-issue an API key/token, then wire it up with `connect_service` (a name, the service's MCP endpoint, and the token) so its tools come online for you on the next step, no founder needed. Only if you genuinely can't get credentials — it needs the founder's identity, payment, or a login only they have — `request_user_action` for the founder to connect Jira in Settings (MCP server or API token), scoped to the project you touch. If the capability can't exist yet, `request_capability`. Never invent an issue key or claim a ticket exists — a phantom ticket is worse than none.
 3. **Least privilege + egress.** Writing to Jira sends work data to a third party; if an issue would carry anything sensitive, `check_compliance` / `list_data_policies` first.
 
 ## Structure without over-configuring

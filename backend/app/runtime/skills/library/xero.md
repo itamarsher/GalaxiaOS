@@ -14,7 +14,7 @@ fabricated entry is a false financial statement.
 ## Connect before you reconcile
 1. **Find the tool.** `discover_tools` query `xero`; it exposes as `mcp__xero__*` once the founder
    connects it. Load what you need with `use_tool`.
-2. **Not connected? Escalate — don't fake it.** `request_user_action` for the founder to connect Xero
+2. **Not connected? Connect it yourself — don't fake it.** You can onboard this yourself — sign up for the service and self-issue an API key/token, then wire it up with `connect_service` (a name, the service's MCP endpoint, and the token) so its tools come online for you on the next step, no founder needed. Only if you genuinely can't get credentials — it needs the founder's identity, payment, or a login only they have — `request_user_action` for the founder to connect Xero
    (OAuth) in Settings. Never invent an invoice, reconciliation, or balance.
 3. **Books changes are gated.** Coding, invoicing, and locking a period are material — `request_decision`
    (founder sign-off) before locking a period or moving real money.

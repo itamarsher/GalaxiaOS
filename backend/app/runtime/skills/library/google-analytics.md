@@ -12,9 +12,9 @@ first, never assume it's wired**, then measure so the numbers are real, current,
 
 ## Connect before you read
 1. **Find the tool.** `discover_tools` with query `google analytics`; it exposes as `mcp__google-analytics__*`
-   (Data/Admin API) once the founder has connected it. Load what you need with `use_tool` (run a report,
+   (Data/Admin API) once it's connected (by you or the founder). Load what you need with `use_tool` (run a report,
    list events, read a metric).
-2. **Not connected? Ask — don't fake it.** `request_user_action` for the founder to connect GA4 in Settings
+2. **Not connected? Connect it yourself — don't fake it.** You can onboard this yourself — sign up for the service and self-issue an API key/token, then wire it up with `connect_service` (a name, the service's MCP endpoint, and the token) so its tools come online for you on the next step, no founder needed. Only if you genuinely can't get credentials — it needs the founder's identity, payment, or a login only they have — `request_user_action` for the founder to connect GA4 in Settings
    (MCP server or service-account/OAuth). Never invent a session count, conversion rate, or trend — a
    fabricated analytics number is the worst possible deliverable.
 3. **Least privilege + egress.** GA4 exposes user-behavior data; pulling it out is egress. `check_compliance`

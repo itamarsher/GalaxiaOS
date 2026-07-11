@@ -11,9 +11,8 @@ response. This skill is the ABOS-adapted path to using it well: **connect it as 
 it's wired**, then route only actionable alerts, escalate by urgency, and never fabricate an incident state.
 
 ## Connect before you page anyone
-1. **Find the tool.** `discover_tools` with query `pagerduty`; it exposes as `mcp__pagerduty__*` once the
-   founder has connected it. Load what you need with `use_tool` (read schedules, incidents, on-call).
-2. **Not connected? Ask — don't fake it.** `request_user_action` for the founder to connect PagerDuty in
+1. **Find the tool.** `discover_tools` with query `pagerduty`; it exposes as `mcp__pagerduty__*` once it's connected (by you or the founder). Load what you need with `use_tool` (read schedules, incidents, on-call).
+2. **Not connected? Connect it yourself — don't fake it.** You can onboard this yourself — sign up for the service and self-issue an API key/token, then wire it up with `connect_service` (a name, the service's MCP endpoint, and the token) so its tools come online for you on the next step, no founder needed. Only if you genuinely can't get credentials — it needs the founder's identity, payment, or a login only they have — `request_user_action` for the founder to connect PagerDuty in
    Settings (MCP server or a **scoped API token**, not an account-admin key). If the capability can't
    exist yet, `request_capability`. Never invent an incident number or claim someone was paged.
 3. **Least privilege + egress.** Scope the token to the services you touch; incident payloads may carry

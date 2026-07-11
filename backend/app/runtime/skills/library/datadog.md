@@ -11,9 +11,8 @@ This skill is the ABOS-adapted path to using it well: **connect it as a tool fir
 wired**, then alert on symptoms not noise, watch ingestion cost, and never report a status you didn't read.
 
 ## Connect before you instrument
-1. **Find the tool.** `discover_tools` with query `datadog`; it exposes as `mcp__datadog__*` once the
-   founder has connected it. Load what you need with `use_tool` (query metrics, list monitors, read logs).
-2. **Not connected? Ask — don't fake it.** `request_user_action` for the founder to connect Datadog in
+1. **Find the tool.** `discover_tools` with query `datadog`; it exposes as `mcp__datadog__*` once it's connected (by you or the founder). Load what you need with `use_tool` (query metrics, list monitors, read logs).
+2. **Not connected? Connect it yourself — don't fake it.** You can onboard this yourself — sign up for the service and self-issue an API key/token, then wire it up with `connect_service` (a name, the service's MCP endpoint, and the token) so its tools come online for you on the next step, no founder needed. Only if you genuinely can't get credentials — it needs the founder's identity, payment, or a login only they have — `request_user_action` for the founder to connect Datadog in
    Settings (MCP server or a **scoped API + app key**, not an org-admin key). If the capability can't
    exist yet, `request_capability`. Never invent a monitor status or claim a service is healthy.
 3. **Least privilege + egress.** Scope keys to what you read/write; telemetry may carry PII in logs —

@@ -12,9 +12,8 @@ as a tool first, never assume it's wired**, then structure work so it stays one 
 another silo. Keep execution here; don't spin up a parallel tracker for the same work.
 
 ## Connect before you plan
-1. **Find the tool.** `discover_tools` with query `asana`; it exposes as `mcp__asana__*` once the founder
-   has connected it. Load what you need with `use_tool` (create projects/tasks, set fields, add rules).
-2. **Not connected? Ask — don't fake it.** `request_user_action` for the founder to connect Asana in
+1. **Find the tool.** `discover_tools` with query `asana`; it exposes as `mcp__asana__*` once it's connected (by you or the founder). Load what you need with `use_tool` (create projects/tasks, set fields, add rules).
+2. **Not connected? Connect it yourself — don't fake it.** You can onboard this yourself — sign up for the service and self-issue an API key/token, then wire it up with `connect_service` (a name, the service's MCP endpoint, and the token) so its tools come online for you on the next step, no founder needed. Only if you genuinely can't get credentials — it needs the founder's identity, payment, or a login only they have — `request_user_action` for the founder to connect Asana in
    Settings (MCP server or API key). Never invent a task link or claim a project exists — a phantom plan
    misleads everyone reading status.
 3. **One tracker, not five.** Before creating a project, check whether the work already lives somewhere; new

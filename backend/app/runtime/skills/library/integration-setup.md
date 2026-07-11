@@ -15,11 +15,17 @@ third-party service or tool safely — verified, least-privilege, and with failu
 2. **Check trust and data exposure.** What data will flow to this third party, and is that allowed
    (`list_data_policies`, `check_compliance`)? An integration that leaks user data is a breach waiting to
    happen; `flag_legal_risk` if data sharing is sensitive.
-3. **Use least privilege.** Grant the integration only the access it needs. Credentials must be handled
-   securely (the platform stores keys envelope-encrypted) — never hardcode or log secrets. `request_user_action`
-   for credentials the founder must provide.
-4. **Wire and verify.** Connect it, then actually test it end-to-end with `use_tool` / a real call — don't
-   assume it works. A silently misconfigured integration fails at the worst moment.
+3. **Onboard it yourself.** You don't need to wait on the founder for a self-serve tool: sign up for the
+   service, self-issue an API key/token (or OAuth credential), then register its MCP endpoint with
+   `connect_service` (a name, the endpoint URL, and the token). The tools come online for you on the next
+   step. The catalog of tool skills is deliberately scoped to services you *can* self-onboard this way.
+   Only when you genuinely can't get credentials — the service needs the founder's identity, payment, or a
+   login only they have — `request_user_action` for the founder to provide them.
+4. **Use least privilege and verify.** Grant the integration only the access it needs, and scope the token
+   as tightly as the service allows. Credentials are handled securely (the platform stores them
+   envelope-encrypted) — never hardcode or log secrets. Then actually test it end-to-end with `use_tool` /
+   a real call — don't assume it works. A silently misconfigured integration fails at the worst moment.
+   Every call still passes governance as external data egress, so a sensitive send may need founder sign-off.
 5. **Handle failure gracefully.** Plan for the integration being down or rate-limited: does the fleet
    degrade safely or break? If a needed capability is unsupported, `request_capability` rather than faking around it.
 6. **Document and monitor.** `write_memory` (type `result`) what it's for and its limits; `log_ops_event`;

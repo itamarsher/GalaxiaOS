@@ -13,7 +13,7 @@ a tool first, never assume it's wired**, then schedule for consistency and route
 ## Connect before you schedule
 1. **Find the tool.** `discover_tools` with query `buffer`; it exposes as `mcp__buffer__*` once the founder
    has connected the channels. Load what you need with `use_tool` (queue a post, read analytics, list channels).
-2. **Not connected? Ask — don't fake it.** `request_user_action` for the founder to connect Buffer and the
+2. **Not connected? Connect it yourself — don't fake it.** You can onboard this yourself — sign up for the service and self-issue an API key/token, then wire it up with `connect_service` (a name, the service's MCP endpoint, and the token) so its tools come online for you on the next step, no founder needed. Only if you genuinely can't get credentials — it needs the founder's identity, payment, or a login only they have — `request_user_action` for the founder to connect Buffer and the
    specific channels in Settings (MCP server or access token). Never claim a post published or invent
    engagement numbers — a phantom post erodes trust with the audience and the founder.
 3. **Egress + brand.** Posts carry brand voice and company data outward; pull tone and assets from the

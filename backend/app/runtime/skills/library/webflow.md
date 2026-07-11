@@ -12,9 +12,8 @@ it's wired**, then lock the content model and class structure before designing s
 and publishes deliberately.
 
 ## Connect before you build
-1. **Find the tool.** `discover_tools` with query `webflow`; Webflow exposes as `mcp__webflow__*` once the
-   founder has connected it. Load what you need with `use_tool` (edit content, manage CMS items, publish).
-2. **Not connected? Ask — don't fake it.** `request_user_action` for the founder to connect Webflow in
+1. **Find the tool.** `discover_tools` with query `webflow`; Webflow exposes as `mcp__webflow__*` once it's connected (by you or the founder). Load what you need with `use_tool` (edit content, manage CMS items, publish).
+2. **Not connected? Connect it yourself — don't fake it.** You can onboard this yourself — sign up for the service and self-issue an API key/token, then wire it up with `connect_service` (a name, the service's MCP endpoint, and the token) so its tools come online for you on the next step, no founder needed. Only if you genuinely can't get credentials — it needs the founder's identity, payment, or a login only they have — `request_user_action` for the founder to connect Webflow in
    Settings (MCP or API key). If it can't exist yet, `request_capability`. Never invent a URL or claim a
    page is live — a phantom site is worse than none.
 3. **Least privilege + egress.** Site content sent to Webflow leaves the company; if it carries anything

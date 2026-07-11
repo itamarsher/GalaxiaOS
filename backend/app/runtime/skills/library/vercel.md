@@ -10,7 +10,7 @@ Vercel is where the fleet's frontends deploy — preview builds per branch, prod
 
 ## Connect before you deploy
 1. **Find the tool.** `discover_tools` with query `vercel`; Vercel exposes as `mcp__vercel__*` once connected. Load what you need with `use_tool` (read a deployment, list env vars, promote or roll back).
-2. **Not connected? Ask — don't fake it.** `request_user_action` for the founder to connect Vercel in Settings with a **token scoped to the specific project**, minimum access. If the capability can't exist yet, `request_capability`. Never invent a deployment URL or claim a build is live — a phantom deploy is worse than none.
+2. **Not connected? Connect it yourself — don't fake it.** You can onboard this yourself — sign up for the service and self-issue an API key/token, then wire it up with `connect_service` (a name, the service's MCP endpoint, and the token) so its tools come online for you on the next step, no founder needed. Only if you genuinely can't get credentials — it needs the founder's identity, payment, or a login only they have — `request_user_action` for the founder to connect Vercel in Settings with a **token scoped to the specific project**, minimum access. If the capability can't exist yet, `request_capability`. Never invent a deployment URL or claim a build is live — a phantom deploy is worse than none.
 3. **Least privilege + egress.** Deploy data and env vars are sensitive; screen with `check_compliance` / `list_data_policies` before exporting secrets or logs off-platform.
 
 ## Ship and operate safely

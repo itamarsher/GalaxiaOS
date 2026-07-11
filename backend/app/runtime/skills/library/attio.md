@@ -12,9 +12,8 @@ with enrichment and workflows layered on top. This skill is the ABOS-adapted pat
 ABOS's own `crm_*` tools stay the system of record; Attio is the graph you sync into and report from.
 
 ## Connect before you model
-1. **Find the tool.** `discover_tools` with query `attio`; it exposes as `mcp__attio__*` once the founder
-   has connected it. Load what you need with `use_tool` (read records, upsert, run a workflow).
-2. **Not connected? Ask — don't fake it.** `request_user_action` for the founder to connect Attio in
+1. **Find the tool.** `discover_tools` with query `attio`; it exposes as `mcp__attio__*` once it's connected (by you or the founder). Load what you need with `use_tool` (read records, upsert, run a workflow).
+2. **Not connected? Connect it yourself — don't fake it.** You can onboard this yourself — sign up for the service and self-issue an API key/token, then wire it up with `connect_service` (a name, the service's MCP endpoint, and the token) so its tools come online for you on the next step, no founder needed. Only if you genuinely can't get credentials — it needs the founder's identity, payment, or a login only they have — `request_user_action` for the founder to connect Attio in
    Settings (MCP server or API key). Never invent a record link or claim a company exists — a phantom
    contact is worse than none, and it corrupts every downstream report.
 3. **Least privilege + egress.** Pushing people/company data to Attio is third-party egress; if anything

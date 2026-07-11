@@ -11,9 +11,8 @@ skill is the ABOS-adapted path to using it well: **connect it as a tool first, n
 then use scoped tokens, encrypt end-to-end, and verify changes actually took at the edge.
 
 ## Connect before you change DNS
-1. **Find the tool.** `discover_tools` with query `cloudflare`; it exposes as `mcp__cloudflare__*` once the
-   founder has connected it. Load what you need with `use_tool` (read DNS, purge cache, manage rules/Workers).
-2. **Not connected? Ask — don't fake it.** `request_user_action` for the founder to connect Cloudflare in
+1. **Find the tool.** `discover_tools` with query `cloudflare`; it exposes as `mcp__cloudflare__*` once it's connected (by you or the founder). Load what you need with `use_tool` (read DNS, purge cache, manage rules/Workers).
+2. **Not connected? Connect it yourself — don't fake it.** You can onboard this yourself — sign up for the service and self-issue an API key/token, then wire it up with `connect_service` (a name, the service's MCP endpoint, and the token) so its tools come online for you on the next step, no founder needed. Only if you genuinely can't get credentials — it needs the founder's identity, payment, or a login only they have — `request_user_action` for the founder to connect Cloudflare in
    Settings (MCP server or a **scoped API token**, never the Global API Key). If the capability can't exist
    yet, `request_capability`. Never invent a DNS record or claim a domain is live.
 3. **Least privilege + one token per job.** Scope each token to a single zone and the exact permission

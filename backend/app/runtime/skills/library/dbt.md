@@ -11,9 +11,8 @@ the ABOS-adapted path: **connect it as a tool first, never assume it's wired**, 
 so lineage, tests, and CI keep the data layer honest.
 
 ## Connect before you model
-1. **Find the tool.** `discover_tools` with query `dbt`; it exposes as `mcp__dbt__*` once the founder has
-   connected it (dbt Cloud / MCP). Load what you need with `use_tool` (run, test, compile, list models).
-2. **Not connected? Ask — don't fake it.** `request_user_action` for the founder to connect dbt in
+1. **Find the tool.** `discover_tools` with query `dbt`; it exposes as `mcp__dbt__*` once it's connected (by you or the founder) (dbt Cloud / MCP). Load what you need with `use_tool` (run, test, compile, list models).
+2. **Not connected? Connect it yourself — don't fake it.** You can onboard this yourself — sign up for the service and self-issue an API key/token, then wire it up with `connect_service` (a name, the service's MCP endpoint, and the token) so its tools come online for you on the next step, no founder needed. Only if you genuinely can't get credentials — it needs the founder's identity, payment, or a login only they have — `request_user_action` for the founder to connect dbt in
    Settings. Never claim a model built or a test passed when it didn't — a phantom run is worse than none.
    Execute against the real project, or escalate.
 3. **Cost is metered; PII + egress.** dbt runs execute on the warehouse (metered) — `request_budget`

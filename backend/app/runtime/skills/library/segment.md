@@ -11,9 +11,8 @@ tool. This skill is the ABOS-adapted path: **connect it as a tool first, never a
 enforce a tracking plan so clean data flows out and PII doesn't leak.
 
 ## Connect before you wire
-1. **Find the tool.** `discover_tools` with query `segment`; it exposes as `mcp__segment__*` once the
-   founder has connected it. Load what you need with `use_tool` (read tracking plan, list sources/destinations).
-2. **Not connected? Ask — don't fake it.** `request_user_action` for the founder to connect Segment in
+1. **Find the tool.** `discover_tools` with query `segment`; it exposes as `mcp__segment__*` once it's connected (by you or the founder). Load what you need with `use_tool` (read tracking plan, list sources/destinations).
+2. **Not connected? Connect it yourself — don't fake it.** You can onboard this yourself — sign up for the service and self-issue an API key/token, then wire it up with `connect_service` (a name, the service's MCP endpoint, and the token) so its tools come online for you on the next step, no founder needed. Only if you genuinely can't get credentials — it needs the founder's identity, payment, or a login only they have — `request_user_action` for the founder to connect Segment in
    Settings (MCP server / workspace token). Never claim an event fired or a destination is live when it
    isn't — a phantom pipeline is worse than none. Verify against the real workspace, or escalate.
 3. **Egress is the whole point — govern it.** Every destination is company data leaving to a third party;

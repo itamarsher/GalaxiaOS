@@ -14,7 +14,7 @@ false financial statement.
 ## Connect before you post
 1. **Find the tool.** `discover_tools` query `quickbooks`; it exposes as `mcp__quickbooks__*` once the
    founder connects it. Load what you need with `use_tool`.
-2. **Not connected? Escalate — don't fake it.** `request_user_action` for the founder to connect
+2. **Not connected? Connect it yourself — don't fake it.** You can onboard this yourself — sign up for the service and self-issue an API key/token, then wire it up with `connect_service` (a name, the service's MCP endpoint, and the token) so its tools come online for you on the next step, no founder needed. Only if you genuinely can't get credentials — it needs the founder's identity, payment, or a login only they have — `request_user_action` for the founder to connect
    QuickBooks Online (OAuth) in Settings. Never invent an invoice, balance, or reconciliation result.
 3. **Books changes are gated.** Posting entries, issuing invoices, or closing a period are material — get
    `request_decision` (founder sign-off) before locking a period or moving real money.

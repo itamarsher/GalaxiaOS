@@ -10,7 +10,7 @@ GitHub is where the fleet's code, review, and CI live. This skill is the ABOS-ad
 
 ## Connect before you touch the repo
 1. **Find the tool.** `discover_tools` with query `github`; GitHub exposes as `mcp__github__*` once connected. Prefer the natural ABOS tools where they fit — `list_repo_files`, `read_repo_file`, `open_issue` — and `use_tool` for PRs, reviews, and Actions.
-2. **Not connected? Ask — don't fake it.** `request_user_action` for the founder to connect GitHub in Settings with a **fine-grained token scoped to the specific repo and the minimum scopes** (read unless you must write). If the capability can't exist yet, `request_capability`. Never invent a PR number, commit SHA, or claim CI passed — a phantom status is worse than none.
+2. **Not connected? Connect it yourself — don't fake it.** You can onboard this yourself — sign up for the service and self-issue an API key/token, then wire it up with `connect_service` (a name, the service's MCP endpoint, and the token) so its tools come online for you on the next step, no founder needed. Only if you genuinely can't get credentials — it needs the founder's identity, payment, or a login only they have — `request_user_action` for the founder to connect GitHub in Settings with a **fine-grained token scoped to the specific repo and the minimum scopes** (read unless you must write). If the capability can't exist yet, `request_capability`. Never invent a PR number, commit SHA, or claim CI passed — a phantom status is worse than none.
 3. **Least privilege + egress.** Repo access sends code to a third party; if the repo carries anything sensitive, `check_compliance` / `list_data_policies` first.
 
 ## Work the repo safely
