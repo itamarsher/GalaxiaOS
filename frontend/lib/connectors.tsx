@@ -88,11 +88,26 @@ export function ReuseCredentialsCard({
         <label
           key={it.id}
           className="kv"
-          style={{ cursor: "pointer", alignItems: "center", gap: 10 }}
+          style={{ cursor: "pointer", justifyContent: "flex-start", alignItems: "flex-start", gap: 10 }}
         >
-          <span style={{ display: "flex", alignItems: "center", gap: 10 }}>
-            <input type="checkbox" checked={selected.has(it.id)} onChange={() => toggle(it.id)} />
-            <span>
+          <input
+            type="checkbox"
+            checked={selected.has(it.id)}
+            onChange={() => toggle(it.id)}
+            style={{ flex: "0 0 auto", marginTop: 3 }}
+          />
+          <span
+            style={{
+              flex: 1,
+              minWidth: 0,
+              display: "flex",
+              flexWrap: "wrap",
+              alignItems: "baseline",
+              columnGap: 8,
+              rowGap: 4,
+            }}
+          >
+            <span style={{ minWidth: 0, overflowWrap: "anywhere" }}>
               <strong>{it.label}</strong>
               {it.detail && <span className="muted"> · <code>{it.detail}</code></span>}
               <br />
@@ -100,8 +115,8 @@ export function ReuseCredentialsCard({
                 from {it.source_company_name}
               </span>
             </span>
+            <span className={`status ${it.kind === "key" ? "active" : "pending"}`}>{it.kind}</span>
           </span>
-          <span className={`status ${it.kind === "key" ? "active" : "pending"}`}>{it.kind}</span>
         </label>
       ))}
       <div className="btnrow">
