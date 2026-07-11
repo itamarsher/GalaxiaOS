@@ -5,6 +5,7 @@ from app.models.agent_listing import AgentListing
 from app.models.apikey import ApiKey
 from app.models.artifact import Artifact
 from app.models.base import Base
+from app.models.billing import PlatformBillingAccount, PlatformCharge
 from app.models.budget import (
     Budget,
     ExternalCharge,
@@ -74,6 +75,8 @@ __all__ = [
     "MetricSignal",
     "InvestmentReview",
     "ApiKey",
+    "PlatformBillingAccount",
+    "PlatformCharge",
     "FounderDigest",
     "Site",
     "SiteDomain",

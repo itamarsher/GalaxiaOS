@@ -544,10 +544,14 @@ async def start(
 
 async def generate(db: AsyncSession, *, company: Company) -> dict:
     """Run the generation LLM calls and persist objectives, KRs, agents, edges."""
-    resolved = await apikeys.resolve_provider(db, company_id=company.id)
+    resolved = await apikeys.resolve_active_provider(db, company_id=company.id)
     if resolved is None:
-        raise OnboardingError("Add a provider API key before generating the organization.")
-    provider, api_key = resolved
+        raise OnboardingError(
+            "No model available to generate the organization. Add your own provider API key, "
+            "or (managed mode) the free platform allowance is used up — upgrade or bring a key."
+        )
+    provider, api_key = resolved.provider, resolved.api_key
+    funding_user_id = resolved.funding_user_id
     planner_model = provider.default_models["planner"]
     # Use the model's full output ceiling so generation is never truncated; the
     # provider streams internally above its safe non-streaming size.
@@ -555,6 +559,17 @@ async def generate(db: AsyncSession, *, company: Company) -> dict:
 
     mission = await db.scalar(select(Mission).where(Mission.company_id == company.id))
     budget = await db.scalar(select(Budget).where(Budget.company_id == company.id))
+
+    # Abuse backstop: a mission the PLATFORM is funding (managed free/paid tier)
+    # passes a cheap acceptability screen first. A founder on their own key is
+    # exempt — their provider's own policies govern what they can run.
+    if resolved.source == "platform":
+        from app.services.screening import screen_mission
+
+        ok, reason = screen_mission(mission.raw_text if mission else "")
+        if not ok:
+            raise OnboardingError(reason or "This mission can't run on the free platform tier.")
+
     meter = CostMeter(SessionLocal)
     set_progress(
         company.id, phase="planning", pct=10, message="Processing…"
@@ -572,6 +587,7 @@ async def generate(db: AsyncSession, *, company: Company) -> dict:
         messages=[Message(role="user", content=mission.raw_text)],
         max_tokens=gen_max_tokens,
         json_schema=MISSION_TO_PLAN_SCHEMA,
+        funding_user_id=funding_user_id,
     )
     plan = _parse_llm_json(plan_resp)
     set_progress(
@@ -628,6 +644,7 @@ async def generate(db: AsyncSession, *, company: Company) -> dict:
         messages=[Message(role="user", content=org_input)],
         max_tokens=gen_max_tokens,
         json_schema=PLAN_TO_ORG_SCHEMA,
+        funding_user_id=funding_user_id,
     )
     org = _parse_llm_json(org_resp)
     set_progress(
@@ -750,10 +767,14 @@ async def refine(db: AsyncSession, *, company: Company, message: str) -> dict:
     if company.status is not CompanyStatus.draft:
         return {"reply": "This company has already launched, so its plan is now live and can't be edited here."}
 
-    resolved = await apikeys.resolve_provider(db, company_id=company.id)
+    resolved = await apikeys.resolve_active_provider(db, company_id=company.id)
     if resolved is None:
-        return {"reply": "Add a provider API key first, then I can refine the plan."}
-    provider, api_key = resolved
+        return {
+            "reply": "No model available to refine the plan — add your own provider key, or "
+            "(managed mode) the free platform allowance is used up; upgrade or bring a key."
+        }
+    provider, api_key = resolved.provider, resolved.api_key
+    funding_user_id = resolved.funding_user_id
     planner_model = provider.default_models["planner"]
 
     snapshot = await _current_plan_snapshot(db, company)
@@ -783,6 +804,7 @@ async def refine(db: AsyncSession, *, company: Company, message: str) -> dict:
         ],
         max_tokens=provider.max_output_tokens(planner_model),
         json_schema=REFINE_SCHEMA,
+        funding_user_id=funding_user_id,
     )
     try:
         patch = _parse_llm_json(resp)

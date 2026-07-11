@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { api, fmtUsd, type Company, type GenerationProgress, type InvestmentReview, type Preview, type ReusableCredential } from "@/lib/api";
+import { api, fmtUsd, type Company, type GenerationProgress, type InvestmentReview, type ManagedStatus, type Preview, type ReusableCredential } from "@/lib/api";
 import { CloudflareCard, GoogleDriveCard, ReuseCredentialsCard } from "@/lib/connectors";
 
 type Step = "loading" | "auth" | "businesses" | "mission" | "key" | "generating" | "review";
@@ -37,6 +37,10 @@ export default function Home() {
   const [reusable, setReusable] = useState<ReusableCredential[]>([]);
   const [reusedKeyProviders, setReusedKeyProviders] = useState<string[]>([]);
   const [reuseNonce, setReuseNonce] = useState(0);
+
+  // Managed mode: whether the platform will fund this founder's compute so they
+  // can launch with no key at all (hosted "no keys needed" tier).
+  const [managed, setManaged] = useState<ManagedStatus | null>(null);
 
   // Refinement chat.
   const [chat, setChat] = useState<ChatTurn[]>([]);
@@ -141,6 +145,9 @@ export default function Home() {
     api.reusableCredentials(companyId)
       .then((items) => { if (!cancelled) setReusable(items); })
       .catch(() => { if (!cancelled) setReusable([]); });
+    api.managedStatus(companyId)
+      .then((s) => { if (!cancelled) setManaged(s); })
+      .catch(() => { if (!cancelled) setManaged(null); });
     return () => { cancelled = true; };
   }, [step, companyId, reuseNonce]);
 
@@ -155,7 +162,7 @@ export default function Home() {
     // Reset the onboarding wizard so creating an Nth business starts clean.
     setCompanyId(null); setApiKey(""); setTavilyKey(""); setResendKey(""); setPreview(null);
     setChat([]); setProgress(null); setMission(""); setBudget("500"); setErr(null);
-    setReusable([]); setReusedKeyProviders([]);
+    setReusable([]); setReusedKeyProviders([]); setManaged(null);
     setStep("mission");
   };
 
@@ -166,9 +173,13 @@ export default function Home() {
       setStep("key");
     });
 
-  // The Anthropic key is required to generate — satisfied either by typing one
-  // now or by having reused one from another business.
+  // A key is no longer strictly required: on the hosted managed tier the platform
+  // funds generation, so a founder can launch with nothing. A key is satisfied by
+  // typing one now or reusing one from another business; otherwise managed mode
+  // (when available and within the free allowance) covers it.
   const hasAnthropicKey = apiKey.trim().length > 0 || reusedKeyProviders.includes("anthropic");
+  const managedCovers = !!(managed?.managed_mode && managed?.allowed);
+  const canGenerate = hasAnthropicKey || managedCovers;
 
   // Kick off generation and poll for progress telemetry in parallel.
   const submitKeyAndGenerate = () =>
@@ -317,27 +328,73 @@ export default function Home() {
 
       {step === "key" && (
         <div className="card">
-          <div className="step">Step 2 · Bring your own key</div>
-          <p className="muted">Your Claude API key is encrypted at rest. Only a fingerprint is ever shown.</p>
+          <div className="step">Step 2 · {managedCovers && !hasAnthropicKey ? "Launch — no keys needed" : "Keys"}</div>
+
+          {/* Managed tier: lead with "you can just launch" when the platform will
+              fund it. Only shown on a deployment with managed mode configured. */}
+          {managed?.managed_mode && managed.configured && (
+            <div className={`card ${managed.allowed ? "" : "muted"}`} style={{ marginTop: 4, background: "rgba(120,180,255,0.06)" }}>
+              {managed.allowed ? (
+                <>
+                  <strong>✨ You&apos;re on the free managed tier</strong>
+                  <p className="muted" style={{ fontSize: 13, margin: "6px 0 0" }}>
+                    No keys required — the platform runs your fleet on us up to{" "}
+                    {fmtUsd(managed.free_allowance_cents)} of usage
+                    {managed.free_remaining_cents < managed.free_allowance_cents &&
+                      ` (${fmtUsd(managed.free_remaining_cents)} left)`}. Bring your own model key
+                    anytime to remove the cap and run on your own account.
+                  </p>
+                </>
+              ) : (
+                <>
+                  <strong>Free managed allowance used up</strong>
+                  <p className="muted" style={{ fontSize: 13, margin: "6px 0 0" }}>
+                    {managed.reason ?? "Add your own model key below, or upgrade to managed in Settings."}
+                  </p>
+                </>
+              )}
+            </div>
+          )}
+
           {reusedKeyProviders.includes("anthropic") ? (
-            <p className="muted" style={{ fontSize: 13 }}>
+            <p className="muted" style={{ fontSize: 13, marginTop: 10 }}>
               ✓ Reused your Anthropic key from another business. You can generate now, or paste a
               different key below to override it.
             </p>
           ) : null}
-          <label>Anthropic API key {reusedKeyProviders.includes("anthropic") && <span className="muted">(optional — reused)</span>}</label>
-          <input type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)} placeholder="sk-ant-..." />
-          <label>Tavily API key <span className="muted">(optional)</span></label>
-          <input type="password" value={tavilyKey} onChange={(e) => setTavilyKey(e.target.value)} placeholder="tvly-… — enables real web search" />
-          <label>Resend API key <span className="muted">(optional)</span></label>
-          <input type="password" value={resendKey} onChange={(e) => setResendKey(e.target.value)} placeholder="re_… — send real email from your domain (free tier)" />
-          <p className="muted" style={{ fontSize: 12, marginTop: 4 }}>
-            Optional. Without Tavily, web search returns simulated results; without Resend, email
-            is simulated. You can add or change these later in Settings.
-          </p>
-          <button disabled={busy || !hasAnthropicKey} onClick={submitKeyAndGenerate}>
-            Generate organization
+
+          {/* The key inputs stay available but are optional under managed mode.
+              Collapse them behind a disclosure so the default path is "just launch". */}
+          <details open={!managedCovers || hasAnthropicKey} style={{ marginTop: 10 }}>
+            <summary style={{ cursor: "pointer", fontSize: 14 }}>
+              {managedCovers ? "Advanced · Use your own keys (optional)" : "Bring your own key"}
+            </summary>
+            <div style={{ marginTop: 10 }}>
+              <p className="muted" style={{ fontSize: 12 }}>
+                Your keys are encrypted at rest. Only a fingerprint is ever shown. A model key runs
+                the fleet on your own account (no platform cap).
+              </p>
+              <label>Anthropic API key {(reusedKeyProviders.includes("anthropic") || managedCovers) && <span className="muted">(optional)</span>}</label>
+              <input type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)} placeholder="sk-ant-..." />
+              <label>Tavily API key <span className="muted">(optional)</span></label>
+              <input type="password" value={tavilyKey} onChange={(e) => setTavilyKey(e.target.value)} placeholder="tvly-… — enables real web search" />
+              <label>Resend API key <span className="muted">(optional)</span></label>
+              <input type="password" value={resendKey} onChange={(e) => setResendKey(e.target.value)} placeholder="re_… — send real email from your domain (free tier)" />
+              <p className="muted" style={{ fontSize: 12, marginTop: 4 }}>
+                Without Tavily, web search {managedCovers ? "uses the platform default" : "returns simulated results"};
+                without Resend, email is simulated. You can add or change these later in Settings.
+              </p>
+            </div>
+          </details>
+
+          <button disabled={busy || !canGenerate} onClick={submitKeyAndGenerate}>
+            {managedCovers && !hasAnthropicKey ? "Launch — generate organization" : "Generate organization"}
           </button>
+          {!canGenerate && (
+            <p className="muted" style={{ fontSize: 12, marginTop: 6 }}>
+              Add a model key above to generate{managed?.managed_mode ? " (free managed tier isn't available for this account)" : ""}.
+            </p>
+          )}
         </div>
       )}
 

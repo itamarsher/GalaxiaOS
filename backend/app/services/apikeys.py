@@ -7,10 +7,12 @@ DB stores ciphertext + a wrapped data key + a display fingerprint.
 from __future__ import annotations
 
 import uuid
+from dataclasses import dataclass
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
 from app.crypto import envelope
 from app.models import ApiKey
 from app.models.enums import ApiKeyStatus
@@ -128,6 +130,9 @@ async def resolve_provider(
 
     This is what makes BYOK provider-agnostic: the provider is chosen by which
     key the founder configured, not hardcoded. Returns ``None`` if no usable key.
+
+    This is the low-level BYO-only lookup; callers that should fall back to the
+    platform key under managed mode use :func:`resolve_active_provider` instead.
     """
     key = await get_active_key(db, company_id=company_id)
     if key is None:
@@ -138,3 +143,60 @@ async def resolve_provider(
         nonce=key.nonce,
     )
     return get_provider(key.provider), envelope.open_secret(sealed)
+
+
+@dataclass(frozen=True)
+class ResolvedProvider:
+    """A resolved LLM credential plus who is funding it.
+
+    ``source`` is ``"byo"`` (the founder's own stored key — never metered against
+    the platform allowance) or ``"platform"`` (the shared managed key). For a
+    platform key, ``funding_user_id`` is the founder to bill; pass it straight to
+    ``CostMeter.run_llm(..., funding_user_id=...)`` so the spend lands on their
+    allowance. It is ``None`` for a BYO key (nothing to meter against the platform).
+    """
+
+    provider: LLMProvider
+    api_key: str
+    source: str  # "byo" | "platform"
+    provider_name: str
+    funding_user_id: uuid.UUID | None = None
+
+
+async def resolve_active_provider(
+    db: AsyncSession, *, company_id: uuid.UUID
+) -> ResolvedProvider | None:
+    """The LLM a company should think with: its own key first, else the platform's.
+
+    A founder's stored BYOK key always wins. Otherwise, when managed mode is on,
+    a configured platform key is offered — but only if the founder is still
+    eligible (within their free allowance / daily cap, or on the paid tier).
+    Returns ``None`` when neither is available (no BYOK and managed unavailable or
+    the founder is over their cap), leaving the "add a key / upgrade" decision to
+    the caller.
+    """
+    byo = await resolve_provider(db, company_id=company_id)
+    if byo is not None:
+        provider, api_key = byo
+        return ResolvedProvider(provider, api_key, "byo", provider.name)
+
+    # No BYOK — try the platform key under managed mode.
+    from app.services import billing
+
+    if not await billing.platform_llm_configured():
+        return None
+    elig = await billing.platform_available(db, company_id=company_id)
+    if not elig.allowed:
+        return None
+    try:
+        provider = get_provider(settings.platform_llm_provider)
+    except ValueError:
+        return None
+    owner_id = await billing.owner_of(db, company_id=company_id)
+    return ResolvedProvider(
+        provider,
+        settings.platform_llm_api_key,
+        "platform",
+        settings.platform_llm_provider,
+        funding_user_id=owner_id,
+    )
