@@ -142,6 +142,19 @@ def _absorb_use_tool(active: set[str], tool_calls) -> None:
 
 class NativeBackend:
     async def run(self, ctx: RuntimeContext, agent: Agent, task: Task) -> dict:
+        # A task that parked to wait for a teammate's (or the founder's) reply must
+        # resume back INTO waiting until that reply actually arrives — not free-run
+        # the model. The pending ChatWait is the durable source of truth for "still
+        # blocked"; the checkpointed transcript deliberately never records the wait
+        # (the loop parks before the step is persisted, so the idempotent re-issue
+        # can re-deliver the reply on the real wake-up). Without this guard a task
+        # resumed while its wait is still pending would replay a history that
+        # predates the wait and could act as if the work were done — e.g. message
+        # the founder with a result instead of continuing to wait. A satisfied wait
+        # (the reply landed) is NOT pending, so the normal resume proceeds.
+        if await self._still_waiting_for_reply(ctx, task):
+            return {"status": TaskStatus.waiting_approval.value}
+
         async with ctx.session_factory() as db:
             await set_tenant(db, task.company_id)
             mission = await db.scalar(
@@ -289,6 +302,28 @@ class NativeBackend:
             await self._save_transcript(ctx, task, messages)
 
         return await self._finish_or_audit(ctx, agent, task, {"summary": "step cap reached"})
+
+    async def _still_waiting_for_reply(self, ctx: RuntimeContext, task: Task) -> bool:
+        """Re-park a resumed task that still holds a pending reply-wait.
+
+        Returns ``True`` (and flips the task back to ``waiting_approval``) when a
+        pending :class:`~app.models.ChatWait` is outstanding — the task was woken but
+        the reply it is blocked on has not arrived, so it must keep waiting rather
+        than run the loop. Returns ``False`` for a task with no pending wait (a fresh
+        task, or one whose wait was satisfied by an arriving reply), letting the
+        normal loop proceed.
+        """
+        async with ctx.session_factory() as db:
+            await set_tenant(db, task.company_id)
+            wait = await chat.pending_reply_wait_for_task(db, task_id=task.id)
+            if wait is None:
+                return False
+            row = await db.get(Task, task.id)
+            if row is not None:
+                row.status = TaskStatus.waiting_approval
+                await db.commit()
+        task.status = TaskStatus.waiting_approval  # keep the in-memory copy consistent
+        return True
 
     def _resume_or_seed(self, task: Task) -> list[Message]:
         """Resume the loop from a persisted checkpoint, else seed a fresh start.
