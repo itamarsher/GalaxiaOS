@@ -52,6 +52,21 @@ export interface Company { id: string; name: string; status: string; mission_id:
 export interface ApiKey { id: string; provider: string; key_fingerprint: string; status: string }
 export interface CloudflareStatus { configured: boolean; account_id: string | null }
 export interface GoogleDriveStatus { configured: boolean; root_folder_id: string | null; connect_available: boolean }
+export interface ManagedStatus {
+  managed_mode: boolean;
+  configured: boolean;
+  tier: "free" | "blocked" | "paid_managed";
+  free_allowance_cents: number;
+  platform_spent_cents: number;
+  free_remaining_cents: number;
+  spent_today_cents: number;
+  daily_cap_cents: number;
+  allowed: boolean;
+  reason?: string | null;
+  has_own_llm_key: boolean;
+  byo_llm_providers: string[];
+  upgrade_available: boolean;
+}
 export interface CompanyFile {
   id: string; category: string; name: string; description: string | null;
   mime_type: string; folder_path: string; web_url: string | null;
@@ -229,6 +244,12 @@ export const api = {
   apiKeys: (companyId: string) => req<ApiKey[]>(`/companies/${companyId}/api-keys`),
   deleteApiKey: (companyId: string, keyId: string) =>
     req<void>(`/companies/${companyId}/api-keys/${keyId}`, { method: "DELETE" }),
+
+  // Managed mode (hosted no-keys tier): the owning founder's platform standing.
+  managedStatus: (companyId: string) =>
+    req<ManagedStatus>(`/companies/${companyId}/managed`),
+  upgradeManaged: (companyId: string) =>
+    req<{ url: string }>(`/companies/${companyId}/managed/upgrade`, { method: "POST" }),
 
   cloudflareStatus: (companyId: string) =>
     req<CloudflareStatus>(`/companies/${companyId}/integrations/cloudflare`),

@@ -86,13 +86,20 @@ async def answer(
     ``user_id`` is the founder asking; it is attributed to any capability/bug
     request this command files, so the backlog tracks who asked.
     """
-    resolved = await apikeys.resolve_provider(db, company_id=company_id)
+    resolved = await apikeys.resolve_active_provider(db, company_id=company_id)
     if resolved is None:
-        return ("Add a provider API key to use the copilot.", "query")
-    provider, api_key = resolved
+        return (
+            "No model available for the copilot — add your own provider key, or (managed mode) "
+            "the free platform allowance is used up; upgrade or bring a key.",
+            "query",
+        )
+    provider, api_key = resolved.provider, resolved.api_key
+    funding_user_id = resolved.funding_user_id
 
     if question.strip().lower().startswith(_COMMAND_VERBS):
-        action = await _parse_command(provider, company_id, api_key, question)
+        action = await _parse_command(
+            provider, company_id, api_key, question, funding_user_id=funding_user_id
+        )
         text = await _execute_command(
             db, company_id=company_id, action=action, user_id=user_id
         )
@@ -114,11 +121,14 @@ async def answer(
         ),
         messages=[Message(role="user", content=f"Company state:\n{state}\n\nQuestion: {question}")],
         max_tokens=600,
+        funding_user_id=funding_user_id,
     )
     return (resp.text, "query")
 
 
-async def _parse_command(provider, company_id: uuid.UUID, api_key: str, question: str) -> dict:
+async def _parse_command(
+    provider, company_id: uuid.UUID, api_key: str, question: str, *, funding_user_id=None
+) -> dict:
     meter = CostMeter(SessionLocal)
     resp = await meter.run_llm(
         provider,
@@ -130,6 +140,7 @@ async def _parse_command(provider, company_id: uuid.UUID, api_key: str, question
         system=COMMAND_PARSE_SYSTEM,
         messages=[Message(role="user", content=question)],
         max_tokens=200,
+        funding_user_id=funding_user_id,
     )
     try:
         text = resp.text
@@ -282,10 +293,10 @@ async def generate_digest(
     if state_hash is None:
         state_hash = await _state_fingerprint(db, company_id)
     pending = await _pending_decisions(db, company_id)
-    resolved = await apikeys.resolve_provider(db, company_id=company_id)
+    resolved = await apikeys.resolve_active_provider(db, company_id=company_id)
     summary = state
     if resolved is not None:
-        provider, api_key = resolved
+        provider, api_key = resolved.provider, resolved.api_key
         meter = CostMeter(SessionLocal)
         resp = await meter.run_llm(
             provider,
@@ -300,6 +311,7 @@ async def generate_digest(
             ),
             messages=[Message(role="user", content=state)],
             max_tokens=500,
+            funding_user_id=resolved.funding_user_id,
         )
         summary = resp.text
 

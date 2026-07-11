@@ -134,20 +134,32 @@ _NO_STORE_HINT = (
 )
 
 
-async def _resolve_media_gen(db, company_id) -> MediaGen | None:
-    """The company's media generator — a per-company BYO Google key first, else global.
+async def _resolve_media_gen(db, company_id) -> tuple[MediaGen | None, object | None, str | None]:
+    """The company's media generator + who funds it.
 
-    Returns ``None`` (so the tool reports the capability unsupported) when neither a
-    per-company key nor a globally configured provider is available.
+    Returns ``(media, funding_user_id, reason)``. A per-company BYO Google key
+    wins (funded by the founder — ``funding_user_id`` None). Otherwise the global
+    provider is used; under managed mode that's platform-funded and gated by the
+    founder's managed eligibility (``funding_user_id`` set when allowed, else
+    ``(None, None, reason)`` so the tool reports it unsupported). Returns
+    ``(None, None, None)`` when neither a key nor a global provider is available.
     """
-    from app.services import apikeys
+    from app.services import apikeys, billing
 
     key = await apikeys.get_plaintext_key(db, company_id=company_id, provider=MEDIA_GEN_PROVIDER)
     if key:
         from app.integrations.nano_banana import NanoBananaMediaGen
 
-        return NanoBananaMediaGen(api_key=key)
-    return get_media_gen()
+        return NanoBananaMediaGen(api_key=key), None, None
+    media = get_media_gen()
+    if media is None:
+        return None, None, None
+    allowed, funding_user_id, reason = await billing.platform_capability_funding(
+        db, company_id=company_id
+    )
+    if not allowed:
+        return None, None, reason
+    return media, funding_user_id, None
 
 
 async def _brand_context(db, *, company_id, provider) -> str:
@@ -207,11 +219,11 @@ async def _generate_and_file(
     if not prompt:
         return ToolOutcome(observation="A prompt is required.", is_error=True)
 
-    media = await _resolve_media_gen(db, task.company_id)
+    media, funding_user_id, funding_reason = await _resolve_media_gen(db, task.company_id)
     if media is None:
         return unsupported_capability(
             f"Generating {'a video' if kind == 'video' else 'an image'}",
-            hint=_UNSUPPORTED_HINT,
+            hint=funding_reason or _UNSUPPORTED_HINT,
         )
     file_provider = await resolve_file_provider(db, company_id=task.company_id)
     if file_provider is None:
@@ -250,6 +262,8 @@ async def _generate_and_file(
             sku=prompt[:120],
             action=_do,
             description=f"generate {kind}: {prompt[:80]}",
+            funding_user_id=funding_user_id,
+            funding_kind="media",
         )
     except MediaGenError as exc:
         return ToolOutcome(observation=f"{kind} generation failed: {exc}", is_error=True)

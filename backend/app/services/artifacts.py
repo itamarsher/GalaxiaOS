@@ -90,10 +90,11 @@ async def generate_artifact(
     """
     from app.services.copilot import _company_state
 
-    resolved = await apikeys.resolve_provider(db, company_id=company_id)
+    resolved = await apikeys.resolve_active_provider(db, company_id=company_id)
     if resolved is None:
         return None
-    provider, api_key = resolved
+    provider, api_key = resolved.provider, resolved.api_key
+    funding_user_id = resolved.funding_user_id
 
     framing = KINDS.get(kind, KINDS["custom"])
     relevant = await memory_svc.query(
@@ -118,6 +119,7 @@ async def generate_artifact(
         ),
         messages=[Message(role="user", content=f"Company state:\n{state}\n\nTask: {ask}")],
         max_tokens=1200,
+        funding_user_id=funding_user_id,
     )
     body = resp.text.strip()
     # Derive a title from the leading H1 when present, else fall back to the kind.

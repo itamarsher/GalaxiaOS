@@ -148,7 +148,7 @@ async def test_copilot_command_records_capability_request(
 async def test_web_search_is_unsupported_without_a_key(session_factory, company_with_budget):
     _set_master_key()
     async with session_factory() as db:
-        search, cost = await _resolve_web_search(db, company_with_budget)
+        search, cost, _funding, _reason = await _resolve_web_search(db, company_with_budget)
     # No Tavily key and no global provider -> None, so web_search reports the
     # capability is unsupported (no simulated results are fabricated).
     assert search is None
@@ -164,7 +164,7 @@ async def test_web_search_uses_tavily_with_a_cost_when_key_set(session_factory, 
         )
         await db.commit()
     async with session_factory() as db:
-        search, cost = await _resolve_web_search(db, company_with_budget)
+        search, cost, _funding, _reason = await _resolve_web_search(db, company_with_budget)
     assert isinstance(search, TavilyWebSearch)
     assert cost > 0  # a real provider has a metered cost
 
@@ -185,7 +185,7 @@ async def test_real_web_search_reserves_and_charges_the_budget(
 
     # Force a real (cost-bearing) provider without touching the network.
     async def _fake_resolve(_db, _cid):
-        return _FakeSearch(), 5
+        return _FakeSearch(), 5, None, None
 
     monkeypatch.setattr("app.runtime.tools.core._resolve_web_search", _fake_resolve)
 
@@ -235,7 +235,7 @@ async def test_web_search_commits_measured_credits_not_the_estimate(
 
     # Reserve the basic-depth estimate (1 credit) even though the call bills 2.
     async def _fake_resolve(_db, _cid):
-        return _FakeTavily(), settings.web_search_cost_cents
+        return _FakeTavily(), settings.web_search_cost_cents, None, None
 
     monkeypatch.setattr("app.runtime.tools.core._resolve_web_search", _fake_resolve)
 

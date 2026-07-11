@@ -130,9 +130,11 @@ async def test_review_visual_sends_the_image(monkeypatch):
     meter = _FakeCostMeter({"approved": True, "score": 9, "issues": [], "revision": ""})
 
     async def _resolve(db, *, company_id):
-        return _FakeProvider(), "key"
+        from app.services.apikeys import ResolvedProvider
 
-    monkeypatch.setattr(critic.apikeys, "resolve_provider", _resolve)
+        return ResolvedProvider(_FakeProvider(), "key", "byo", "fake")
+
+    monkeypatch.setattr(critic.apikeys, "resolve_active_provider", _resolve)
     agent, task = _FakeAgent(), _FakeTask()
     verdict = await critic.review_visual(
         object(), _Ctx(meter), company_id=task.company_id, agent=agent, task=task,
@@ -151,9 +153,11 @@ async def test_review_visual_page_uses_html_text(monkeypatch):
     meter = _FakeCostMeter({"approved": False, "score": 2, "issues": ["plain"], "revision": "style it"})
 
     async def _resolve(db, *, company_id):
-        return _FakeProvider(), "key"
+        from app.services.apikeys import ResolvedProvider
 
-    monkeypatch.setattr(critic.apikeys, "resolve_provider", _resolve)
+        return ResolvedProvider(_FakeProvider(), "key", "byo", "fake")
+
+    monkeypatch.setattr(critic.apikeys, "resolve_active_provider", _resolve)
     agent, task = _FakeAgent(), _FakeTask()
     verdict = await critic.review_visual(
         object(), _Ctx(meter), company_id=task.company_id, agent=agent, task=task,
@@ -169,9 +173,11 @@ async def test_review_output_is_devils_advocate_text(monkeypatch):
     meter = _FakeCostMeter({"approved": False, "score": 4, "issues": ["vague"], "revision": "be concrete"})
 
     async def _resolve(db, *, company_id):
-        return _FakeProvider(), "key"
+        from app.services.apikeys import ResolvedProvider
 
-    monkeypatch.setattr(critic.apikeys, "resolve_provider", _resolve)
+        return ResolvedProvider(_FakeProvider(), "key", "byo", "fake")
+
+    monkeypatch.setattr(critic.apikeys, "resolve_active_provider", _resolve)
     agent, task = _FakeAgent(AgentRole.growth), _FakeTask(goal="Grow signups")
     verdict = await critic.review_output(
         object(), _Ctx(meter), company_id=task.company_id, agent=agent, task=task,
@@ -185,9 +191,11 @@ async def test_review_output_skips_empty_summary(monkeypatch):
     meter = _FakeCostMeter({"approved": True, "score": 8, "issues": [], "revision": ""})
 
     async def _resolve(db, *, company_id):
-        return _FakeProvider(), "key"
+        from app.services.apikeys import ResolvedProvider
 
-    monkeypatch.setattr(critic.apikeys, "resolve_provider", _resolve)
+        return ResolvedProvider(_FakeProvider(), "key", "byo", "fake")
+
+    monkeypatch.setattr(critic.apikeys, "resolve_active_provider", _resolve)
     v = await critic.review_output(
         object(), _Ctx(meter), company_id=None, agent=_FakeAgent(), task=_FakeTask(),
         output={"summary": ""},

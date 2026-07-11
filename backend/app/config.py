@@ -71,6 +71,50 @@ class Settings(BaseSettings):
     # Envelope encryption: 32-byte master key, base64url-encoded.
     master_key: str = ""
 
+    # ── Managed mode (hosted "no keys needed" tier) ─────────────────────────
+    # When true, a founder who stores NO provider key of their own still gets a
+    # working fleet: the deployment supplies a shared platform LLM key (and the
+    # platform-configured read-only capabilities — web search, media-gen), and
+    # the resulting spend is metered against a per-founder free allowance that
+    # can convert to paid managed usage. This is the seam that lets the hosted
+    # product launch with zero keys. It is DEFAULT OFF so self-hosting stays
+    # strictly BYOK (the operator would be paying for every tenant otherwise).
+    # A founder's own stored key always wins over the platform key, is never
+    # metered against the platform allowance, and lifts every managed limit.
+    managed_mode_enabled: bool = False
+    # The shared LLM the platform funds for managed companies. The provider is
+    # explicit (unlike BYOK, where the stored key's slot picks the provider),
+    # and must be one of providers.registry.supported_providers(). The key is a
+    # deployment secret — never an ``ApiKey`` row, never returned by any API,
+    # only ever handed to ``provider.complete``. Empty key => managed LLM is
+    # unavailable even when managed_mode_enabled (companies without a BYOK key
+    # can't launch), so set both when turning managed mode on.
+    #
+    # Defaults to ``openrouter`` (open-source models over an OpenAI-compatible
+    # host): a subsidized free tier wants the cheapest capable tokens, and OSS
+    # models on OpenRouter are typically far cheaper per token than Claude. Point
+    # it at ``anthropic`` (or any supported provider) if you'd rather fund Claude.
+    platform_llm_provider: str = "openrouter"
+    platform_llm_api_key: str = ""
+    # Per-founder lifetime free allowance of platform-funded spend (cents). Once
+    # a founder's cumulative platform spend crosses this, managed capabilities
+    # stop for them until they add their own key or upgrade to paid managed.
+    # Pooled per founder ACCOUNT (across all their companies) so spinning up new
+    # companies can't multiply the free tier.
+    platform_free_tier_cents: int = 200
+    # Abuse backstop: cap platform-funded spend per founder per UTC day, so a
+    # single account can't burn the shared key in one burst even within its free
+    # allowance. 0 disables the daily guard.
+    platform_daily_cap_cents: int = 100
+    # Stripe metered price id for the paid managed tier (usage-based billing of
+    # platform-funded spend). Empty => the upgrade-to-managed flow reports it is
+    # not configured (the free tier still works; over-cap companies are asked to
+    # bring their own key). Reuses ABOS_STRIPE_SECRET_KEY for the API call.
+    stripe_managed_price_id: str = ""
+    # Markup applied to platform-funded cost when billing paid-managed usage
+    # (1.0 = passthrough, 1.3 = +30%). This is the hosted-convenience margin.
+    managed_billing_markup: float = 1.3
+
     # Deployment topology. When true, the API process also runs the arq worker
     # in-process (think→act loop + cron jobs) instead of relying on a separate
     # worker service. Lets the whole app run on a single free-tier web instance;

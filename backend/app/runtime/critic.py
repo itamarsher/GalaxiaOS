@@ -167,10 +167,10 @@ async def _run(
     if not settings.critic_enabled:
         return None
     try:
-        resolved = await apikeys.resolve_provider(db, company_id=company_id)
+        resolved = await apikeys.resolve_active_provider(db, company_id=company_id)
         if resolved is None:
             return None
-        provider, api_key = resolved
+        provider, api_key = resolved.provider, resolved.api_key
         resp = await ctx.cost_meter.run_llm(
             provider,
             api_key=api_key,
@@ -182,6 +182,7 @@ async def _run(
             messages=[Message(role="user", content=content)],
             max_tokens=_MAX_VERDICT_TOKENS,
             json_schema=CRITIC_VERDICT_SCHEMA,
+            funding_user_id=resolved.funding_user_id,
         )
     except Exception:  # noqa: BLE001 - a critic failure must never block the agent
         _log.exception("critic call failed for task %s", task.id)
