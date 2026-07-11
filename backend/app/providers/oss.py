@@ -71,10 +71,14 @@ class OpenRouterProvider(_OSSOpenAICompatProvider):
         "planner": "meta-llama/llama-3.3-70b-instruct",
         "strategic": "deepseek/deepseek-r1",
     }
+    # Cents per 1M tokens. Snapshot of OpenRouter list prices (2026-07); the cheap
+    # host for each model can vary and OpenRouter adds a small credit fee, so treat
+    # these as estimates — the reservation reconciles from real token usage after
+    # the call. Refresh when OpenRouter's rates move.
     price_table = {
-        "openai/gpt-oss-120b": Price(input_cents_per_mtok=15, output_cents_per_mtok=60),
-        "meta-llama/llama-3.3-70b-instruct": Price(input_cents_per_mtok=60, output_cents_per_mtok=60),
-        "deepseek/deepseek-r1": Price(input_cents_per_mtok=80, output_cents_per_mtok=240),
+        "openai/gpt-oss-120b": Price(input_cents_per_mtok=3.6, output_cents_per_mtok=18),
+        "meta-llama/llama-3.3-70b-instruct": Price(input_cents_per_mtok=10, output_cents_per_mtok=32),
+        "deepseek/deepseek-r1": Price(input_cents_per_mtok=70, output_cents_per_mtok=250),
     }
 
 
