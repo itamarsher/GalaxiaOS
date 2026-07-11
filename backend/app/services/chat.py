@@ -632,6 +632,30 @@ async def pending_wait_for_task(
     )
 
 
+async def pending_reply_wait_for_task(
+    db: AsyncSession, *, task_id: uuid.UUID
+) -> ChatWait | None:
+    """Any *still-pending* reply-wait this task holds, in any channel or thread.
+
+    A pending :class:`ChatWait` is the durable, authoritative "this task is BLOCKED
+    on a teammate's (or the founder's) reply" flag — set the moment the task parks
+    and cleared to ``satisfied`` only when a reply actually arrives. Unlike
+    :func:`pending_wait_for_task` this isn't scoped to one conversation and never
+    returns a satisfied wait: it answers the single question "on resume, is this
+    task still supposed to be waiting?" so the loop can re-park it instead of
+    free-running the model (which never checkpoints the wait into the transcript).
+    """
+    return await db.scalar(
+        select(ChatWait)
+        .where(
+            ChatWait.task_id == task_id,
+            ChatWait.status == ChatWaitStatus.pending,
+        )
+        .order_by(ChatWait.created_at.desc())
+        .limit(1)
+    )
+
+
 def render_message(message: ChatMessage, sender_label: str) -> str:
     return f"{sender_label}: {message.body}"
 
