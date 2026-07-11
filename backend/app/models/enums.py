@@ -95,6 +95,14 @@ class BudgetPeriod(str, enum.Enum):
     total = "total"
 
 
+class ManagedTier(str, enum.Enum):
+    """A founder's managed-mode standing (platform-funded compute)."""
+
+    free = "free"  # within the free platform allowance
+    blocked = "blocked"  # free allowance spent; needs BYOK or an upgrade
+    paid_managed = "paid_managed"  # metered paid usage via the billing provider
+
+
 class PolicyEffect(str, enum.Enum):
     allow = "allow"
     deny = "deny"

@@ -714,44 +714,54 @@ async def _record_metric(db, ctx, *, agent: Agent, task: Task, args: dict) -> To
 WEB_SEARCH_PROVIDER = "tavily"
 
 
-async def _resolve_web_search(db, company_id) -> tuple[object | None, int]:
-    """Return ``(provider, cost_cents)`` for this company's web search.
+async def _resolve_web_search(db, company_id) -> tuple[object | None, int, object | None, str | None]:
+    """Return ``(provider, cost_cents, funding_user_id, reason)`` for web search.
 
     A founder can attach a Tavily key per company (onboarding or Settings); with
-    one we run real, billable web search. Without it we fall back to the configured
-    default, which is ``None`` unless the deployment set a global real provider —
-    there is no simulated provider, so an unconfigured environment resolves to
-    ``(None, 0)`` and the tool reports the capability is unsupported. The returned
-    ``cost_cents`` is the *estimate* the CostMeter reserves up front
-    (``web_search_cost_cents`` per expected credit; advanced depth assumes two
-    credits). The committed actual is reconciled afterwards from the credits Tavily
-    reports per call — see :func:`_web_search`.
+    one we run real, billable web search funded by them (``funding_user_id`` is
+    ``None`` — their own key, never metered against the platform allowance).
+
+    Without a key we fall back to the globally-configured provider. Under managed
+    mode that global provider is platform-funded, so it's gated by the founder's
+    managed eligibility and — when allowed — the spend is attributed to them
+    (``funding_user_id`` set). When managed mode is off, the operator's global
+    provider serves everyone as before. With no global provider (and no key), or
+    when the founder is over their managed cap, this resolves to
+    ``(None, 0, None, reason)`` and the tool reports the capability unsupported.
     """
-    from app.services import apikeys
+    from app.services import apikeys, billing
 
     key = await apikeys.get_plaintext_key(
         db, company_id=company_id, provider=WEB_SEARCH_PROVIDER
     )
+    funding_user_id = None
     if key:
         from app.integrations.tavily import TavilyWebSearch
 
         search: object | None = TavilyWebSearch(api_key=key)
     else:
         search = get_web_search()
+        if search is not None:
+            allowed, funding_user_id, reason = await billing.platform_capability_funding(
+                db, company_id=company_id
+            )
+            if not allowed:
+                return None, 0, None, reason
 
     if search is None:
-        return None, 0
+        return None, 0, None, None
     multiplier = 2 if settings.tavily_search_depth == "advanced" else 1
-    return search, settings.web_search_cost_cents * multiplier
+    return search, settings.web_search_cost_cents * multiplier, funding_user_id, None
 
 
 async def _web_search(db, ctx, *, agent: Agent, task: Task, args: dict) -> ToolOutcome:
     query = args["query"]
-    search, cost_cents = await _resolve_web_search(db, task.company_id)
+    search, cost_cents, funding_user_id, reason = await _resolve_web_search(db, task.company_id)
     if search is None:
         return unsupported_capability(
             "Web search",
-            hint="No web-search provider is connected (add a Tavily key in Settings).",
+            hint=reason
+            or "No web-search provider is connected (add a Tavily key in Settings).",
         )
     try:
         if cost_cents > 0:
@@ -790,6 +800,8 @@ async def _web_search(db, ctx, *, agent: Agent, task: Task, args: dict) -> ToolO
                 sku=query[:120],
                 action=_do,
                 description=f"web search: {query[:80]}",
+                funding_user_id=funding_user_id,
+                funding_kind="web_search",
             )
             results = captured.get("results", [])
         else:

@@ -75,8 +75,14 @@ class CostMeter:
         tools: list[ToolSpec] | None = None,
         max_tokens: int = 4096,
         json_schema: dict | None = None,
+        funding_user_id: uuid.UUID | None = None,
     ) -> LLMResponse:
-        """Reserve worst-case cost, call the provider, reconcile to actual usage."""
+        """Reserve worst-case cost, call the provider, reconcile to actual usage.
+
+        When ``funding_user_id`` is set the spend was funded by the shared
+        platform key (managed mode), so the committed actual is *also* recorded
+        against that founder's platform allowance in the same transaction.
+        """
         price = provider.price(model)
         est_in = provider.estimate_input_tokens(
             api_key=api_key, model=model, system=system, messages=messages
@@ -126,9 +132,38 @@ class CostMeter:
                         latency_ms=latency_ms,
                     )
                 )
+                await self._record_platform_spend(
+                    db,
+                    funding_user_id=funding_user_id,
+                    company_id=company_id,
+                    cents=actual_cents,
+                    kind="llm",
+                )
                 await db.commit()
             committed["done"] = True
         return resp
+
+    @staticmethod
+    async def _record_platform_spend(
+        db: AsyncSession,
+        *,
+        funding_user_id: uuid.UUID | None,
+        company_id: uuid.UUID,
+        cents: int,
+        kind: str,
+    ) -> None:
+        """Attribute platform-funded spend to the founder, inside the commit txn."""
+        if funding_user_id is None:
+            return
+        from app.services import billing
+
+        await billing.record_platform_spend(
+            db,
+            user_id=funding_user_id,
+            company_id=company_id,
+            cents=cents,
+            kind=kind,
+        )
 
     async def charge_external(
         self,
@@ -191,6 +226,8 @@ class CostMeter:
         sku: str | None,
         action: Callable[[], Awaitable[tuple[int, str | None, dict | None]]],
         description: str | None = None,
+        funding_user_id: uuid.UUID | None = None,
+        funding_kind: str = "external",
     ) -> str | None:
         """Reserve, run an irreversible external ``action``, then commit the actual.
 
@@ -228,6 +265,13 @@ class CostMeter:
                         external_ref=external_ref,
                         payload=payload,
                     )
+                )
+                await self._record_platform_spend(
+                    db,
+                    funding_user_id=funding_user_id,
+                    company_id=company_id,
+                    cents=actual_cents,
+                    kind=funding_kind,
                 )
                 await db.commit()
             committed["done"] = True

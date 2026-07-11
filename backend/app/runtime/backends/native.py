@@ -172,7 +172,7 @@ class NativeBackend:
             company_playbook = await db.scalar(
                 select(Company.playbook).where(Company.id == task.company_id)
             )
-            resolved = await apikeys.resolve_provider(db, company_id=task.company_id)
+            resolved = await apikeys.resolve_active_provider(db, company_id=task.company_id)
 
             # Perceive: recall relevant institutional memory and recent real-world
             # metrics so the loop reasons from what's known, not from a blank slate.
@@ -207,8 +207,17 @@ class NativeBackend:
                 await integrations_svc.resolve_file_provider(db, company_id=task.company_id)
             ) is not None
         if resolved is None:
-            return await self._finish(ctx, task, TaskStatus.failed, {"error": "no API key"})
-        provider, api_key = resolved
+            return await self._finish(
+                ctx,
+                task,
+                TaskStatus.failed,
+                {
+                    "error": "no LLM provider available — add a model key in Settings, or "
+                    "(managed mode) the free platform allowance is used up; upgrade or bring a key"
+                },
+            )
+        provider, api_key = resolved.provider, resolved.api_key
+        funding_user_id = resolved.funding_user_id
 
         system = render_agent_system(
             role_desc=ROLE_DESCRIPTIONS.get(agent.role, ""),
@@ -242,7 +251,9 @@ class NativeBackend:
         max_tokens = min(provider.max_output_tokens(model), settings.max_response_tokens)
 
         for _ in range(settings.max_steps_per_task):
-            messages = await self._maybe_compact(ctx, task, provider, api_key, model, messages)
+            messages = await self._maybe_compact(
+                ctx, task, provider, api_key, model, messages, funding_user_id
+            )
             chat_seen = await self._maybe_nudge_chat(ctx, agent, task, messages, chat_seen)
             # Only the currently-loaded tools are offered this step; the list grows as
             # the agent discovers and hot-loads more (see `_absorb_use_tool` below).
@@ -258,6 +269,7 @@ class NativeBackend:
                 messages=messages,
                 tools=tools,
                 max_tokens=max_tokens,
+                funding_user_id=funding_user_id,
             )
 
             if not resp.tool_calls:
@@ -374,6 +386,7 @@ class NativeBackend:
         api_key: str,
         model: str,
         messages: list[Message],
+        funding_user_id: uuid.UUID | None = None,
     ) -> list[Message]:
         """Summarize older turns into one recap when the conversation grows long.
 
@@ -401,6 +414,7 @@ class NativeBackend:
             agent_id=task.agent_id,
             task_id=task.id,
             model=provider.default_models.get("cheap", model),
+            funding_user_id=funding_user_id,
             system=(
                 "You compact an AI agent's working log. Summarize the earlier part of "
                 "this task session into a dense recap the agent can rely on to continue: "
