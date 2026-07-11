@@ -404,9 +404,16 @@ class Settings(BaseSettings):
     # front and commits ``reported_credits × web_search_cost_cents`` as the actual
     # spend. The simulated provider is free (never charged).
     web_search_cost_cents: int = 2
+    # Web fetch (page extraction) rides the same Tavily provider/key as web_search.
+    # How many URLs one web_fetch call may extract (Tavily bills ~1 credit per 5 URLs
+    # at basic depth, 2 at advanced), and the char cap on the combined observation
+    # handed back (page bodies are large; 0 disables the cap).
+    web_fetch_max_urls: int = 5
+    web_fetch_max_chars: int = 50_000
     # Tavily (only used when web_search_provider == "tavily")
     tavily_api_key: str = ""
     tavily_search_depth: str = "basic"  # basic | advanced
+    tavily_extract_depth: str = "basic"  # basic | advanced (web_fetch)
 
     # Brand media-generation seam (the design agent's image/video synthesis);
     # "simulated" is offline (NOT connected — generate_image/generate_video report
