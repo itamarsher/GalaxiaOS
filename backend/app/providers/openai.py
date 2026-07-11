@@ -149,9 +149,6 @@ class OpenAIProvider(LLMProvider):
     def max_output_tokens(self, model: str) -> int:
         return pricing.max_output_tokens(self.name, model)
 
-    def context_window_tokens(self, model: str) -> int:
-        return pricing.context_window_tokens(self.name, model)
-
     def estimate_input_tokens(
         self, *, api_key: str, model: str, system: str, messages: list[Message]
     ) -> int:
