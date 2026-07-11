@@ -345,7 +345,7 @@ async def test_long_founder_reply_still_carries_ack_directive(session_factory, c
         await db.commit()
 
     # Founder replies with a body longer than the observation cap.
-    long_reply = "Do the thing. " * 800  # ~11k chars, well over _MAX_CHARS (6000)
+    long_reply = "Do the thing. " * 8000  # ~112k chars, well over _MAX_CHARS (100k)
     async with session_factory() as db:
         channel = await chat.find_channel_by_name(db, company_id=company_id, name="ask-founder")
         await chat.post_message(

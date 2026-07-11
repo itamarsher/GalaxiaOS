@@ -40,7 +40,7 @@ from app.runtime.tools import (
     resolve_tool_names,
     specs_for,
 )
-from app.runtime.tools.base import ToolOutcome, clip
+from app.runtime.tools.base import DEFAULT_MAX_OBSERVATION_CHARS, ToolOutcome, clip
 from app.runtime.tools.base import consume_approval_grant as _consume_approval_grant
 from app.runtime.tools.base import consume_rejection_grant as _consume_rejection_grant
 from app.runtime.transcript import dump_messages, load_messages, sanitize_messages, transcript_lines
@@ -702,7 +702,7 @@ class NativeBackend:
                 observation=f"MCP tool {call.name} failed: {exc}. NOTHING happened — do not assume a result.",
                 is_error=True,
             )
-        return ToolOutcome(observation=clip(text, 4000))
+        return ToolOutcome(observation=clip(text, DEFAULT_MAX_OBSERVATION_CHARS))
 
     async def _finish_or_audit(
         self, ctx: RuntimeContext, agent: Agent, task: Task, output: dict

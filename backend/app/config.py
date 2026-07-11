@@ -164,13 +164,16 @@ class Settings(BaseSettings):
     # The ``collect_results_*`` pair bounds what a synthesizing agent sees when
     # it gathers finished sub-tasks: generous per child, with a total ceiling so
     # a fan-out of large briefs can't overrun the synthesizer's context window.
-    max_result_summary_chars: int = 32_000
-    collect_results_summary_chars: int = 4_000
-    collect_results_total_chars: int = 24_000
+    # All three default to ``DEFAULT_MAX_OBSERVATION_CHARS`` (~100k chars ≈ 28k
+    # tokens): generous enough that real deliverables pass through whole, still
+    # bounded so no single observation floods the loop.
+    max_result_summary_chars: int = 100_000
+    collect_results_summary_chars: int = 100_000
+    collect_results_total_chars: int = 100_000
     # Web-search results returned to an agent are clipped to this (with an explicit
     # truncation notice) — generous, since the loop now handles large context, but
     # bounded so a verbose provider can't flood one observation. 0 disables.
-    web_search_max_chars: int = 8_000
+    web_search_max_chars: int = 100_000
     # Upper bound on the text handed to the embedding model. Company Memory stores
     # content in full (an unbounded ``Text`` column); only the *embedded* slice is
     # capped here, because real embedding APIs reject input past a fixed token

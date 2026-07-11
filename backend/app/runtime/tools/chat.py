@@ -24,11 +24,11 @@ from sqlalchemy import func, select
 from app.models import Agent, ChatWait, Task
 from app.models.enums import AgentRole, AgentStatus, ChatWaitStatus, TaskStatus
 from app.providers.base import ToolSpec
-from app.runtime.tools.base import ToolOutcome, clip
+from app.runtime.tools.base import DEFAULT_MAX_OBSERVATION_CHARS, ToolOutcome, clip
 from app.services import chat
 
 #: Cap on rendered chat output handed back to an agent.
-_MAX_CHARS = 6000
+_MAX_CHARS = DEFAULT_MAX_OBSERVATION_CHARS
 #: How the founder is addressed in the DM tool.
 _FOUNDER = "founder"
 

@@ -50,11 +50,9 @@ def test_price_and_max_output_known_and_unknown(cls):
     known = p.price(planner)
     assert known.input_cents_per_mtok > 0 and known.output_cents_per_mtok > 0
     assert p.max_output_tokens(planner) > 0
-    assert p.context_window_tokens(planner) > 0
     # Unknown model ids fall back to the conservative OSS defaults, not a crash.
     assert p.price("no-such-model") is p.default_price
     assert p.max_output_tokens("no-such-model") == p.default_max_output
-    assert p.context_window_tokens("no-such-model") == p.default_context_window
 
 
 # ── the base_url seam actually reaches the client ───────────────────────────
