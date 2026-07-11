@@ -129,6 +129,19 @@ class OpenAIProvider(LLMProvider):
         "planner": "gpt-4o",
         "strategic": "gpt-4o",
     }
+    #: OpenAI-compatible endpoint. ``None`` means the SDK's default (OpenAI
+    #: itself). Subclasses that target an OSS host (OpenRouter, Groq, a
+    #: self-hosted vLLM/Ollama server) set this to that host's ``/v1`` base URL.
+    base_url: str | None = None
+    #: Whether the endpoint honors ``response_format={"type": "json_object"}``.
+    #: OpenAI does; some OSS backends ignore it (Ollama uses ``format: "json"``,
+    #: vLLM uses ``guided_json``). When false we skip the kwarg and lean on the
+    #: prompt's existing "return JSON" instruction rather than sending a param
+    #: the endpoint may reject.
+    supports_json_mode: bool = True
+    #: Whether the endpoint accepts the ``tools`` (function-calling) param. Some
+    #: OSS models/hosts reject it; when false we omit it.
+    supports_tools: bool = True
 
     def price(self, model: str) -> Price:
         return pricing.price_for(self.name, model)
@@ -159,7 +172,7 @@ class OpenAIProvider(LLMProvider):
         max_tokens: int = 4096,
         json_schema: dict | None = None,
     ) -> LLMResponse:
-        client = openai.AsyncOpenAI(api_key=api_key)
+        client = openai.AsyncOpenAI(api_key=api_key, base_url=self.base_url)
 
         oai_messages = _to_oai_messages(system, messages)
 
@@ -168,11 +181,11 @@ class OpenAIProvider(LLMProvider):
             "messages": oai_messages,
             "max_tokens": max_tokens,
         }
-        if json_schema is not None:
+        if json_schema is not None and self.supports_json_mode:
             # JSON mode: the model is constrained to emit a single valid JSON
             # object. (The prompts already say "JSON", which OpenAI requires.)
             kwargs["response_format"] = {"type": "json_object"}
-        if tools:
+        if tools and self.supports_tools:
             kwargs["tools"] = [
                 {
                     "type": "function",

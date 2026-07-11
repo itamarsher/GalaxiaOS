@@ -36,4 +36,7 @@ check-providers:
 	@! grep -rnE "^\s*(import anthropic|from anthropic)" backend/app --include='*.py' \
 		| grep -v "backend/app/providers/" \
 		|| (echo "ERROR: anthropic SDK imported outside app/providers/" && exit 1)
+	@! grep -rnE "^\s*(import openai|from openai)" backend/app --include='*.py' \
+		| grep -v "backend/app/providers/" \
+		|| (echo "ERROR: openai SDK imported outside app/providers/" && exit 1)
 	@echo "provider-boundary OK"
