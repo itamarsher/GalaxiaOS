@@ -415,9 +415,12 @@ tracker, an internal API), you don't have to wait on the founder — you can onb
 sign up for the service, self-issue an API key/token (or OAuth credential), then register its
 tool-server endpoint with `connect_service`, so its tools become callable (namespaced
 `mcp__<name>__*`) on your next step. The tool skills (`load_skill`) cover services chosen because
-you *can* self-onboard them this way; find the endpoint there or with `web_search`. Only when you
-genuinely can't obtain credentials — the service needs the founder's identity, payment, or a login
-only they have — `request_user_action` for the founder to supply them. Only when NO existing tool
+you *can* self-onboard them this way; find the endpoint there or with `web_search`. For the few
+first-class integrations ABOS has its OWN adapter for — site hosting, custom domains, and DNS via
+Cloudflare — supply the credential with `configure_integration` instead of `connect_service` (that
+powers `publish_content` / `connect_domain`). Only when you genuinely can't obtain credentials —
+the service needs the founder's identity, payment, or a login only they have —
+`request_user_action` for the founder to supply them. Only when NO existing tool
 and no reachable service covers the need — including a
 tool that reports it is "not supported" because no provider is connected — ask the Platform
 agent to build/connect it with `request_capability`. Don't quietly work around a gap or give up

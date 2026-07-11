@@ -141,7 +141,11 @@ async def _publish_content(db, ctx, *, agent: Agent, task: Task, args: dict) -> 
     if host is None:
         return unsupported_capability(
             "Publishing marketing content",
-            hint="No website host is connected — add Cloudflare credentials in Settings.",
+            hint=(
+                "No website host is connected. Configure it yourself with "
+                "`configure_integration` (provider 'cloudflare', a scoped api_token + "
+                "account_id), or ask the founder to add Cloudflare in Settings."
+            ),
         )
 
     title = str(args["title"]).strip()
@@ -221,7 +225,11 @@ async def _connect_domain(db, ctx, *, agent: Agent, task: Task, args: dict) -> T
     if host is None or dns is None:
         return unsupported_capability(
             "Connecting a domain to a site",
-            hint="No website host is connected — add Cloudflare credentials in Settings.",
+            hint=(
+                "No website host is connected. Configure it yourself with "
+                "`configure_integration` (provider 'cloudflare', a scoped api_token + "
+                "account_id), or ask the founder to add Cloudflare in Settings."
+            ),
         )
 
     site = await sites_svc.resolve_site(
