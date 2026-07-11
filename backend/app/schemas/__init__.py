@@ -243,6 +243,28 @@ class RefineResponse(BaseModel):
     preview: PreviewOut
 
 
+# ── Reuse saved keys & connections from another business ─────────────────────
+class ReusableCredentialOut(BaseModel):
+    """A key/connection from one of the founder's other companies, offered for
+    one-click reuse during a new company's onboarding. Never carries a secret."""
+
+    id: str  # opaque selection id, e.g. "key:anthropic" or "mcp:acme_crm"
+    kind: str  # "key" | "connection"
+    provider: str | None = None
+    label: str
+    detail: str | None = None  # display fingerprint / tool count — never a secret
+    source_company_id: uuid.UUID
+    source_company_name: str
+
+
+class ReuseCredentialsRequest(BaseModel):
+    ids: list[str] = Field(default_factory=list)
+
+
+class ReuseCredentialsResponse(BaseModel):
+    reused: list[str] = Field(default_factory=list)
+
+
 # ── API keys ─────────────────────────────────────────────────────────────────
 class ApiKeyCreateRequest(BaseModel):
     provider: str = "anthropic"
