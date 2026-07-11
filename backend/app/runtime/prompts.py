@@ -37,6 +37,28 @@ OPERATING_LANGUAGE_DIRECTIVE = (
 )
 
 
+def operating_language_directive(language: str | None) -> str:
+    """The live-loop language directive, pinned to the founder's detected language.
+
+    Same principle as the generation stages: the operating loop must not re-detect
+    the language every run (agents were drifting off the mission text). The mission's
+    ``language`` — detected once at onboarding and persisted — is passed by name so
+    every agentic step (reports, messages, chat, deliverables) stays in one language
+    deterministically across the whole run of the company. Falls back to inferring
+    from the mission text (``OPERATING_LANGUAGE_DIRECTIVE``) when the language is
+    unknown (companies generated before detection existed), so nothing regresses."""
+    lang = (language or "").strip()
+    if not lang:
+        return OPERATING_LANGUAGE_DIRECTIVE
+    return (
+        "Operate in the founder's language and locale: this company's language is "
+        f"'{lang}'. Write your reports, messages, deliverables, and any other "
+        "natural-language output in that language, and work within its regional "
+        "context (currency, regulations, locale) unless a task says otherwise. Tool "
+        "names, arguments, and structured field keys stay exactly as defined."
+    )
+
+
 def generation_language_directive(language: str | None) -> str:
     """An explicit, per-venture language directive for the downstream generation stages.
 
@@ -478,6 +500,7 @@ def render_agent_system(
     skills: str = "",
     objectives: str = "",
     file_store_connected: bool = False,
+    language: str | None = None,
 ) -> str:
     """Compose an agent's full launch system prompt for one task.
 
@@ -486,6 +509,11 @@ def render_agent_system(
     or a directive immediately changes what every (or one) agent is initialized with
     on its next run. ``skills`` is the compact, role-scoped index of playbooks the
     agent can pull in on demand with ``load_skill``.
+
+    ``language`` is the founder's language (BCP-47), detected once at onboarding and
+    persisted on the mission; it pins every agentic interaction to that language
+    deterministically. When ``None`` the loop falls back to inferring from the
+    mission text, so pre-detection companies still operate in their own language.
     """
     return AGENT_LOOP_SYSTEM.format(
         role_desc=role_desc,
@@ -498,7 +526,7 @@ def render_agent_system(
         metrics=metrics,
         skills=skills,
         file_store=file_store_block(file_store_connected),
-        language=OPERATING_LANGUAGE_DIRECTIVE,
+        language=operating_language_directive(language),
     )
 
 

@@ -58,6 +58,19 @@ def test_prompt_instructs_operating_in_founders_language() -> None:
     assert "לבנות חברה" in rendered
 
 
+def test_prompt_pins_the_detected_language_when_known() -> None:
+    """When onboarding detected the founder's language, the loop names it explicitly
+    instead of re-inferring from the mission — so every agentic run is deterministic."""
+    rendered = render_agent_system(
+        role_desc="r", agent_directive=None, playbook=None,
+        mission="Build a company.", goal="g", memory="x", metrics="y",
+        language="he",
+    )
+    assert "this company's language is 'he'" in rendered
+    # The generic "infer from the mission text" fallback is replaced, not appended.
+    assert "SAME language as the mission" not in rendered
+
+
 def test_prompt_instructs_distributed_collaboration() -> None:
     """Agents are told to collaborate peer-to-peer, not funnel everything via the CEO."""
     rendered = render_agent_system(

@@ -16,7 +16,9 @@ from app.runtime.prompts import (
     GENERATION_LANGUAGE_DIRECTIVE,
     MISSION_TO_PLAN_SCHEMA,
     MISSION_TO_PLAN_SYSTEM,
+    OPERATING_LANGUAGE_DIRECTIVE,
     generation_language_directive,
+    operating_language_directive,
 )
 
 
@@ -42,6 +44,31 @@ def test_directive_is_per_venture_not_a_hardcoded_example():
     assert "'fr'" in generation_language_directive("fr")
     assert "'ja'" in generation_language_directive("ja")
     assert "'fr'" not in generation_language_directive("ja")
+
+
+# ── the live agent loop is pinned to the detected language too ─────────────────
+def test_operating_directive_names_language_or_falls_back():
+    d = operating_language_directive("es")
+    assert "'es'" in d
+    assert "founder's language" in d
+    for empty in (None, "", "   "):
+        assert operating_language_directive(empty) == OPERATING_LANGUAGE_DIRECTIVE
+
+
+def test_agent_loop_and_copilot_thread_the_persisted_language():
+    # The persisted mission.language must reach every agentic surface, not just
+    # onboarding: the live agent loop and the founder-facing copilot/digest.
+    from app.runtime.backends import native
+    from app.services import copilot
+
+    native_src = inspect.getsource(native)
+    assert "mission.language" in native_src
+    assert "language=mission_language" in native_src
+
+    answer_src = inspect.getsource(copilot.answer)
+    digest_src = inspect.getsource(copilot.generate_digest)
+    assert "operating_language_directive(language)" in answer_src
+    assert "operating_language_directive(language)" in digest_src
 
 
 # ── stage 1 detects and reports the language ──────────────────────────────────
