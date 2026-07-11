@@ -59,29 +59,3 @@ def max_output_tokens(provider: str, model: str) -> int:
     if provider == "openai":
         return OPENAI_MAX_OUTPUT_TOKENS.get(model, DEFAULT_MAX_OUTPUT_TOKENS)
     return DEFAULT_MAX_OUTPUT_TOKENS
-
-
-# Total context window (max input tokens) each model accepts. Used to size how
-# much text a tool may hand an agent in a single observation — e.g. a file read
-# is capped at the reading model's window rather than an arbitrary fixed length.
-ANTHROPIC_CONTEXT_WINDOW_TOKENS: dict[str, int] = {
-    "claude-haiku-4-5": 200_000,
-    "claude-sonnet-4-6": 200_000,
-    "claude-opus-4-8": 200_000,
-}
-
-OPENAI_CONTEXT_WINDOW_TOKENS: dict[str, int] = {
-    "gpt-4o": 128_000,
-    "gpt-4o-mini": 128_000,
-}
-
-# Conservative fallback for an unknown model id.
-DEFAULT_CONTEXT_WINDOW_TOKENS = 128_000
-
-
-def context_window_tokens(provider: str, model: str) -> int:
-    if provider == "anthropic":
-        return ANTHROPIC_CONTEXT_WINDOW_TOKENS.get(model, DEFAULT_CONTEXT_WINDOW_TOKENS)
-    if provider == "openai":
-        return OPENAI_CONTEXT_WINDOW_TOKENS.get(model, DEFAULT_CONTEXT_WINDOW_TOKENS)
-    return DEFAULT_CONTEXT_WINDOW_TOKENS

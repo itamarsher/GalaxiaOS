@@ -17,9 +17,15 @@ from __future__ import annotations
 from app.config import settings
 from app.integrations.files import FileProviderError
 from app.models import Agent, Company, Task
-from app.models.enums import AgentRole, FileCategory, MemoryType
+from app.models.enums import FileCategory, MemoryType
 from app.providers.base import ToolSpec
-from app.runtime.tools.base import ToolOutcome, clip, truncation_notice, unsupported_capability
+from app.runtime.tools.base import (
+    DEFAULT_MAX_OBSERVATION_CHARS,
+    ToolOutcome,
+    clip,
+    truncation_notice,
+    unsupported_capability,
+)
 from app.services import files as files_svc
 from app.services import memory as memory_svc
 from app.services.integrations import resolve_file_provider
@@ -174,30 +180,6 @@ async def _list_company_files(db, ctx, *, agent: Agent, task: Task, args: dict) 
     return ToolOutcome(observation="Filed documents:\n" + body)
 
 
-# The text of a read file goes straight into the reading agent's context, so the
-# only meaningful cap is what that model can accept: its context window (in
-# tokens) converted to characters at ~4 chars/token. The raw-byte cap
-# (``max_file_read_bytes``) still guards against OOM before decode, so this cap
-# only trims text that would otherwise overflow the model — ordinary documents
-# pass through whole.
-_CHARS_PER_TOKEN = 4
-# Fallback when the runtime context carries no provider (e.g. bare unit tests):
-# the conservative unknown-model window, so a read is still generously sized.
-_DEFAULT_READ_CHAR_LIMIT = 128_000 * _CHARS_PER_TOKEN
-
-
-def _read_char_limit(ctx, agent: Agent) -> int:
-    """Characters a file read may return: the reading model's context window."""
-    provider = getattr(ctx, "provider", None)
-    if provider is None:
-        return _DEFAULT_READ_CHAR_LIMIT
-    tier = "planner" if agent.role is AgentRole.ceo else "cheap"
-    model = agent.model_pref or provider.default_models.get(
-        tier, provider.default_models["cheap"]
-    )
-    return provider.context_window_tokens(model) * _CHARS_PER_TOKEN
-
-
 async def _read_company_file(db, ctx, *, agent: Agent, task: Task, args: dict) -> ToolOutcome:
     name = str(args.get("name") or "").strip()
     if not name:
@@ -230,7 +212,7 @@ async def _read_company_file(db, ctx, *, agent: Agent, task: Task, args: dict) -
         return ToolOutcome(
             observation=f"{row.name} is a binary file ({row.mime_type}); not shown as text."
         )
-    return ToolOutcome(observation=f"{row.name}:\n" + clip(text, _read_char_limit(ctx, agent)))
+    return ToolOutcome(observation=f"{row.name}:\n" + clip(text, DEFAULT_MAX_OBSERVATION_CHARS))
 
 
 HANDLERS = {

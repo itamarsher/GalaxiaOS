@@ -115,6 +115,16 @@ def truncation_notice(omitted: int, unit: str = "characters") -> str:
     )
 
 
+#: Default ceiling on any single observation handed back to an agent. Modern
+#: models take large context, so the cap exists only to stop one tool result
+#: from flooding the loop — not to keep output small. ~100k chars ≈ 28k tokens,
+#: a generous slice that still leaves ample room for the system prompt, history,
+#: and the model's reply within the context window. Individual tools override
+#: this only where a *smaller* size is genuinely required (e.g. an embedding
+#: API's hard token limit), never to reintroduce an arbitrarily tight cap.
+DEFAULT_MAX_OBSERVATION_CHARS = 100_000
+
+
 def clip(text: str | None, limit: int, *, unit: str = "characters") -> str:
     """Truncate ``text`` to ``limit`` chars, flagging it ONLY when actually cut.
 
@@ -164,4 +174,5 @@ __all__ = [
     "unsupported_capability",
     "clip",
     "truncation_notice",
+    "DEFAULT_MAX_OBSERVATION_CHARS",
 ]

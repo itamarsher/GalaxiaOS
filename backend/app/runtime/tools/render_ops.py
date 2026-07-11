@@ -17,7 +17,7 @@ from __future__ import annotations
 from app.integrations.render import RenderClient, RenderError, get_render_client
 from app.models import Agent, Task
 from app.providers.base import ToolSpec
-from app.runtime.tools.base import ToolOutcome, clip
+from app.runtime.tools.base import DEFAULT_MAX_OBSERVATION_CHARS, ToolOutcome, clip
 from app.services import apikeys
 
 #: Provider name under which a company's own Render key is stored (BYOK).
@@ -150,7 +150,7 @@ async def _list_render_deploys(db, ctx, *, agent: Agent, task: Task, args: dict)
     return ToolOutcome(
         observation=clip(
             f"{len(deploys)} deploy(s) for {service_id} (newest first):\n" + "\n".join(lines),
-            4000,
+            DEFAULT_MAX_OBSERVATION_CHARS,
         )
     )
 
@@ -191,7 +191,10 @@ async def _get_render_logs(db, ctx, *, agent: Agent, task: Task, args: dict) -> 
         return ToolOutcome(observation=f"No recent logs for service {service_id}.")
     lines = [f"{ln.timestamp} {ln.message}" for ln in logs]
     return ToolOutcome(
-        observation=clip(f"Recent logs for {service_id} (oldest first):\n" + "\n".join(lines), 6000)
+        observation=clip(
+            f"Recent logs for {service_id} (oldest first):\n" + "\n".join(lines),
+            DEFAULT_MAX_OBSERVATION_CHARS,
+        )
     )
 
 

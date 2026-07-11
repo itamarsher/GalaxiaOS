@@ -16,7 +16,7 @@ from pathlib import Path
 
 from app.models import Agent, Task
 from app.providers.base import ToolSpec
-from app.runtime.tools.base import ToolOutcome
+from app.runtime.tools.base import DEFAULT_MAX_OBSERVATION_CHARS, ToolOutcome
 
 # Repo root is the parent of ``backend/``. This file lives at
 # ``<root>/backend/app/runtime/tools/code.py``, so walk up five levels.
@@ -79,7 +79,7 @@ _BINARY_SUFFIXES = frozenset(
 )
 
 _MAX_FILES = 400
-_MAX_READ_CHARS = 20_000
+_MAX_READ_CHARS = DEFAULT_MAX_OBSERVATION_CHARS
 
 SPECS: list[ToolSpec] = [
     ToolSpec(
