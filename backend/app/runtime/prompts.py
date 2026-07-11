@@ -36,6 +36,62 @@ OPERATING_LANGUAGE_DIRECTIVE = (
     "structured field keys stay exactly as defined."
 )
 
+
+def operating_language_directive(language: str | None) -> str:
+    """The live-loop language directive, pinned to the founder's detected language.
+
+    Same principle as the generation stages: the operating loop must not re-detect
+    the language every run (agents were drifting off the mission text). The mission's
+    ``language`` — detected once at onboarding and persisted — is passed by name so
+    every agentic step (reports, messages, chat, deliverables) stays in one language
+    deterministically across the whole run of the company. Falls back to inferring
+    from the mission text (``OPERATING_LANGUAGE_DIRECTIVE``) when the language is
+    unknown (companies generated before detection existed), so nothing regresses."""
+    lang = (language or "").strip()
+    if not lang:
+        return OPERATING_LANGUAGE_DIRECTIVE
+    return (
+        "Operate in the founder's language and locale: this company's language is "
+        f"'{lang}'. Write your reports, messages, deliverables, and any other "
+        "natural-language output in that language, and work within its regional "
+        "context (currency, regulations, locale) unless a task says otherwise. Tool "
+        "names, arguments, and structured field keys stay exactly as defined."
+    )
+
+
+def generation_language_directive(language: str | None) -> str:
+    """An explicit, per-venture language directive for the downstream generation stages.
+
+    Only the first stage (mission → plan) reads the raw mission, so it can reliably
+    *detect* the founder's language with ``GENERATION_LANGUAGE_DIRECTIVE``. Later
+    stages (org design, investor review, refine) run off derived, JSON-wrapped text
+    where the language signal is diluted — and non-ASCII scripts used to be escaped
+    away entirely by ``json.dumps`` — so re-detecting there drifted (typically back
+    to English, or whichever language a stray token anchored on). Stage 1 now records
+    the detected language once and every later stage is handed it *by name*, which
+    makes the whole company's generated text land in one language deterministically.
+
+    Naming the language here is deliberate and is NOT the anchoring footgun the
+    investor-review fix warned about: that bug was a *hardcoded example* baked into
+    the template ("respond in Hebrew"), identical for every venture, which the model
+    latched onto regardless of the input. This passes the venture's OWN detected
+    language, so anchoring on it is exactly the desired behaviour. Falls back to the
+    generic detect-and-mirror directive when the language is unknown (older drafts or
+    a detection miss), so behaviour never regresses below the previous baseline."""
+    lang = (language or "").strip()
+    if not lang:
+        return GENERATION_LANGUAGE_DIRECTIVE
+    return (
+        "\n\nLanguage & locale: the founder's language for this venture is "
+        f"'{lang}'. Write every natural-language value in your response in that "
+        "language, reasoning within its country/market context (locale, currency, "
+        "regulations). Do not translate it, do not switch to a different language, "
+        "and do not default to English. Keep all JSON keys and enumerated values "
+        "exactly as specified here in English; only the human-readable text is in "
+        "the founder's language."
+    )
+
+
 # Goal for the CEO's end-of-cycle retrospective task, injected by the orchestrator
 # when a business cycle winds down (see ``_maybe_continue_cycle``). ``{roles}`` is the
 # comma-separated list of functional roles that completed work in the cycle.
@@ -444,6 +500,7 @@ def render_agent_system(
     skills: str = "",
     objectives: str = "",
     file_store_connected: bool = False,
+    language: str | None = None,
 ) -> str:
     """Compose an agent's full launch system prompt for one task.
 
@@ -452,6 +509,11 @@ def render_agent_system(
     or a directive immediately changes what every (or one) agent is initialized with
     on its next run. ``skills`` is the compact, role-scoped index of playbooks the
     agent can pull in on demand with ``load_skill``.
+
+    ``language`` is the founder's language (BCP-47), detected once at onboarding and
+    persisted on the mission; it pins every agentic interaction to that language
+    deterministically. When ``None`` the loop falls back to inferring from the
+    mission text, so pre-detection companies still operate in their own language.
     """
     return AGENT_LOOP_SYSTEM.format(
         role_desc=role_desc,
@@ -464,7 +526,7 @@ def render_agent_system(
         metrics=metrics,
         skills=skills,
         file_store=file_store_block(file_store_connected),
-        language=OPERATING_LANGUAGE_DIRECTIVE,
+        language=operating_language_directive(language),
     )
 
 
@@ -472,6 +534,7 @@ def render_agent_system(
 MISSION_TO_PLAN_SYSTEM = """You are a startup strategist. Given a founder's mission, produce a
 concise operating plan. Respond ONLY with minified JSON matching this shape:
 {
+  "language": "BCP-47 tag of the language the founder's mission is written in, e.g. \\"en\\", \\"fr\\", \\"he\\", \\"es\\"",
   "summary": "one-sentence framing",
   "business_model_assumptions": {"how_it_makes_money": "...", "key_risks": ["..."]},
   "target_market": {"segment": "...", "why": "..."},
@@ -496,7 +559,9 @@ agent choose the lightest mechanism that fits the budget, all built into ABOS:
 - A custom domain is optional and can be connected later, once there's signal worth it.
 Phrase the objective so progress is verifiable (e.g. "Capture 100 waitlist signups").
 
-Produce 3-4 objectives, each with 1-2 measurable key results.""" + GENERATION_LANGUAGE_DIRECTIVE
+Produce 3-4 objectives, each with 1-2 measurable key results.
+Set "language" to the BCP-47 tag of the language the founder's mission is written in — every
+later generation stage reuses it verbatim so the whole company speaks the founder's language.""" + GENERATION_LANGUAGE_DIRECTIVE
 
 PLAN_TO_ORG_SYSTEM = """You are an org designer for an AI-native company. Given objectives and a
 monthly budget (in USD cents), design the agent fleet. Respond ONLY with minified JSON:
@@ -531,6 +596,7 @@ unallocated reserve the CEO can deploy when hiring. Functional agents report_to 
 MISSION_TO_PLAN_SCHEMA: dict = {
     "type": "object",
     "properties": {
+        "language": {"type": "string"},
         "summary": {"type": "string"},
         "business_model_assumptions": {
             "type": "object",

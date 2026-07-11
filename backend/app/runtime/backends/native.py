@@ -161,6 +161,9 @@ class NativeBackend:
                 select(Mission).where(Mission.company_id == task.company_id).limit(1)
             )
             mission_text = mission.generated_summary or mission.raw_text if mission else ""
+            # Founder's language, detected once at onboarding — pins every agentic
+            # step to it deterministically instead of re-inferring from the mission.
+            mission_language = mission.language if mission else None
             # The company's objectives, numbered, so the agent can tag a dispatched
             # initiative with the objective it advances (dispatch_task `objective`).
             objectives_block = objectives_svc.objectives_prompt_block(
@@ -230,6 +233,7 @@ class NativeBackend:
             skills=skills_lib.index_for_role(agent.role.value),
             objectives=objectives_block,
             file_store_connected=file_store_connected,
+            language=mission_language,
         )
         messages = self._resume_or_seed(task)
         await self._inject_resume_notes(ctx, task, messages)
