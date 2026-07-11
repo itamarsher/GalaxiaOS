@@ -1,13 +1,16 @@
-"""Tavily web-search adapter — REAL web results (credential-gated).
+"""Tavily adapter — REAL web results (credential-gated), for both search and fetch.
 
-Tavily is purpose-built for AI agents: it returns clean ``title``/``url``/
-``content`` items, which map directly onto :class:`SearchResult`. The API key
-comes from settings (``ABOS_TAVILY_API_KEY``); without it, :meth:`search`
-raises :class:`WebSearchError` rather than hitting the network.
+Tavily is purpose-built for AI agents. :meth:`search` returns clean ``title``/
+``url``/``content`` items mapped onto :class:`SearchResult` (powers ``web_search``);
+:meth:`extract` returns the full page body of given URLs mapped onto
+:class:`FetchResult` (powers ``web_fetch``). Both share one API key (from settings,
+``ABOS_TAVILY_API_KEY``, or a per-company key); without it they raise
+:class:`WebSearchError` rather than hitting the network.
 
 Off by default (``ABOS_WEB_SEARCH_PROVIDER=simulated``). Enable with
-``ABOS_WEB_SEARCH_PROVIDER=tavily`` and a key. The HTTP shape is parsed by the
-pure :meth:`_parse` staticmethod so result mapping is unit-testable offline.
+``ABOS_WEB_SEARCH_PROVIDER=tavily`` and a key. The HTTP shapes are parsed by the
+pure :meth:`_parse` / :meth:`_parse_extract` staticmethods so result mapping is
+unit-testable offline.
 """
 
 from __future__ import annotations
@@ -15,9 +18,10 @@ from __future__ import annotations
 import httpx
 
 from app.config import settings
-from app.integrations.websearch import SearchResult, WebSearchError
+from app.integrations.websearch import FetchResult, SearchResult, WebSearchError
 
 _ENDPOINT = "https://api.tavily.com/search"
+_EXTRACT_ENDPOINT = "https://api.tavily.com/extract"
 
 
 class TavilyWebSearch:
@@ -26,10 +30,12 @@ class TavilyWebSearch:
         api_key: str | None = None,
         *,
         search_depth: str | None = None,
+        extract_depth: str | None = None,
         timeout: float | None = None,
     ) -> None:
         self._api_key = api_key if api_key is not None else settings.tavily_api_key
         self._search_depth = search_depth or settings.tavily_search_depth
+        self._extract_depth = extract_depth or settings.tavily_extract_depth
         self._timeout = timeout if timeout is not None else settings.web_search_timeout_seconds
         # Per-call billing telemetry from the most recent :meth:`search`. Tavily
         # reports consumption in *API credits* (basic=1, advanced=2), not dollars,
@@ -42,9 +48,7 @@ class TavilyWebSearch:
 
     def _require_key(self) -> str:
         if not self._api_key:
-            raise WebSearchError(
-                "Tavily API key missing (set ABOS_TAVILY_API_KEY)."
-            )
+            raise WebSearchError("Tavily API key missing (set ABOS_TAVILY_API_KEY).")
         return self._api_key
 
     async def search(self, query: str, *, max_results: int = 5) -> list[SearchResult]:
@@ -71,6 +75,36 @@ class TavilyWebSearch:
         self.last_request_id = body.get("request_id")
         return self._parse(body)
 
+    async def extract(self, urls: list[str]) -> list[FetchResult]:
+        """Extract the main text of each URL via Tavily's ``/extract`` endpoint.
+
+        Returns one :class:`FetchResult` per input URL — a successful extraction
+        carries the page's clean ``content``; a URL Tavily could not retrieve comes
+        back with ``error`` set and empty content (so a partial batch is honest
+        about what worked). Billing telemetry (``last_usage_credits`` /
+        ``last_request_id``) is populated exactly as :meth:`search` does, so the
+        CostMeter reconciles the real credit spend the same way.
+        """
+        key = self._require_key()
+        payload = {
+            "api_key": key,
+            "urls": urls,
+            "extract_depth": self._extract_depth,
+            "include_usage": True,
+        }
+        try:
+            async with httpx.AsyncClient(timeout=self._timeout) as client:
+                resp = await client.post(_EXTRACT_ENDPOINT, json=payload)
+                resp.raise_for_status()
+                body = resp.json()
+        except httpx.HTTPError as exc:
+            raise WebSearchError(f"Tavily extract failed: {exc}") from exc
+        except ValueError as exc:  # non-JSON body
+            raise WebSearchError(f"Tavily returned non-JSON: {exc}") from exc
+        self.last_usage_credits = self._usage_credits(body)
+        self.last_request_id = body.get("request_id")
+        return self._parse_extract(body)
+
     @staticmethod
     def _parse(body: dict) -> list[SearchResult]:
         """Map Tavily's ``{"results": [{title,url,content}, ...]}`` to results."""
@@ -82,6 +116,32 @@ class TavilyWebSearch:
                     title=item.get("title") or url or "(untitled)",
                     url=url,
                     snippet=item.get("content") or "",
+                )
+            )
+        return results
+
+    @staticmethod
+    def _parse_extract(body: dict) -> list[FetchResult]:
+        """Map Tavily's extract body to :class:`FetchResult`.
+
+        Success items live under ``results`` (``{url, raw_content}``); URLs Tavily
+        could not fetch live under ``failed_results`` (``{url, error}``) and are
+        surfaced as results carrying the error so the caller can report them.
+        """
+        results: list[FetchResult] = []
+        for item in body.get("results") or []:
+            results.append(
+                FetchResult(
+                    url=item.get("url") or "",
+                    content=item.get("raw_content") or "",
+                )
+            )
+        for item in body.get("failed_results") or []:
+            results.append(
+                FetchResult(
+                    url=item.get("url") or "",
+                    content="",
+                    error=str(item.get("error") or "could not fetch"),
                 )
             )
         return results
@@ -99,3 +159,16 @@ class TavilyWebSearch:
             return None
         credits = usage.get("credits")
         return credits if isinstance(credits, int) else None
+
+
+async def verify_credentials(api_key: str) -> None:
+    """Confirm a Tavily key works, raising :class:`WebSearchError` if not.
+
+    Used when an agent self-configures Tavily via ``configure_integration`` so a
+    bad key is rejected up front and never stored — the same honest verify-before-
+    store guard the Cloudflare flow uses. Runs the cheapest possible real call (a
+    single-result search), which raises on an auth/HTTP failure.
+    """
+    if not (api_key or "").strip():
+        raise WebSearchError("Tavily API key missing.")
+    await TavilyWebSearch(api_key=api_key).search("connectivity check", max_results=1)

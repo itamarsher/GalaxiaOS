@@ -82,6 +82,7 @@ CORE_TOOL_NAMES: frozenset[str] = frozenset(
 #: primitives; give them a user-facing discovery category instead of "core".
 _CATEGORY_OVERRIDE: dict[str, str] = {
     "web_search": "research",
+    "web_fetch": "research",
     "send_email": "comms",
     "register_domain": "marketing",
 }

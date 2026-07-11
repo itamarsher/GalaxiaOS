@@ -21,6 +21,20 @@ class SearchResult:
     snippet: str
 
 
+@dataclass(frozen=True)
+class FetchResult:
+    """The extracted main content of a single URL (``web_fetch``).
+
+    ``content`` is the page's clean text body; ``error`` is set instead (and
+    ``content`` empty) when the provider could not retrieve that URL, so a partial
+    batch reports per-URL what worked and what didn't rather than failing whole.
+    """
+
+    url: str
+    content: str
+    error: str | None = None
+
+
 class WebSearchError(RuntimeError):
     """Raised when a real provider fails (missing creds, HTTP error, bad body)."""
 
@@ -29,6 +43,13 @@ class WebSearchError(RuntimeError):
 class WebSearch(Protocol):
     async def search(self, query: str, *, max_results: int = 5) -> list[SearchResult]:
         """Return up to ``max_results`` results for ``query``. No side effects."""
+        ...
+
+
+@runtime_checkable
+class WebFetch(Protocol):
+    async def extract(self, urls: list[str]) -> list[FetchResult]:
+        """Extract the main text content of each URL. No side effects."""
         ...
 
 

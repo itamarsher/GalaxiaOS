@@ -5,7 +5,12 @@ from __future__ import annotations
 import pytest
 
 from app.integrations.tavily import TavilyWebSearch
-from app.integrations.websearch import SearchResult, WebSearchError, get_web_search
+from app.integrations.websearch import (
+    FetchResult,
+    SearchResult,
+    WebSearchError,
+    get_web_search,
+)
 
 
 def test_parse_maps_results():
@@ -53,3 +58,47 @@ async def test_missing_key_raises_without_network():
 
 def test_resolver_selects_tavily():
     assert isinstance(get_web_search("tavily"), TavilyWebSearch)
+
+
+# ── web_fetch / extract ──────────────────────────────────────────────────────────
+def test_parse_extract_maps_raw_content():
+    body = {
+        "results": [
+            {"url": "https://foo.test", "raw_content": "the full text of foo"},
+            {"url": "https://bar.test", "raw_content": "the full text of bar"},
+        ]
+    }
+    assert TavilyWebSearch._parse_extract(body) == [
+        FetchResult(url="https://foo.test", content="the full text of foo"),
+        FetchResult(url="https://bar.test", content="the full text of bar"),
+    ]
+
+
+def test_parse_extract_surfaces_failed_urls():
+    body = {
+        "results": [{"url": "https://ok.test", "raw_content": "hello"}],
+        "failed_results": [{"url": "https://bad.test", "error": "timeout"}],
+    }
+    results = TavilyWebSearch._parse_extract(body)
+    assert FetchResult(url="https://ok.test", content="hello") in results
+    [failed] = [r for r in results if r.error]
+    assert failed.url == "https://bad.test" and failed.error == "timeout"
+
+
+def test_parse_extract_tolerates_empty():
+    assert TavilyWebSearch._parse_extract({}) == []
+
+
+@pytest.mark.asyncio
+async def test_extract_missing_key_raises_without_network():
+    client = TavilyWebSearch(api_key="")
+    with pytest.raises(WebSearchError):
+        await client.extract(["https://x.test"])
+
+
+@pytest.mark.asyncio
+async def test_verify_credentials_rejects_empty_key_without_network():
+    from app.integrations.tavily import verify_credentials
+
+    with pytest.raises(WebSearchError):
+        await verify_credentials("")

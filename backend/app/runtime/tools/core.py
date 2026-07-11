@@ -92,7 +92,15 @@ SPECS: list[ToolSpec] = [
             "properties": {
                 "role": {
                     "type": "string",
-                    "enum": ["growth", "research", "product", "finance", "governance", "auditor", "data"],
+                    "enum": [
+                        "growth",
+                        "research",
+                        "product",
+                        "finance",
+                        "governance",
+                        "auditor",
+                        "data",
+                    ],
                 },
                 "goal": {"type": "string", "description": "What that agent should accomplish."},
                 "objective": {
@@ -124,9 +132,20 @@ SPECS: list[ToolSpec] = [
                         "properties": {
                             "role": {
                                 "type": "string",
-                                "enum": ["growth", "research", "product", "finance", "governance", "auditor", "data"],
+                                "enum": [
+                                    "growth",
+                                    "research",
+                                    "product",
+                                    "finance",
+                                    "governance",
+                                    "auditor",
+                                    "data",
+                                ],
                             },
-                            "goal": {"type": "string", "description": "What that agent should accomplish."},
+                            "goal": {
+                                "type": "string",
+                                "description": "What that agent should accomplish.",
+                            },
                             "objective": {
                                 "type": "integer",
                                 "description": (
@@ -310,6 +329,29 @@ SPECS: list[ToolSpec] = [
         },
     ),
     ToolSpec(
+        name="web_fetch",
+        description=(
+            "Fetch the full main text content of one or more specific web pages you "
+            "already have the URLs for. Use this to READ a page (a competitor's "
+            "pricing page, a docs page, an article) end-to-end — `web_search` only "
+            "returns short snippets, so reach for `web_fetch` when a snippet isn't "
+            "enough and you need the actual page body. Pass a single `url` or a `urls` "
+            "list; each page's extracted text is returned, labelled by URL. Uses the "
+            "same web provider as web_search and is metered the same way."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "url": {"type": "string", "description": "A single page URL to fetch."},
+                "urls": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Several page URLs to fetch in one call.",
+                },
+            },
+        },
+    ),
+    ToolSpec(
         name="collect_results",
         description=(
             "Gather the outputs of sub-tasks you dispatched earlier that have "
@@ -321,7 +363,12 @@ SPECS: list[ToolSpec] = [
 
 
 async def _spawn_child(
-    db, ctx, parent: Task, agent: Agent, role: str, goal: str,
+    db,
+    ctx,
+    parent: Task,
+    agent: Agent,
+    role: str,
+    goal: str,
     objective_id: uuid.UUID | None = None,
 ) -> None:
     # Prefer an active agent of the role: paused agents are parked (their work is
@@ -450,9 +497,7 @@ async def _dispatch_tasks(db, ctx, *, agent: Agent, task: Task, args: dict) -> T
         resolved.append((entry, objective_id))
     if untagged:
         return ToolOutcome(
-            observation=(
-                f"{_OBJECTIVE_REQUIRED} Missing on task(s): {untagged} (1-based)."
-            ),
+            observation=(f"{_OBJECTIVE_REQUIRED} Missing on task(s): {untagged} (1-based)."),
             is_error=True,
         )
     if not resolved:
@@ -465,9 +510,7 @@ async def _dispatch_tasks(db, ctx, *, agent: Agent, task: Task, args: dict) -> T
         await _spawn_child(db, ctx, task, agent, entry["role"], entry["goal"], objective_id)
         dispatched.append(f"{entry['role']}: {str(entry['goal'])[:60]}")
     body = "\n".join(f"- {d}" for d in dispatched)
-    return ToolOutcome(
-        observation=f"dispatched {len(dispatched)} sub-tasks in parallel:\n{body}"
-    )
+    return ToolOutcome(observation=f"dispatched {len(dispatched)} sub-tasks in parallel:\n{body}")
 
 
 async def _submit_plan(db, ctx, *, agent: Agent, task: Task, args: dict) -> ToolOutcome:
@@ -655,9 +698,7 @@ async def _resolve_email_sender(db, company_id):
     from app.models import Company
     from app.services import apikeys
 
-    key = await apikeys.get_plaintext_key(
-        db, company_id=company_id, provider=EMAIL_KEY_PROVIDER
-    )
+    key = await apikeys.get_plaintext_key(db, company_id=company_id, provider=EMAIL_KEY_PROVIDER)
     if key:
         from app.integrations.resend import ResendEmailSender
 
@@ -742,12 +783,14 @@ async def _record_metric(db, ctx, *, agent: Agent, task: Task, args: dict) -> To
 WEB_SEARCH_PROVIDER = "tavily"
 
 
-async def _resolve_web_search(db, company_id) -> tuple[object | None, int, object | None, str | None]:
-    """Return ``(provider, cost_cents, funding_user_id, reason)`` for web search.
+async def _resolve_web_provider(db, company_id) -> tuple[object | None, object | None, str | None]:
+    """Return ``(provider, funding_user_id, reason)`` for the Tavily-backed web
+    tools (``web_search`` and ``web_fetch`` share one provider and one key).
 
-    A founder can attach a Tavily key per company (onboarding or Settings); with
-    one we run real, billable web search funded by them (``funding_user_id`` is
-    ``None`` — their own key, never metered against the platform allowance).
+    A founder can attach a Tavily key per company (onboarding, Settings, or an
+    agent self-configuring it via ``configure_integration``); with one we run real,
+    billable calls funded by them (``funding_user_id`` is ``None`` — their own key,
+    never metered against the platform allowance).
 
     Without a key we fall back to the globally-configured provider. Under managed
     mode that global provider is platform-funded, so it's gated by the founder's
@@ -755,31 +798,40 @@ async def _resolve_web_search(db, company_id) -> tuple[object | None, int, objec
     (``funding_user_id`` set). When managed mode is off, the operator's global
     provider serves everyone as before. With no global provider (and no key), or
     when the founder is over their managed cap, this resolves to
-    ``(None, 0, None, reason)`` and the tool reports the capability unsupported.
+    ``(None, None, reason)`` and the tool reports the capability unsupported.
     """
     from app.services import apikeys, billing
 
-    key = await apikeys.get_plaintext_key(
-        db, company_id=company_id, provider=WEB_SEARCH_PROVIDER
-    )
+    key = await apikeys.get_plaintext_key(db, company_id=company_id, provider=WEB_SEARCH_PROVIDER)
     funding_user_id = None
     if key:
         from app.integrations.tavily import TavilyWebSearch
 
-        search: object | None = TavilyWebSearch(api_key=key)
+        provider: object | None = TavilyWebSearch(api_key=key)
     else:
-        search = get_web_search()
-        if search is not None:
+        provider = get_web_search()
+        if provider is not None:
             allowed, funding_user_id, reason = await billing.platform_capability_funding(
                 db, company_id=company_id
             )
             if not allowed:
-                return None, 0, None, reason
+                return None, None, reason
+    return provider, funding_user_id, None
 
-    if search is None:
-        return None, 0, None, None
+
+async def _resolve_web_search(
+    db, company_id
+) -> tuple[object | None, int, object | None, str | None]:
+    """Return ``(provider, cost_cents, funding_user_id, reason)`` for web search.
+
+    Thin wrapper over :func:`_resolve_web_provider` that attaches the per-call
+    estimated cost (basic=1 credit, advanced=2) the meter reserves up front.
+    """
+    provider, funding_user_id, reason = await _resolve_web_provider(db, company_id)
+    if provider is None:
+        return None, 0, None, reason
     multiplier = 2 if settings.tavily_search_depth == "advanced" else 1
-    return search, settings.web_search_cost_cents * multiplier, funding_user_id, None
+    return provider, settings.web_search_cost_cents * multiplier, funding_user_id, None
 
 
 async def _web_search(db, ctx, *, agent: Agent, task: Task, args: dict) -> ToolOutcome:
@@ -789,7 +841,8 @@ async def _web_search(db, ctx, *, agent: Agent, task: Task, args: dict) -> ToolO
         return unsupported_capability(
             "Web search",
             hint=reason
-            or "No web-search provider is connected (add a Tavily key in Settings).",
+            or "No web-search provider is connected — self-configure one with "
+            "`configure_integration` (provider 'tavily'), or add a Tavily key in Settings.",
         )
     try:
         if cost_cents > 0:
@@ -808,9 +861,7 @@ async def _web_search(db, ctx, *, agent: Agent, task: Task, args: dict) -> ToolO
                 captured["results"] = hits
                 credits = getattr(search, "last_usage_credits", None)
                 actual_cents = (
-                    credits * settings.web_search_cost_cents
-                    if credits is not None
-                    else cost_cents
+                    credits * settings.web_search_cost_cents if credits is not None else cost_cents
                 )
                 request_id = getattr(search, "last_request_id", None)
                 return (
@@ -843,6 +894,98 @@ async def _web_search(db, ctx, *, agent: Agent, task: Task, args: dict) -> ToolO
     return ToolOutcome(observation=clip(observation, settings.web_search_max_chars))
 
 
+def _normalize_urls(args: dict) -> list[str]:
+    """The URLs a web_fetch call asked for: accept a single ``url`` or a ``urls``
+    list, de-duplicated and order-preserving, capped at ``web_fetch_max_urls``."""
+    raw = args.get("urls")
+    if raw is None:
+        one = args.get("url")
+        raw = [one] if one else []
+    if isinstance(raw, str):
+        raw = [raw]
+    seen: set[str] = set()
+    urls: list[str] = []
+    for item in raw if isinstance(raw, list) else []:
+        u = str(item or "").strip()
+        if u and u not in seen:
+            seen.add(u)
+            urls.append(u)
+    return urls[: settings.web_fetch_max_urls]
+
+
+async def _web_fetch(db, ctx, *, agent: Agent, task: Task, args: dict) -> ToolOutcome:
+    urls = _normalize_urls(args)
+    if not urls:
+        return ToolOutcome(
+            observation="Provide a `url` (or a `urls` list) of page(s) to fetch.",
+            is_error=True,
+        )
+    provider, cost_cents, funding_user_id, reason = await _resolve_web_search(db, task.company_id)
+    # web_fetch shares the Tavily provider/key with web_search; a resolved provider
+    # that can't extract (e.g. a search-only test double or future provider) reports
+    # the capability unsupported rather than pretending to read the pages.
+    if provider is None or not hasattr(provider, "extract"):
+        return unsupported_capability(
+            "Fetching web pages",
+            hint=reason
+            or "No web-fetch provider is connected — self-configure one with "
+            "`configure_integration` (provider 'tavily'), or add a Tavily key in Settings.",
+        )
+    # Estimate: ~1 credit per 5 URLs (×2 at advanced depth). The meter reserves this
+    # up front, then reconciles to Tavily's reported credits — same path as search.
+    import math
+
+    depth_mult = 2 if settings.tavily_extract_depth == "advanced" else 1
+    estimate_cents = math.ceil(len(urls) / 5) * settings.web_search_cost_cents * depth_mult
+    try:
+        if cost_cents > 0:
+            captured: dict = {}
+
+            async def _do() -> tuple[int, str | None, dict | None]:
+                fetched = await provider.extract(urls)
+                captured["results"] = fetched
+                credits = getattr(provider, "last_usage_credits", None)
+                actual_cents = (
+                    credits * settings.web_search_cost_cents
+                    if credits is not None
+                    else estimate_cents
+                )
+                request_id = getattr(provider, "last_request_id", None)
+                return (
+                    actual_cents,
+                    request_id,
+                    {"urls": len(urls), "credits": credits},
+                )
+
+            await ctx.cost_meter.metered_external(
+                company_id=task.company_id,
+                agent_id=agent.id,
+                task_id=task.id,
+                estimated_cents=estimate_cents,
+                vendor=f"web_fetch({settings.web_search_provider})",
+                sku=urls[0][:120],
+                action=_do,
+                description=f"web fetch: {len(urls)} url(s)",
+                funding_user_id=funding_user_id,
+                funding_kind="web_search",
+            )
+            results = captured.get("results", [])
+        else:
+            results = await provider.extract(urls)
+    except WebSearchError as exc:
+        return ToolOutcome(observation=f"web fetch failed: {exc}", is_error=True)
+    ok = [r for r in results if not r.error and r.content]
+    failed = [r for r in results if r.error or not r.content]
+    if not ok:
+        detail = "; ".join(f"{r.url}: {r.error or 'no content'}" for r in failed) or "no content"
+        return ToolOutcome(observation=f"could not fetch any of the URLs ({detail})", is_error=True)
+    blocks = [f"## {r.url}\n{r.content}" for r in ok]
+    observation = "Fetched page content:\n\n" + "\n\n".join(blocks)
+    if failed:
+        observation += "\n\nCould not fetch: " + ", ".join(r.url for r in failed)
+    return ToolOutcome(observation=clip(observation, settings.web_fetch_max_chars))
+
+
 #: Sub-task statuses that mean the child is still working (not yet collectible).
 _IN_FLIGHT = (
     TaskStatus.queued,
@@ -855,9 +998,7 @@ _IN_FLIGHT = (
 async def _collect_results(db, ctx, *, agent: Agent, task: Task, args: dict) -> ToolOutcome:
     rows = (
         await db.scalars(
-            select(Task)
-            .where(Task.parent_task_id == task.id)
-            .order_by(Task.created_at.asc())
+            select(Task).where(Task.parent_task_id == task.id).order_by(Task.created_at.asc())
         )
     ).all()
     if not rows:
@@ -873,11 +1014,14 @@ async def _collect_results(db, ctx, *, agent: Agent, task: Task, args: dict) -> 
             clipped = clip(summary, settings.collect_results_summary_chars)
             lines.append(f"- {child.goal[:80]}: {clipped or '(no summary)'}")
     if failed:
-        lines.append(f"Failed/blocked sub-tasks ({len(failed)}): " + ", ".join(c.goal[:50] for c in failed))
+        lines.append(
+            f"Failed/blocked sub-tasks ({len(failed)}): " + ", ".join(c.goal[:50] for c in failed)
+        )
     if pending:
         # Tell the parent to wait rather than synthesize half the picture.
         lines.append(
-            f"Still running ({len(pending)}): " + ", ".join(c.goal[:50] for c in pending)
+            f"Still running ({len(pending)}): "
+            + ", ".join(c.goal[:50] for c in pending)
             + ". Check back before synthesizing — these have not reported yet."
         )
     return ToolOutcome(observation=clip("\n".join(lines), settings.collect_results_total_chars))
@@ -967,5 +1111,6 @@ HANDLERS = {
     "read_metrics": _read_metrics,
     "record_metric": _record_metric,
     "web_search": _web_search,
+    "web_fetch": _web_fetch,
     "collect_results": _collect_results,
 }
