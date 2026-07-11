@@ -10,8 +10,6 @@ import base64
 import os
 import uuid
 
-import pytest
-
 from tests.conftest import requires_db
 
 pytestmark = requires_db
