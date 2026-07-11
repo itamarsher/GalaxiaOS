@@ -50,6 +50,7 @@ from app.runtime.prompts import (
     PLAN_TO_ORG_SYSTEM,
     REFINE_SCHEMA,
     REFINE_SYSTEM,
+    generation_language_directive,
 )
 from app.services import apikeys, investors
 from app.services import chat as chat_svc
@@ -602,6 +603,12 @@ async def generate(db: AsyncSession, *, company: Company) -> dict:
     mission.target_market = plan.get("target_market")
     company.name = str(plan.get("summary") or company.name)[:120]
 
+    # Language detected once here (from the raw mission — the strongest signal) and
+    # reused by every later stage so the whole company speaks the founder's language
+    # deterministically, instead of each stage re-detecting from derived text.
+    language = str(plan.get("language") or "").strip()[:20] or None
+    mission.language = language
+
     for i, obj in enumerate(_as_dicts(plan.get("objectives"), "title")):
         objective = Objective(
             company_id=company.id,
@@ -627,11 +634,16 @@ async def generate(db: AsyncSession, *, company: Company) -> dict:
     set_progress(
         company.id, phase="org", pct=55, message="Designing the agent fleet"
     )
+    # Carry the raw mission (not just the derived objectives) so the org designer
+    # reasons in the founder's own words and locale; ensure_ascii=False keeps
+    # non-Latin scripts intact instead of escaping them to \\uXXXX gibberish.
     org_input = json.dumps(
         {
+            "mission": mission.raw_text,
             "objectives": plan.get("objectives", []),
             "monthly_budget_cents": budget.limit_cents,
-        }
+        },
+        ensure_ascii=False,
     )
     org_resp = await meter.run_llm(
         provider,
@@ -640,7 +652,7 @@ async def generate(db: AsyncSession, *, company: Company) -> dict:
         agent_id=None,
         task_id=None,
         model=planner_model,
-        system=PLAN_TO_ORG_SYSTEM,
+        system=PLAN_TO_ORG_SYSTEM + generation_language_directive(language),
         messages=[Message(role="user", content=org_input)],
         max_tokens=gen_max_tokens,
         json_schema=PLAN_TO_ORG_SCHEMA,
@@ -779,6 +791,9 @@ async def refine(db: AsyncSession, *, company: Company, message: str) -> dict:
 
     snapshot = await _current_plan_snapshot(db, company)
     reviews_ctx = await _investor_reviews_context(db, company)
+    language = await db.scalar(
+        select(Mission.language).where(Mission.company_id == company.id)
+    )
     meter = CostMeter(SessionLocal)
     resp = await meter.run_llm(
         provider,
@@ -787,12 +802,12 @@ async def refine(db: AsyncSession, *, company: Company, message: str) -> dict:
         agent_id=None,
         task_id=None,
         model=planner_model,
-        system=REFINE_SYSTEM,
+        system=REFINE_SYSTEM + generation_language_directive(language),
         messages=[
             Message(
                 role="user",
                 content=(
-                    f"Current plan:\n{json.dumps(snapshot)}\n\n"
+                    f"Current plan:\n{json.dumps(snapshot, ensure_ascii=False)}\n\n"
                     + (
                         f"Investor reviews of this plan:\n{reviews_ctx}\n\n"
                         if reviews_ctx

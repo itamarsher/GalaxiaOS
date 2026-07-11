@@ -19,10 +19,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.db import SessionLocal
-from app.models import Agent, DecisionRequest, FounderDigest, MemoryEntry, Task
+from app.models import Agent, DecisionRequest, FounderDigest, MemoryEntry, Mission, Task
 from app.models.enums import AgentRole, AgentStatus, DecisionStatus
 from app.providers.base import Message
 from app.runtime.cost_meter import CostMeter
+from app.runtime.prompts import operating_language_directive
 from app.services import apikeys, platform_requests
 from app.services import budget as budget_svc
 from app.services import memory as memory_svc
@@ -49,6 +50,13 @@ commands about pausing by ROI/performance threshold (set roi_lt). Use "all": tru
 every agent. Use "request_capability" when the founder wants a new tool/capability the agents
 lack (e.g. real web search), and "report_bug" when they want something broken reported — fill
 title and details for both. Use "none" if the command cannot be mapped to one of these actions."""
+
+
+async def _company_language(db: AsyncSession, company_id: uuid.UUID) -> str | None:
+    """The founder's language (BCP-47), detected once at onboarding. Copilot answers
+    and digests use it so this founder-facing surface stays in the founder's language
+    deterministically, same as the agent loop — not just whatever the model defaults to."""
+    return await db.scalar(select(Mission.language).where(Mission.company_id == company_id))
 
 
 async def _company_state(db: AsyncSession, company_id: uuid.UUID, extra_memory=None) -> str:
@@ -107,6 +115,7 @@ async def answer(
 
     relevant = await memory_svc.query(db, company_id=company_id, text=question, limit=8)
     state = await _company_state(db, company_id, extra_memory=relevant)
+    language = await _company_language(db, company_id)
     meter = CostMeter(SessionLocal)
     resp = await meter.run_llm(
         provider,
@@ -117,7 +126,8 @@ async def answer(
         model=provider.default_models["cheap"],
         system=(
             "You are the founder's copilot. Answer concisely and only from the company "
-            "state provided. If the data does not support an answer, say so."
+            "state provided. If the data does not support an answer, say so.\n\n"
+            + operating_language_directive(language)
         ),
         messages=[Message(role="user", content=f"Company state:\n{state}\n\nQuestion: {question}")],
         max_tokens=600,
@@ -297,6 +307,7 @@ async def generate_digest(
     summary = state
     if resolved is not None:
         provider, api_key = resolved.provider, resolved.api_key
+        language = await _company_language(db, company_id)
         meter = CostMeter(SessionLocal)
         resp = await meter.run_llm(
             provider,
@@ -307,7 +318,8 @@ async def generate_digest(
             model=provider.default_models["cheap"],
             system=(
                 "Write a terse board update for a solo founder: yesterday's progress, "
-                "spend, risks, and any decisions needed. Markdown, <150 words."
+                "spend, risks, and any decisions needed. Markdown, <150 words.\n\n"
+                + operating_language_directive(language)
             ),
             messages=[Message(role="user", content=state)],
             max_tokens=500,

@@ -16,6 +16,10 @@ class Mission(Base, PKMixin, TenantMixin, TimestampMixin):
     __tablename__ = "missions"
 
     raw_text: Mapped[str] = mapped_column(Text, nullable=False)
+    # BCP-47 tag of the founder's mission language, detected once during generation
+    # (mission → plan) and reused by every later stage so all generated text lands
+    # in one language deterministically. Nullable: older drafts predate detection.
+    language: Mapped[str | None] = mapped_column(String(20), nullable=True)
     generated_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
     business_model_assumptions: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     target_market: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
