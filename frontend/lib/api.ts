@@ -140,6 +140,11 @@ export interface GenerationProgress {
   status: "idle" | "running" | "done" | "error"; error: string | null; events: GenerationEvent[];
 }
 export interface RefineResponse { reply: string; preview: Preview }
+export interface ReusableCredential {
+  id: string; kind: "key" | "connection"; provider: string | null;
+  label: string; detail: string | null;
+  source_company_id: string; source_company_name: string;
+}
 export interface Memory { id: string; type: string; title: string; content: string; created_at: string }
 export interface Runway { projected_days_remaining: number | null; burn_rate_cents_per_day: number; balance_cents: number | null }
 export interface Digest { summary_md: string | null; open_decisions: number; period_date: string | null }
@@ -249,6 +254,15 @@ export const api = {
     req<CompanyFile[]>(
       `/companies/${companyId}/files${category ? `?category=${encodeURIComponent(category)}` : ""}`,
     ),
+
+  // Reuse saved keys/connections from the founder's other businesses.
+  reusableCredentials: (companyId: string) =>
+    req<ReusableCredential[]>(`/onboarding/${companyId}/reusable-credentials`),
+  reuseCredentials: (companyId: string, ids: string[]) =>
+    req<{ reused: string[] }>(`/onboarding/${companyId}/reuse-credentials`, {
+      method: "POST",
+      body: JSON.stringify({ ids }),
+    }),
 
   generate: (companyId: string) => req<Preview>(`/onboarding/${companyId}/generate`, { method: "POST" }),
   generateStatus: (companyId: string) =>

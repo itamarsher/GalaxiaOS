@@ -11,9 +11,108 @@
 // OAuth round-trip in a popup window and polls connection status, so onboarding
 // stays exactly where it was.
 
-import { useEffect, useState } from "react";
-import { api } from "@/lib/api";
+import { useEffect, useRef, useState } from "react";
+import { api, type ReusableCredential } from "@/lib/api";
 import { usePoll } from "@/lib/useApi";
+
+// Reuse keys/connections saved on the founder's OTHER businesses. Credentials are
+// stored per company (encrypted), so a new business would otherwise start empty and
+// the founder would re-paste the same Anthropic key, re-connect Cloudflare, etc.
+// This lists what's reusable and copies the selected ones into the new company in
+// one click. Shown during onboarding's BYOK step; hides itself once nothing is
+// left to reuse. Never shows a secret — only a fingerprint or a friendly label.
+export function ReuseCredentialsCard({
+  companyId,
+  items,
+  onReused,
+}: {
+  companyId: string;
+  items: ReusableCredential[];
+  onReused: (reusedIds: string[]) => void;
+}) {
+  // Everything is selected by default — the common case is "reuse it all".
+  const [selected, setSelected] = useState<Set<string>>(() => new Set(items.map((i) => i.id)));
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  // Keep the selection in step with the incoming list: preserve the founder's
+  // explicit un-ticks for ids that persist, and default-select any newly-appeared
+  // id. `knownIds` distinguishes "the user un-ticked this" from "brand new".
+  const knownIds = useRef<Set<string>>(new Set(items.map((i) => i.id)));
+  const idKey = items.map((i) => i.id).join(",");
+  useEffect(() => {
+    setSelected((prev) => {
+      const next = new Set<string>();
+      for (const it of items) {
+        const isNew = !knownIds.current.has(it.id);
+        if (isNew || prev.has(it.id)) next.add(it.id);
+      }
+      return next;
+    });
+    knownIds.current = new Set(items.map((i) => i.id));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [idKey]);
+
+  const toggle = (id: string) =>
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+
+  const reuse = async () => {
+    const ids = items.map((i) => i.id).filter((id) => selected.has(id));
+    if (ids.length === 0) return;
+    setBusy(true); setErr(null);
+    try {
+      const res = await api.reuseCredentials(companyId, ids);
+      onReused(res.reused);
+    } catch (e) {
+      setErr(String(e instanceof Error ? e.message : e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const chosen = items.filter((i) => selected.has(i.id)).length;
+
+  return (
+    <div className="card">
+      <div className="step">Reuse from another business</div>
+      <p className="muted" style={{ fontSize: 13, margin: "6px 0 10px" }}>
+        You&apos;ve already set these up on another business. Reuse them here so you don&apos;t have
+        to re-enter anything — or untick any you&apos;d rather leave out.
+      </p>
+      {items.map((it) => (
+        <label
+          key={it.id}
+          className="kv"
+          style={{ cursor: "pointer", alignItems: "center", gap: 10 }}
+        >
+          <span style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <input type="checkbox" checked={selected.has(it.id)} onChange={() => toggle(it.id)} />
+            <span>
+              <strong>{it.label}</strong>
+              {it.detail && <span className="muted"> · <code>{it.detail}</code></span>}
+              <br />
+              <span className="muted" style={{ fontSize: 12 }}>
+                from {it.source_company_name}
+              </span>
+            </span>
+          </span>
+          <span className={`status ${it.kind === "key" ? "active" : "pending"}`}>{it.kind}</span>
+        </label>
+      ))}
+      <div className="btnrow">
+        <button disabled={busy || chosen === 0} onClick={reuse}>
+          {busy ? "Reusing…" : `Reuse ${chosen} selected`}
+        </button>
+      </div>
+      {err && <div className="err">{err}</div>}
+    </div>
+  );
+}
 
 // Cloudflare powers landing-page hosting (Pages) and connecting a bought domain
 // (DNS). It needs an API token (secret, encrypted at rest) plus the account id.

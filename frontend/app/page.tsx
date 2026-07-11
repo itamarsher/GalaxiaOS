@@ -2,8 +2,8 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { api, fmtUsd, type Company, type GenerationProgress, type InvestmentReview, type Preview } from "@/lib/api";
-import { CloudflareCard, GoogleDriveCard } from "@/lib/connectors";
+import { api, fmtUsd, type Company, type GenerationProgress, type InvestmentReview, type Preview, type ReusableCredential } from "@/lib/api";
+import { CloudflareCard, GoogleDriveCard, ReuseCredentialsCard } from "@/lib/connectors";
 
 type Step = "loading" | "auth" | "businesses" | "mission" | "key" | "generating" | "review";
 interface ChatTurn { who: "user" | "bot"; text: string }
@@ -29,6 +29,14 @@ export default function Home() {
 
   // Generation telemetry.
   const [progress, setProgress] = useState<GenerationProgress | null>(null);
+
+  // Reuse of keys/connections saved on the founder's other businesses. Populated
+  // when we land on the "key" step; `reusedKeyProviders` tracks which raw keys
+  // (e.g. "anthropic") are now present so we don't force re-typing them, and
+  // `reuseNonce` remounts the connector cards after a reuse so they re-fetch.
+  const [reusable, setReusable] = useState<ReusableCredential[]>([]);
+  const [reusedKeyProviders, setReusedKeyProviders] = useState<string[]>([]);
+  const [reuseNonce, setReuseNonce] = useState(0);
 
   // Refinement chat.
   const [chat, setChat] = useState<ChatTurn[]>([]);
@@ -123,6 +131,19 @@ export default function Home() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // On the BYOK step, offer any keys/connections saved on the founder's other
+  // businesses for one-click reuse. Runs whenever we (re)enter the step for a
+  // company; after a reuse the target already has them, so the list comes back
+  // empty and the card hides itself.
+  useEffect(() => {
+    if (step !== "key" || !companyId) return;
+    let cancelled = false;
+    api.reusableCredentials(companyId)
+      .then((items) => { if (!cancelled) setReusable(items); })
+      .catch(() => { if (!cancelled) setReusable([]); });
+    return () => { cancelled = true; };
+  }, [step, companyId, reuseNonce]);
+
   const doAuth = (signup: boolean) =>
     guard(async () => {
       const res = signup ? await api.signup(email, password) : await api.login(email, password);
@@ -134,6 +155,7 @@ export default function Home() {
     // Reset the onboarding wizard so creating an Nth business starts clean.
     setCompanyId(null); setApiKey(""); setTavilyKey(""); setResendKey(""); setPreview(null);
     setChat([]); setProgress(null); setMission(""); setBudget("500"); setErr(null);
+    setReusable([]); setReusedKeyProviders([]);
     setStep("mission");
   };
 
@@ -144,11 +166,17 @@ export default function Home() {
       setStep("key");
     });
 
+  // The Anthropic key is required to generate — satisfied either by typing one
+  // now or by having reused one from another business.
+  const hasAnthropicKey = apiKey.trim().length > 0 || reusedKeyProviders.includes("anthropic");
+
   // Kick off generation and poll for progress telemetry in parallel.
   const submitKeyAndGenerate = () =>
     guard(async () => {
       if (!companyId) return;
-      await api.addApiKey(companyId, apiKey);
+      // A freshly typed key wins (lets the founder override a reused one); if they
+      // reused an Anthropic key and typed nothing, it's already stored.
+      if (apiKey.trim()) await api.addApiKey(companyId, apiKey.trim());
       // Optional: a Tavily key enables real web search (else it's simulated).
       if (tavilyKey.trim()) await api.addApiKey(companyId, tavilyKey.trim(), "tavily");
       // Optional: a Resend key makes Resend the email provider (else simulated).
@@ -270,11 +298,34 @@ export default function Home() {
         </div>
       )}
 
+      {step === "key" && companyId && reusable.length > 0 && (
+        <ReuseCredentialsCard
+          companyId={companyId}
+          items={reusable}
+          onReused={(reusedIds) => {
+            // Note which raw keys are now present (so we don't force re-typing),
+            // then bump the nonce to re-fetch the (now shorter) reuse list and
+            // remount the connector cards so they reflect the copied connections.
+            const providers = reusedIds
+              .filter((id) => id.startsWith("key:"))
+              .map((id) => id.slice("key:".length));
+            setReusedKeyProviders((prev) => Array.from(new Set([...prev, ...providers])));
+            setReuseNonce((n) => n + 1);
+          }}
+        />
+      )}
+
       {step === "key" && (
         <div className="card">
           <div className="step">Step 2 · Bring your own key</div>
           <p className="muted">Your Claude API key is encrypted at rest. Only a fingerprint is ever shown.</p>
-          <label>Anthropic API key</label>
+          {reusedKeyProviders.includes("anthropic") ? (
+            <p className="muted" style={{ fontSize: 13 }}>
+              ✓ Reused your Anthropic key from another business. You can generate now, or paste a
+              different key below to override it.
+            </p>
+          ) : null}
+          <label>Anthropic API key {reusedKeyProviders.includes("anthropic") && <span className="muted">(optional — reused)</span>}</label>
           <input type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)} placeholder="sk-ant-..." />
           <label>Tavily API key <span className="muted">(optional)</span></label>
           <input type="password" value={tavilyKey} onChange={(e) => setTavilyKey(e.target.value)} placeholder="tvly-… — enables real web search" />
@@ -284,7 +335,7 @@ export default function Home() {
             Optional. Without Tavily, web search returns simulated results; without Resend, email
             is simulated. You can add or change these later in Settings.
           </p>
-          <button disabled={busy || !apiKey} onClick={submitKeyAndGenerate}>
+          <button disabled={busy || !hasAnthropicKey} onClick={submitKeyAndGenerate}>
             Generate organization
           </button>
         </div>
@@ -297,10 +348,12 @@ export default function Home() {
             Hook up hosting and a file store now, or skip and do it later in Settings — neither is
             required to generate or launch your organization.
           </p>
-          <CloudflareCard companyId={companyId} />
+          {/* `reuseNonce` in the key remounts these after a reuse so they re-fetch
+              status and reflect a connection that was just copied over. */}
+          <CloudflareCard key={`cf-${reuseNonce}`} companyId={companyId} />
           {/* Popup mode keeps this onboarding wizard intact across Google's consent
               round-trip instead of navigating the whole page away. */}
-          <GoogleDriveCard companyId={companyId} popup />
+          <GoogleDriveCard key={`gd-${reuseNonce}`} companyId={companyId} popup />
         </div>
       )}
 
