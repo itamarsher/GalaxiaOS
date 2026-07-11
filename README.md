@@ -20,8 +20,10 @@ for the full statement and how we plan to sustain the open core.
 
 - **Backend:** Python + FastAPI (`backend/app/api`), async SQLAlchemy 2.0, Postgres + pgvector.
 - **Agent runtime:** `backend/app/runtime` — an `arq` worker running a think→act→observe loop.
-- **AI (BYOK):** provider-agnostic `LLMProvider` (`backend/app/providers`); Anthropic/Claude at
-  launch. Founders bring their own key, stored envelope-encrypted.
+- **AI (BYOK):** provider-agnostic `LLMProvider` (`backend/app/providers`); Anthropic/Claude or
+  **open-source models** (Llama 3.3, DeepSeek R1, Qwen, gpt-oss) via OpenAI-compatible hosts
+  (OpenRouter/Groq/Together, or a self-hosted vLLM/Ollama server) — typically far cheaper per
+  token. Founders bring their own key, stored envelope-encrypted.
 - **Budget OS:** every billable action (LLM tokens **and** external charges like domains) passes
   through one chokepoint — `CostMeter` (`backend/app/runtime/cost_meter.py`) — which reserves
   against the budget *before* spending.
