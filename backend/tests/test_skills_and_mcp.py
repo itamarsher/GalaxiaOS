@@ -70,22 +70,26 @@ def test_every_operating_role_has_skills() -> None:
 # (`discover_tools`/`use_tool`), escalate with `request_user_action` instead of
 # faking a result, and file/record the outcome. A representative sample is asserted
 # so a rename or accidental deletion is caught, without pinning the full list.
+#
+# The catalog is scoped to services an agent can ONBOARD ITSELF: self-serve web
+# signup plus a self-issued API key / token / OAuth credential — no sales call,
+# approval, partner program, review, or KYC/underwriting standing between the
+# agent and a working credential. That's the bar for `connect_service` to wire a
+# tool up without the founder. Services that fail it (sales-led/enterprise like
+# Salesforce, ZoomInfo, Gong; approval-gated APIs like the ad platforms; KYC-gated
+# finance like Mercury, Brex, Plaid; or no real public API like Loom, Sketch) were
+# removed rather than left as playbooks an agent can't actually action alone.
 _TOOL_SKILLS = (
     "figma",
     "canva",
     "webflow",
-    "google-ads",
-    "meta-ads",
     "mailchimp",
     "hubspot",
     "google-analytics",
-    "salesforce",
     "apollo",
     "calendly",
     "stripe",
     "quickbooks",
-    "ramp",
-    "carta",
     "linear",
     "jira",
     "github",
@@ -94,44 +98,26 @@ _TOOL_SKILLS = (
     "sentry",
     "posthog",
     "amplitude",
-    "snowflake",
     "dbt",
     "bigquery",
     "segment",
     "slack",
     "zapier",
-    "docusign",
     "airtable",
-    "crunchbase",
-    "similarweb",
-    # wave 2
-    "sketch",
     "miro",
-    "loom",
-    "hotjar",
     "typeform",
-    "tiktok-ads",
     "google-tag-manager",
     "beehiiv",
-    "substack",
     "mixpanel",
-    "optimizely",
     "launchdarkly",
     "clay",
     "attio",
-    "gong",
     "pandadoc",
     "asana",
     "confluence",
     "freshdesk",
-    "brex",
-    "bill-com",
-    "plaid",
     "chargebee",
     "paypal",
-    "wise",
-    "netsuite",
-    "expensify",
     "gitlab",
     "circleci",
     "datadog",
@@ -142,10 +128,6 @@ _TOOL_SKILLS = (
     "supabase",
     "postman",
     "twilio",
-    "looker",
-    "tableau",
-    "fivetran",
-    "databricks",
 )
 
 
