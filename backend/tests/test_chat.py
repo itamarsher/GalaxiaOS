@@ -9,6 +9,7 @@ to the agent without re-posting the original message.
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from types import SimpleNamespace
 
 from sqlalchemy import func, select
 
@@ -31,6 +32,7 @@ from app.models.enums import (
     RunTrigger,
     TaskStatus,
 )
+from app.runtime.backends.native import NativeBackend
 from app.runtime.tools import TOOL_SPECS, execute_tool
 from app.services import chat
 from tests.conftest import requires_db
@@ -171,6 +173,70 @@ async def test_send_with_wait_parks_task(session_factory, company_with_budget):
             select(func.count(ChatMessage.id)).where(ChatMessage.channel_id == wait.channel_id)
         )
         assert count == 1
+
+
+@requires_db
+async def test_resume_while_wait_pending_reparks_instead_of_running(
+    session_factory, company_with_budget
+):
+    """A task woken while its reply-wait is still pending must re-park, not free-run.
+
+    Regression: a parked task that resumes before its reply arrives used to replay a
+    transcript that predates the wait and could wander off (e.g. report to the
+    founder as if done). The pending ChatWait is authoritative — the backend re-parks
+    until a reply actually satisfies the wait.
+    """
+    company_id = company_with_budget
+    agent, task = await _agent_and_task(session_factory, company_id)
+
+    async with session_factory() as db:
+        await chat.create_channel(
+            db, company_id=company_id, name="war-room", created_by_agent_id=agent.id
+        )
+        await db.commit()
+
+    # Agent posts and waits — the task parks with a pending ChatWait.
+    async with session_factory() as db:
+        await execute_tool(
+            db,
+            FakeCtx(),
+            agent=agent,
+            task=task,
+            name="send_chat_message",
+            args={
+                "channel": "war-room",
+                "message": "Need input — waiting on Research.",
+                "wait_for_reply": True,
+            },
+        )
+        await db.commit()
+
+    ctx = SimpleNamespace(session_factory=session_factory)
+    backend = NativeBackend()
+
+    # Resume BEFORE the reply arrives: the guard re-parks rather than running.
+    assert await backend._still_waiting_for_reply(ctx, task) is True
+    assert task.status is TaskStatus.waiting_approval
+    async with session_factory() as db:
+        row = await db.get(Task, task.id)
+        assert row.status is TaskStatus.waiting_approval
+
+    # A teammate replies → the wait is satisfied → the guard lets the loop proceed.
+    async with session_factory() as db:
+        other = Agent(company_id=company_id, role=AgentRole.research, name="B")
+        db.add(other)
+        await db.flush()
+        channel = await chat.find_channel_by_name(db, company_id=company_id, name="war-room")
+        await chat.post_message(
+            db,
+            company_id=company_id,
+            channel_id=channel.id,
+            sender_agent_id=other.id,
+            body="Here's the input you needed.",
+        )
+        await db.commit()
+
+    assert await backend._still_waiting_for_reply(ctx, task) is False
 
 
 @requires_db
