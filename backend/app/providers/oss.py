@@ -30,6 +30,9 @@ from app.providers.openai import OpenAIProvider
 # bound is fine (and safer than under-reserving).
 _DEFAULT_OSS_PRICE = Price(input_cents_per_mtok=100, output_cents_per_mtok=300)
 _DEFAULT_OSS_MAX_OUTPUT = 16_384
+# Conservative context-window floor for an OSS model id we don't have an
+# explicit window for. Common open models are at least this large.
+_DEFAULT_OSS_CONTEXT_WINDOW = 128_000
 
 
 class _OSSOpenAICompatProvider(OpenAIProvider):
@@ -46,14 +49,20 @@ class _OSSOpenAICompatProvider(OpenAIProvider):
     price_table: dict[str, Price] = {}
     #: model id -> max output tokens per response. Missing ids fall back below.
     max_output_table: dict[str, int] = {}
+    #: model id -> total input context tokens. Missing ids fall back below.
+    context_window_table: dict[str, int] = {}
     default_price: Price = _DEFAULT_OSS_PRICE
     default_max_output: int = _DEFAULT_OSS_MAX_OUTPUT
+    default_context_window: int = _DEFAULT_OSS_CONTEXT_WINDOW
 
     def price(self, model: str) -> Price:
         return self.price_table.get(model, self.default_price)
 
     def max_output_tokens(self, model: str) -> int:
         return self.max_output_table.get(model, self.default_max_output)
+
+    def context_window_tokens(self, model: str) -> int:
+        return self.context_window_table.get(model, self.default_context_window)
 
 
 class OpenRouterProvider(_OSSOpenAICompatProvider):

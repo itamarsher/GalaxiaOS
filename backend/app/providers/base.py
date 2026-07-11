@@ -146,6 +146,10 @@ class LLMProvider(Protocol):
         """Largest ``max_tokens`` value this model accepts for one response."""
         ...
 
+    def context_window_tokens(self, model: str) -> int:
+        """Total input context (in tokens) this model accepts."""
+        ...
+
     def estimate_input_tokens(
         self, *, api_key: str, model: str, system: str, messages: list[Message]
     ) -> int: ...
