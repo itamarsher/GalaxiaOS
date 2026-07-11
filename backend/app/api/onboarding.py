@@ -20,8 +20,11 @@ from app.schemas import (
     PreviewOut,
     RefineRequest,
     RefineResponse,
+    ReusableCredentialOut,
+    ReuseCredentialsRequest,
+    ReuseCredentialsResponse,
 )
-from app.services import investors, onboarding
+from app.services import investors, onboarding, onboarding_reuse
 
 router = APIRouter(tags=["onboarding"])
 
@@ -37,6 +40,37 @@ async def start(body: OnboardingStartRequest, db: DbDep, user: CurrentUser):
     )
     await db.commit()
     return company
+
+
+@router.get(
+    "/onboarding/{company_id}/reusable-credentials",
+    response_model=list[ReusableCredentialOut],
+)
+async def reusable_credentials(company: CompanyDep, user: CurrentUser):
+    """Keys/connections from the founder's other companies, reusable into this one.
+
+    Lets a new business pick up the Anthropic key, Cloudflare, Google Drive or MCP
+    servers already configured elsewhere instead of re-entering them. Never returns
+    a secret — only display fingerprints/labels.
+    """
+    return await onboarding_reuse.list_reusable(
+        user_id=user.id, target_company_id=company.id
+    )
+
+
+@router.post(
+    "/onboarding/{company_id}/reuse-credentials",
+    response_model=ReuseCredentialsResponse,
+)
+async def reuse_credentials(
+    company: CompanyDep, body: ReuseCredentialsRequest, db: DbDep, user: CurrentUser
+):
+    """Copy the selected saved credentials into this company (envelope re-sealed)."""
+    reused = await onboarding_reuse.reuse(
+        db, user_id=user.id, target_company_id=company.id, ids=body.ids
+    )
+    await db.commit()
+    return ReuseCredentialsResponse(reused=reused)
 
 
 @router.post("/onboarding/{company_id}/generate", response_model=PreviewOut)
