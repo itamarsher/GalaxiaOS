@@ -15,9 +15,10 @@ from app.services.objectives import delivered_objective_ids, objectives_prompt_b
 
 
 class _Obj:
-    def __init__(self, title: str) -> None:
+    def __init__(self, title: str, status: str = "active") -> None:
         self.id = uuid.uuid4()
         self.title = title
+        self.status = status
 
 
 def test_delivered_when_tagged_work_all_succeeded() -> None:
@@ -80,3 +81,26 @@ def test_objectives_prompt_block_numbers_from_one() -> None:
 
 def test_objectives_prompt_block_empty_when_no_objectives() -> None:
     assert objectives_prompt_block([]) == ""
+
+
+def test_objectives_prompt_block_marks_completed_so_work_is_not_reinitiated() -> None:
+    # A delivered-and-closed objective must read differently from an open one, or
+    # the next cycle's CEO re-dispatches work it already finished.
+    block = objectives_prompt_block(
+        [_Obj("Grow signups"), _Obj("Research competitor pricing", status="completed")]
+    )
+    assert "1. Grow signups" in block
+    assert "[completed]" not in block.split("1. Grow signups")[1].split("\n")[0]
+    assert "2. Research competitor pricing  [completed]" in block
+    # And the CEO is told what the tag means.
+    assert "do NOT re-dispatch" in block
+
+
+def test_objectives_prompt_block_handles_stay_stable_with_completed() -> None:
+    # Completed objectives are kept in the list (not filtered) so the 1-based
+    # handles the CEO dispatches against stay aligned with resolve_objective_id.
+    block = objectives_prompt_block(
+        [_Obj("Done thing", status="completed"), _Obj("Open thing")]
+    )
+    assert "1. Done thing  [completed]" in block
+    assert "2. Open thing" in block
