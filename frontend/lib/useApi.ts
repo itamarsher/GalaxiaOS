@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { api, type Task } from "./api";
+import { api, type MissionLogEntry, type Task } from "./api";
 
 /** Fetch on mount and optionally poll. Returns data, error, loading, reload. */
 export function usePoll<T>(fn: () => Promise<T>, intervalMs = 0, deps: unknown[] = []) {
@@ -89,4 +89,65 @@ export function useLiveTasks(companyId: string): Task[] {
   }, [companyId]);
 
   return streaming && streamed ? streamed : (polled.data ?? []);
+}
+
+/** Live company feed: tasks AND the ephemeral mission log over ONE SSE stream.
+ *
+ * The `/events` snapshot already carries both, so a page that needs both (the
+ * game dashboard) should take them from a single stream rather than opening a
+ * second EventSource. Same trust model as {@link useLiveTasks}: rely on the
+ * stream only while it is healthy and has delivered a frame, and keep REST polls
+ * running otherwise (tasks + `/mission-log`) so the feed always keeps refreshing.
+ * A new update lands on the next snapshot diff (≤ the server's poll tick), i.e.
+ * effectively live.
+ */
+export function useLiveCompanyFeed(companyId: string): {
+  tasks: Task[];
+  missionLog: MissionLogEntry[];
+} {
+  const [streamed, setStreamed] = useState<{ tasks: Task[]; missionLog: MissionLogEntry[] } | null>(
+    null,
+  );
+  const [sseOk, setSseOk] = useState(true);
+  const streaming = sseOk && streamed !== null;
+  // One fallback poll fetching both feeds together, so a dropped stream still
+  // refreshes tasks and the mission log in lockstep.
+  const polled = usePoll(
+    async () => {
+      const [tasks, log] = await Promise.all([
+        api.tasks(companyId),
+        api.missionLog(companyId).then((r) => r.mission_log),
+      ]);
+      return { tasks, missionLog: log };
+    },
+    streaming ? 0 : 5000,
+    [companyId, streaming],
+  );
+
+  useEffect(() => {
+    const url = api.eventsUrl(companyId);
+    if (typeof window === "undefined" || typeof EventSource === "undefined" || !url) {
+      setSseOk(false);
+      return;
+    }
+    setSseOk(true);
+    setStreamed(null);
+    const es = new EventSource(url);
+    es.onmessage = (e: MessageEvent) => {
+      try {
+        const frame = JSON.parse(e.data) as { tasks?: Task[]; mission_log?: MissionLogEntry[] };
+        setStreamed({ tasks: frame.tasks ?? [], missionLog: frame.mission_log ?? [] });
+        setSseOk(true);
+      } catch {
+        /* ignore malformed frame */
+      }
+    };
+    es.onerror = () => {
+      es.close();
+      setSseOk(false);
+    };
+    return () => es.close();
+  }, [companyId]);
+
+  return streaming && streamed ? streamed : (polled.data ?? { tasks: [], missionLog: [] });
 }

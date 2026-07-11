@@ -62,6 +62,8 @@ CORE_TOOL_NAMES: frozenset[str] = frozenset(
         "request_decision",
         "request_budget",
         "request_user_action",
+        # live, ephemeral founder-facing milestone updates
+        "post_mission_update",
         # platform escalation (a tool that does NOT exist yet) — never gated
         "request_capability",
         "report_bug",

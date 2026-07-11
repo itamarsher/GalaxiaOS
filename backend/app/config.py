@@ -257,6 +257,13 @@ class Settings(BaseSettings):
     memory_recall_limit: int = 6  # prior learnings injected into an agent's context
     metrics_recall_limit: int = 8  # recent outcome signals injected into context
 
+    # Live mission log — an ephemeral, Redis-backed ring of the agents' latest
+    # milestone updates, surfaced live on the game dashboard (never persisted).
+    mission_log_max_entries: int = 10  # how many recent updates to retain / show
+    mission_log_ttl_seconds: int = 6 * 3600  # key self-expiry (ephemeral by design)
+    mission_log_headline_max_chars: int = 160
+    mission_log_detail_max_chars: int = 400
+
     # Company Memory — embeddings + recall ranking.
     # The embedder turns memory text into the vector used for similarity recall.
     # "local" (default) is a real neural model run in-process via fastembed

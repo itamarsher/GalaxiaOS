@@ -44,7 +44,7 @@ from app.runtime.tools.base import DEFAULT_MAX_OBSERVATION_CHARS, ToolOutcome, c
 from app.runtime.tools.base import consume_approval_grant as _consume_approval_grant
 from app.runtime.tools.base import consume_rejection_grant as _consume_rejection_grant
 from app.runtime.transcript import dump_messages, load_messages, sanitize_messages, transcript_lines
-from app.services import apikeys, chat, memory, metrics, reputation
+from app.services import apikeys, chat, memory, metrics, mission_log, reputation
 from app.services import external_messages as ext
 from app.services import governance as gov
 from app.services import integrations as integrations_svc
@@ -236,6 +236,19 @@ class NativeBackend:
             language=mission_language,
         )
         messages = self._resume_or_seed(task)
+        # Auto-seed the live Mission Log with a "started" beat the first time an
+        # agent picks up a task, so the founder's dashboard has a pulse even before
+        # the agent posts its own updates. Only on a fresh start (a resumed task
+        # already announced itself), and best-effort — never block the loop.
+        if not (settings.persist_task_transcript and task.transcript):
+            await mission_log.record(
+                task.company_id,
+                agent_id=agent.id,
+                agent_name=agent.name,
+                role=agent.role.value,
+                headline=task.goal,
+                kind="start",
+            )
         await self._inject_resume_notes(ctx, task, messages)
         # Tool discovery: a task starts with only the core toolset and grows as the
         # agent hot-loads tools with `use_tool`. Seed the live set from the transcript
