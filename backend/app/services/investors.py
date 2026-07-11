@@ -23,6 +23,7 @@ from app.observability import get_logger
 from app.providers.base import Message
 from app.runtime.cost_meter import CostMeter
 from app.runtime.investor_prompts import INVESTOR_PERSONAS, INVESTOR_VERDICT_SCHEMA
+from app.runtime.prompts import generation_language_directive
 from app.services import apikeys
 
 _log = get_logger("abos.investors")
@@ -108,6 +109,9 @@ async def _build_deal_memo(db: AsyncSession, *, company: Company) -> str:
 
     memo = {
         "company_name": company.name,
+        # The founder's own words: strongest language/locale signal for the
+        # investors, who otherwise judge (and answer) off derived summaries.
+        "mission": mission.raw_text if mission else None,
         "summary": mission.generated_summary if mission else None,
         "target_market": mission.target_market if mission else None,
         "business_model_assumptions": (
@@ -115,7 +119,9 @@ async def _build_deal_memo(db: AsyncSession, *, company: Company) -> str:
         ),
         "objectives": objective_memos,
     }
-    return json.dumps(memo)
+    # ensure_ascii=False keeps non-Latin scripts intact rather than escaping the
+    # founder's language to \\uXXXX, which is what the personas mirror.
+    return json.dumps(memo, ensure_ascii=False)
 
 
 async def review(db: AsyncSession, *, company: Company) -> list[InvestmentReview]:
@@ -131,6 +137,14 @@ async def review(db: AsyncSession, *, company: Company) -> list[InvestmentReview
     model = settings.investor_model or provider.default_models["planner"]
 
     deal_memo = await _build_deal_memo(db, company=company)
+
+    # The founder's language, detected once at generation time. Handed to each
+    # persona by name so verdicts land in that language deterministically rather
+    # than re-detecting from the memo (falls back to detect-and-mirror if unset).
+    language = await db.scalar(
+        select(Mission.language).where(Mission.company_id == company.id)
+    )
+    lang_directive = generation_language_directive(language)
 
     # Idempotent re-run: drop any prior verdicts for this company first.
     await db.execute(
@@ -149,7 +163,7 @@ async def review(db: AsyncSession, *, company: Company) -> list[InvestmentReview
                 agent_id=None,
                 task_id=None,
                 model=model,
-                system=system,
+                system=system + lang_directive,
                 messages=[Message(role="user", content=deal_memo)],
                 max_tokens=1200,
                 json_schema=INVESTOR_VERDICT_SCHEMA,
