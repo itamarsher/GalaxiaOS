@@ -70,7 +70,8 @@ export default function Home() {
   // Open a company: a draft hasn't been launched yet, so resume it at the plan-
   // approval (review) screen — load its generated plan and let the founder launch
   // — instead of dropping into a dashboard for a company that isn't live. A
-  // launched (active/paused/…) company goes straight to its dashboard.
+  // launched (active/paused/…) company goes straight to its Game — the default
+  // screen for a live company.
   async function openCompany(c: Company) {
     if (c.status === "draft") {
       const p = await api.preview(c.id);
@@ -79,7 +80,7 @@ export default function Home() {
       setStep("review");
       return;
     }
-    router.push(`/c/${c.id}`);
+    router.push(`/c/${c.id}/game`);
   }
 
   // Bootstrap: use an existing session; else try the dev default account
@@ -233,7 +234,9 @@ export default function Home() {
     guard(async () => {
       if (!companyId) return;
       await api.launch(companyId);
-      router.push(`/c/${companyId}?launched=1`);
+      // Land the founder in the Game — the default screen once a company is
+      // live — so onboarding hands straight off to operating the starbase.
+      router.push(`/c/${companyId}/game?launched=1`);
     });
 
   return (
