@@ -67,6 +67,9 @@ CORE_TOOL_NAMES: frozenset[str] = frozenset(
         # platform escalation (a tool that does NOT exist yet) — never gated
         "request_capability",
         "report_bug",
+        # self-service tool acquisition (connect a service that ALREADY exists) —
+        # kept always-on so an agent can wire up a needed tool without the founder
+        "connect_service",
         # reusable playbooks
         "load_skill",
     }

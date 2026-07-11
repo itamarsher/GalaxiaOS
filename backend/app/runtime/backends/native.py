@@ -313,6 +313,17 @@ class NativeBackend:
                     )
                 )
 
+            # If the agent connected a new service this step, re-resolve the MCP
+            # tools so the freshly registered server's tools are offered on the next
+            # step — that's what makes self-service tool acquisition usable within
+            # the same run rather than only on the next task.
+            if any(c.name == "connect_service" for c in resp.tool_calls):
+                async with ctx.session_factory() as db:
+                    await set_tenant(db, task.company_id)
+                    mcp_specs, mcp_routing = await mcp_svc.tool_specs_for_company(
+                        db, company_id=task.company_id
+                    )
+
             # Assistant turn: echo the model's tool_use blocks (ids preserved),
             # prefixed with any leading text the model emitted.
             assistant_blocks: list = []
