@@ -68,8 +68,11 @@ CORE_TOOL_NAMES: frozenset[str] = frozenset(
         "request_capability",
         "report_bug",
         # self-service tool acquisition (connect a service that ALREADY exists) —
-        # kept always-on so an agent can wire up a needed tool without the founder
+        # kept always-on so an agent can wire up a needed tool without the founder.
+        # `connect_service` registers an external MCP server; `configure_integration`
+        # supplies credentials for a first-class built-in integration (Cloudflare).
         "connect_service",
+        "configure_integration",
         # reusable playbooks
         "load_skill",
     }

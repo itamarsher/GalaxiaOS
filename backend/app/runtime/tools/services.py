@@ -46,6 +46,13 @@ from app.services import mission_log
 _MAX_TOOLS_SHOWN = 25
 
 
+#: Built-in integrations ABOS has its OWN adapter for (not MCP), and that an agent
+#: can therefore configure itself. Unlike ``connect_service`` (which registers an
+#: external MCP tool server), these credentials feed native capabilities — site
+#: hosting, custom domains, DNS — that resolve through :mod:`app.services.integrations`.
+_NATIVE_INTEGRATIONS = ("cloudflare",)
+
+
 SPECS: list[ToolSpec] = [
     ToolSpec(
         name="connect_service",
@@ -97,6 +104,44 @@ SPECS: list[ToolSpec] = [
                 },
             },
             "required": ["name", "url"],
+        },
+    ),
+    ToolSpec(
+        name="configure_integration",
+        description=(
+            "Configure credentials for a first-class BUILT-IN integration that powers ABOS's "
+            "own native capabilities — site hosting, custom domains, and DNS — so you can turn "
+            "those on yourself instead of asking the founder. This is different from "
+            "`connect_service`: use `connect_service` to register an external MCP tool server, "
+            "and `configure_integration` for a provider ABOS has its OWN adapter for (its "
+            "credentials feed the native tools directly, not an `mcp__*` namespace). Sign up "
+            "for the provider and self-issue a scoped API token, then pass it here; ABOS "
+            "verifies the credentials before storing them envelope-encrypted, so a bad token is "
+            "rejected up front. Supported: 'cloudflare' (needs `api_token` + `account_id`) — "
+            "powers `publish_content` and `connect_domain`. Every downstream action is still "
+            "governed and budget-metered as usual."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "provider": {
+                    "type": "string",
+                    "enum": list(_NATIVE_INTEGRATIONS),
+                    "description": "The built-in integration to configure.",
+                },
+                "api_token": {
+                    "type": "string",
+                    "description": (
+                        "A scoped API token for the provider (least privilege — the specific "
+                        "zone/permissions you need, never a global key)."
+                    ),
+                },
+                "account_id": {
+                    "type": "string",
+                    "description": "Cloudflare account id (required for provider 'cloudflare').",
+                },
+            },
+            "required": ["provider"],
         },
     ),
 ]
@@ -253,4 +298,93 @@ async def _connect_service(db, ctx, *, agent: Agent, task: Task, args: dict) -> 
     )
 
 
-HANDLERS = {"connect_service": _connect_service}
+async def _configure_integration(db, ctx, *, agent: Agent, task: Task, args: dict) -> ToolOutcome:
+    provider = str(args.get("provider") or "").strip().lower()
+    if provider not in _NATIVE_INTEGRATIONS:
+        return ToolOutcome(
+            observation=(
+                f"Unknown built-in integration {provider!r}. Configurable ones: "
+                f"{', '.join(_NATIVE_INTEGRATIONS)}. For any other service, register its MCP "
+                "endpoint with `connect_service` instead."
+            ),
+            is_error=True,
+        )
+    if provider == "cloudflare":
+        return await _configure_cloudflare(db, agent=agent, task=task, args=args)
+    # Guarded by the membership check above; kept exhaustive for future providers.
+    return ToolOutcome(observation=f"{provider} is not configurable yet.", is_error=True)
+
+
+async def _configure_cloudflare(db, *, agent: Agent, task: Task, args: dict) -> ToolOutcome:
+    from app.integrations.cloudflare import verify_credentials
+    from app.integrations.sitehost import SiteHostError
+    from app.services import integrations as integrations_svc
+
+    api_token = str(args.get("api_token") or "").strip()
+    account_id = str(args.get("account_id") or "").strip()
+    if not api_token or not account_id:
+        return ToolOutcome(
+            observation=(
+                "Cloudflare needs both `api_token` (a scoped API token) and `account_id`. "
+                "Create the token in the Cloudflare dashboard — least privilege, the specific "
+                "zone and permissions you need — then pass both here."
+            ),
+            is_error=True,
+        )
+
+    # Verify before storing so a bad token/account is rejected up front — the same
+    # honest check the founder's Settings flow does. Never store credentials we
+    # haven't proven actually work.
+    try:
+        await verify_credentials(api_token, account_id)
+    except SiteHostError as exc:
+        return ToolOutcome(
+            observation=(
+                f"Cloudflare rejected these credentials: {exc}. NOTHING was stored — check the "
+                "token's permissions and the account id, then try again."
+            ),
+            is_error=True,
+        )
+
+    await integrations_svc.set_cloudflare(
+        db, company_id=task.company_id, api_token=api_token, account_id=account_id
+    )
+
+    from app.services import memory as memory_svc
+
+    await memory_svc.write(
+        db,
+        company_id=task.company_id,
+        type=MemoryType.result,
+        title="Integration configured: Cloudflare",
+        content=(
+            f"{agent.name} ({agent.role.value}) configured Cloudflare credentials for account "
+            f"{account_id}. ABOS's native site-hosting, custom-domain, and DNS capabilities "
+            "(`publish_content` / `connect_domain`) are now available to the fleet."
+        ),
+        source_task_id=task.id,
+    )
+    await mission_log.record(
+        task.company_id,
+        agent_id=agent.id,
+        agent_name=agent.name,
+        role=agent.role.value,
+        headline="Configured Cloudflare (native hosting + DNS)",
+        kind="update",
+    )
+
+    return ToolOutcome(
+        observation=(
+            "Cloudflare configured and verified. ABOS's built-in site-hosting, custom-domain, "
+            "and DNS tools now work — load them with `use_tool` (e.g. `publish_content`, "
+            "`connect_domain`) and use them directly. That's the NATIVE hosting flow; for "
+            "generic Cloudflare API operations (cache purge, WAF, Workers) register the "
+            "Cloudflare MCP server with `connect_service` instead."
+        )
+    )
+
+
+HANDLERS = {
+    "connect_service": _connect_service,
+    "configure_integration": _configure_integration,
+}

@@ -1,13 +1,17 @@
-"""`connect_service` — agent self-service tool acquisition.
+"""Agent self-service tool acquisition — `connect_service` and `configure_integration`.
 
-An agent can connect an external tool server (MCP endpoint) itself, without the
-founder, so a service's tools become available to the fleet. These tests cover
-the pure helpers/registration (DB-free) and the register→probe→expose behaviour
-against a faked MCP client (DB-backed), including the honest-failure and
-never-clobber-a-working-server guards.
+`connect_service` registers an external MCP tool server; `configure_integration`
+supplies credentials for a first-class BUILT-IN integration (Cloudflare) that
+powers native capabilities (site hosting, custom domains, DNS). Both let an agent
+wire up a capability without the founder. These tests cover the pure helpers
+(DB-free) and the register/verify→store behaviour (DB-backed), including the
+honest-failure and never-clobber guards.
 """
 
 from __future__ import annotations
+
+import base64
+import os
 
 from sqlalchemy import select
 
@@ -15,8 +19,16 @@ from app.models import Agent, AgentRun, McpServer, Task
 from app.models.enums import AgentRole, MemoryType, RunStatus, RunTrigger
 from app.runtime.tools import CORE_TOOL_NAMES, TOOL_SPECS, execute_tool
 from app.runtime.tools import services as svc_tool
+from app.services import integrations as integrations_svc
 from app.services import mcp as mcp_svc
 from tests.conftest import requires_db
+
+
+def _set_master_key() -> None:
+    """Give the envelope store a key so credential writes can encrypt."""
+    from app.config import settings as app_settings
+
+    app_settings.master_key = base64.urlsafe_b64encode(os.urandom(32)).decode()
 
 
 class _FakeCtx:
@@ -262,3 +274,122 @@ async def test_invalid_url_does_nothing(
     async with session_factory() as db:
         rows = (await db.scalars(select(McpServer).where(McpServer.company_id == company_id))).all()
     assert rows == []
+
+
+# ── configure_integration (built-in Cloudflare adapter) ─────────────────────────
+def test_configure_integration_is_a_core_always_on_tool() -> None:
+    assert "configure_integration" in CORE_TOOL_NAMES
+    assert any(s.name == "configure_integration" for s in TOOL_SPECS)
+
+
+@requires_db
+async def test_configure_cloudflare_stores_verified_credentials(
+    session_factory, company_with_budget, monkeypatch
+):
+    _set_master_key()
+    company_id = company_with_budget
+    agent, task = await _make_task(session_factory, company_id)
+
+    verified: list[tuple[str, str]] = []
+
+    async def _ok(token, account_id):
+        verified.append((token, account_id))
+
+    async def _fake_write(db, **kwargs):
+        return None
+
+    monkeypatch.setattr("app.integrations.cloudflare.verify_credentials", _ok)
+    monkeypatch.setattr("app.services.memory.write", _fake_write)
+
+    async with session_factory() as db:
+        outcome = await execute_tool(
+            db, _FakeCtx(), agent=agent, task=task,
+            name="configure_integration",
+            args={"provider": "cloudflare", "api_token": "cf-tok", "account_id": "acct-1"},
+        )
+        await db.commit()
+
+    assert outcome.is_error is False
+    assert verified == [("cf-tok", "acct-1")]  # verified BEFORE storing
+    assert "connect_domain" in outcome.observation
+    # The credential is now resolvable for the native hosting/DNS seams.
+    async with session_factory() as db:
+        creds = await integrations_svc.get_cloudflare(db, company_id=company_id)
+    assert creds == ("cf-tok", "acct-1")
+
+
+@requires_db
+async def test_configure_cloudflare_rejects_bad_credentials(
+    session_factory, company_with_budget, monkeypatch
+):
+    _set_master_key()
+    company_id = company_with_budget
+    agent, task = await _make_task(session_factory, company_id)
+
+    from app.integrations.sitehost import SiteHostError
+
+    async def _bad(token, account_id):
+        raise SiteHostError("invalid token")
+
+    monkeypatch.setattr("app.integrations.cloudflare.verify_credentials", _bad)
+
+    async with session_factory() as db:
+        outcome = await execute_tool(
+            db, _FakeCtx(), agent=agent, task=task,
+            name="configure_integration",
+            args={"provider": "cloudflare", "api_token": "nope", "account_id": "acct-1"},
+        )
+        await db.commit()
+
+    assert outcome.is_error is True
+    assert "rejected" in outcome.observation.lower()
+    # Nothing stored when verification fails.
+    async with session_factory() as db:
+        creds = await integrations_svc.get_cloudflare(db, company_id=company_id)
+    assert creds is None
+
+
+@requires_db
+async def test_configure_cloudflare_requires_both_fields(
+    session_factory, company_with_budget, monkeypatch
+):
+    _set_master_key()
+    company_id = company_with_budget
+    agent, task = await _make_task(session_factory, company_id)
+
+    async def _ok(token, account_id):  # pragma: no cover - must not be reached
+        raise AssertionError("should not verify without both fields")
+
+    monkeypatch.setattr("app.integrations.cloudflare.verify_credentials", _ok)
+
+    async with session_factory() as db:
+        outcome = await execute_tool(
+            db, _FakeCtx(), agent=agent, task=task,
+            name="configure_integration",
+            args={"provider": "cloudflare", "api_token": "cf-tok"},  # no account_id
+        )
+        await db.commit()
+
+    assert outcome.is_error is True
+    async with session_factory() as db:
+        creds = await integrations_svc.get_cloudflare(db, company_id=company_id)
+    assert creds is None
+
+
+@requires_db
+async def test_configure_integration_unknown_provider(
+    session_factory, company_with_budget
+):
+    company_id = company_with_budget
+    agent, task = await _make_task(session_factory, company_id)
+
+    async with session_factory() as db:
+        outcome = await execute_tool(
+            db, _FakeCtx(), agent=agent, task=task,
+            name="configure_integration",
+            args={"provider": "salesforce"},
+        )
+        await db.commit()
+
+    assert outcome.is_error is True
+    assert "connect_service" in outcome.observation  # points at the MCP path instead
