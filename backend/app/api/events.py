@@ -15,8 +15,9 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 
 from app.db import SessionLocal
-from app.deps import CompanySseDep
+from app.deps import CompanyDep, CompanySseDep
 from app.models import Budget, Task
+from app.services import mission_log
 
 router = APIRouter(prefix="/companies/{company_id}", tags=["events"])
 
@@ -42,7 +43,13 @@ async def _snapshot(company_id) -> dict:
             select(Budget).where(Budget.company_id == company_id).limit(1)
         )
 
+    # The live mission log is an ephemeral Redis ring (see app.services.mission_log),
+    # not a DB table — folded into the same snapshot so a new milestone shows up on
+    # the next diff tick (≤ _POLL_SECONDS), streamed live like everything else.
+    updates = await mission_log.recent(company_id)
+
     return {
+        "mission_log": updates,
         "tasks": [
             {
                 "id": str(t.id),
@@ -65,6 +72,17 @@ async def _snapshot(company_id) -> dict:
             else None
         ),
     }
+
+
+@router.get("/mission-log")
+async def get_mission_log(company: CompanyDep) -> dict:
+    """The company's latest ephemeral mission-log updates (newest first).
+
+    Backs the dashboard's initial render and its polling fallback when the SSE
+    stream is unavailable; the live path is the ``mission_log`` field of the
+    ``/events`` snapshot.
+    """
+    return {"mission_log": await mission_log.recent(company.id)}
 
 
 @router.get("/events")

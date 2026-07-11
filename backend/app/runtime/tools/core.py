@@ -245,6 +245,34 @@ SPECS: list[ToolSpec] = [
         },
     ),
     ToolSpec(
+        name="post_mission_update",
+        description=(
+            "Post a short, founder-facing update to the live Mission Log when you "
+            "hit a SIGNIFICANT milestone — starting a major piece of work, a "
+            "notable result or turning point, or a meaningful change of plan. These "
+            "are ephemeral status beats shown live on the founder's dashboard (the "
+            "last few are kept, then they roll off) — post the moments that matter, "
+            "not routine steps. This does NOT finish your task; keep working after."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "headline": {
+                    "type": "string",
+                    "description": (
+                        "One concise, plain-language line the founder can scan, e.g. "
+                        "'Launched cold-outreach to 40 prospects' or 'Landed first 3 leads'."
+                    ),
+                },
+                "detail": {
+                    "type": "string",
+                    "description": "Optional one-sentence elaboration for context.",
+                },
+            },
+            "required": ["headline"],
+        },
+    ),
+    ToolSpec(
         name="report_result",
         description="Finish this task and report the outcome.",
         input_schema={
@@ -892,6 +920,34 @@ async def _request_user_action(db, ctx, *, agent: Agent, task: Task, args: dict)
     return await escalate_to_founder(db, ctx, agent=agent, task=task, summary=summary)
 
 
+async def _post_mission_update(db, ctx, *, agent: Agent, task: Task, args: dict) -> ToolOutcome:
+    from app.services import mission_log
+
+    headline = str(args.get("headline") or "").strip()
+    if not headline:
+        return ToolOutcome(
+            observation="A mission update needs a short headline describing the milestone.",
+            is_error=True,
+        )
+    detail = str(args.get("detail") or "").strip() or None
+    entry = await mission_log.record(
+        task.company_id,
+        agent_id=agent.id,
+        agent_name=agent.name,
+        role=agent.role.value,
+        headline=headline,
+        detail=detail,
+        kind="update",
+    )
+    if entry is None:
+        # The live log is a best-effort convenience, not a source of truth — if it
+        # couldn't be posted, say so plainly rather than pretend it landed.
+        return ToolOutcome(
+            observation="Mission update could not be posted right now; carry on with your work."
+        )
+    return ToolOutcome(observation=f"posted mission update: {entry['headline']}")
+
+
 async def _report_result(db, ctx, *, agent: Agent, task: Task, args: dict) -> ToolOutcome:
     return ToolOutcome(observation="reported", stop=True)
 
@@ -906,6 +962,7 @@ HANDLERS = {
     "send_email": _send_email,
     "request_decision": _request_decision,
     "request_user_action": _request_user_action,
+    "post_mission_update": _post_mission_update,
     "report_result": _report_result,
     "read_metrics": _read_metrics,
     "record_metric": _record_metric,

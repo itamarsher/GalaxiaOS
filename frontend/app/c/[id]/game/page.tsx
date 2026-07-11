@@ -12,7 +12,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "next/navigation";
 import { api } from "@/lib/api";
-import { usePoll, useLiveTasks } from "@/lib/useApi";
+import { usePoll, useLiveCompanyFeed } from "@/lib/useApi";
 import {
   buildScene,
   moduleAnchor,
@@ -42,6 +42,7 @@ import {
   CrewRoster,
   CycleProgress,
   Legend,
+  MissionLog,
   ModuleSheet,
   ModuleTooltip,
   QuestLog,
@@ -66,7 +67,7 @@ export default function GalaxiaCommandPage() {
   const cycle = usePoll(() => api.cycleStatus(id), 8000, [id]);
   const objectives = usePoll(() => api.objectives(id), 15000, [id]);
   const chatChannels = usePoll(() => api.chatChannels(id), 5000, [id]);
-  const tasks = useLiveTasks(id);
+  const { tasks, missionLog } = useLiveCompanyFeed(id);
 
   const agents = useMemo(() => org.data?.agents ?? [], [org.data]);
 
@@ -420,6 +421,8 @@ export default function GalaxiaCommandPage() {
         </div>
 
         <QuestLog quests={quests} newIds={newQuestIds} clearedIds={clearedQuestIds} />
+
+        <MissionLog entries={missionLog} />
 
         <div className="hud-grid">
           <div className="hud-primary">
