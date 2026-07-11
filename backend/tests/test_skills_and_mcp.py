@@ -64,6 +64,70 @@ def test_every_operating_role_has_skills() -> None:
         assert idx.startswith("- "), f"role {role.value} has no skills indexed"
 
 
+# ── Tool-specific skill catalog ─────────────────────────────────────────────────
+# A cross-section of the tool-specific playbooks (Figma, Stripe, Linear, …). These
+# teach an agent to drive a named external tool the ABOS way — connect it via MCP
+# (`discover_tools`/`use_tool`), escalate with `request_user_action` instead of
+# faking a result, and file/record the outcome. A representative sample is asserted
+# so a rename or accidental deletion is caught, without pinning the full list.
+_TOOL_SKILLS = (
+    "figma",
+    "canva",
+    "webflow",
+    "google-ads",
+    "meta-ads",
+    "mailchimp",
+    "hubspot",
+    "google-analytics",
+    "salesforce",
+    "apollo",
+    "calendly",
+    "stripe",
+    "quickbooks",
+    "ramp",
+    "carta",
+    "linear",
+    "jira",
+    "github",
+    "notion",
+    "vercel",
+    "sentry",
+    "posthog",
+    "amplitude",
+    "snowflake",
+    "dbt",
+    "bigquery",
+    "segment",
+    "slack",
+    "zapier",
+    "docusign",
+    "airtable",
+    "crunchbase",
+    "similarweb",
+)
+
+
+def test_tool_specific_skill_catalog_present() -> None:
+    for name in _TOOL_SKILLS:
+        skill = skills_lib.get_skill(name)
+        assert skill is not None, f"missing tool skill: {name}"
+        assert skill.roles, f"{name}: tool skill must be role-scoped"
+
+
+def test_tool_skills_teach_the_abos_connect_path() -> None:
+    # The whole point of a tool skill is the ABOS adaptation: reach the tool through
+    # the discovery/hot-load seam rather than assuming a bare integration. Every tool
+    # skill must reference that seam and the escalation path when it isn't connected.
+    for name in _TOOL_SKILLS:
+        skill = skills_lib.get_skill(name)
+        assert skill is not None, f"missing tool skill: {name}"
+        body = skill.body.lower()
+        assert "discover_tools" in body, f"{name}: no discover_tools connect step"
+        assert "request_user_action" in body or "request_capability" in body, (
+            f"{name}: no escalation path when the tool is not connected"
+        )
+
+
 # ── MCP tool exposure ───────────────────────────────────────────────────────────
 def test_mcp_tool_prefix_and_name_normalization() -> None:
     assert mcp_svc.normalize_name("Acme CRM!") == "acme_crm"
