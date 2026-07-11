@@ -88,14 +88,25 @@ def objectives_prompt_block(objectives: list[Objective]) -> str:
     """A numbered objectives list for the agent prompt, or "" when there are none.
 
     The number is the handle the CEO passes as ``objective`` to ``dispatch_task``,
-    so a dispatched initiative links to the objective it advances.
+    so a dispatched initiative links to the objective it advances. The list keeps
+    *every* objective (completed included) so those handles stay stable across
+    cycles, but each completed objective is tagged ``[completed]`` — end-of-cycle
+    :func:`close_delivered_objectives` marks an objective ``completed`` once its
+    tagged work all landed, and surfacing that here is what stops the next cycle's
+    CEO from re-dispatching work it already delivered. Without the tag every
+    objective reads as open and finished initiatives get reinitiated.
     """
     if not objectives:
         return ""
-    lines = [f"  {i + 1}. {o.title}" for i, o in enumerate(objectives)]
+    lines = []
+    for i, o in enumerate(objectives):
+        done = getattr(o, "status", OBJECTIVE_ACTIVE) == OBJECTIVE_COMPLETED
+        lines.append(f"  {i + 1}. {o.title}{'  [completed]' if done else ''}")
     return (
         "Company objectives (when you dispatch an initiative, set `objective` to the "
-        "number of the objective it advances so progress is tracked):\n"
+        "number of the objective it advances so progress is tracked). Objectives tagged "
+        "[completed] were already delivered in an earlier cycle — do NOT re-dispatch "
+        "their work unless new information genuinely reopens them:\n"
         + "\n".join(lines)
     )
 
