@@ -141,12 +141,18 @@ def test_tool_specific_skill_catalog_present() -> None:
 def test_tool_skills_teach_the_abos_connect_path() -> None:
     # The whole point of a tool skill is the ABOS adaptation: reach the tool through
     # the discovery/hot-load seam rather than assuming a bare integration. Every tool
-    # skill must reference that seam and the escalation path when it isn't connected.
+    # skill must reference that seam, teach the agent it can self-onboard the service
+    # (`connect_service`) rather than wait on the founder, and still keep the
+    # escalation path for when it genuinely can't get credentials.
     for name in _TOOL_SKILLS:
         skill = skills_lib.get_skill(name)
         assert skill is not None, f"missing tool skill: {name}"
         body = skill.body.lower()
         assert "discover_tools" in body, f"{name}: no discover_tools connect step"
+        assert "connect_service" in body, (
+            f"{name}: must teach the self-onboard path (connect_service), since the catalog "
+            "is scoped to services an agent can register itself"
+        )
         assert "request_user_action" in body or "request_capability" in body, (
             f"{name}: no escalation path when the tool is not connected"
         )

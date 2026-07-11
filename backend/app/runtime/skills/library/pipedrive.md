@@ -12,9 +12,8 @@ and activities so no deal rots silently. ABOS mirrors the same deals internally
 (`crm_save_deal`, `crm_list_deals`, `crm_log_activity`, `update_deal`) — keep them in sync.
 
 ## Connect before you touch deals
-1. **Find the tool.** `discover_tools` with query `pipedrive`; it exposes as `mcp__pipedrive__*` once
-   the founder has connected it. Load what you need with `use_tool` (create a deal, log an activity).
-2. **Not connected? Ask — don't fake it.** `request_user_action` for the founder to connect Pipedrive
+1. **Find the tool.** `discover_tools` with query `pipedrive`; it exposes as `mcp__pipedrive__*` once it's connected (by you or the founder). Load what you need with `use_tool` (create a deal, log an activity).
+2. **Not connected? Connect it yourself — don't fake it.** You can onboard this yourself — sign up for the service and self-issue an API key/token, then wire it up with `connect_service` (a name, the service's MCP endpoint, and the token) so its tools come online for you on the next step, no founder needed. Only if you genuinely can't get credentials — it needs the founder's identity, payment, or a login only they have — `request_user_action` for the founder to connect Pipedrive
    in Settings (API token or MCP server). Never invent a deal ID or claim a stage moved — a phantom
    pipeline is worse than none.
 3. **Least privilege + egress.** Writing contact PII to Pipedrive is data egress; if sensitive data

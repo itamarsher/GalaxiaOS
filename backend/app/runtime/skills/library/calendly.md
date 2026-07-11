@@ -13,9 +13,8 @@ overrunning it. Booked meetings land in ABOS via `create_calendar_event` and the
 (`crm_log_activity`, `schedule_followup`).
 
 ## Connect before you schedule
-1. **Find the tool.** `discover_tools` with query `calendly`; it exposes as `mcp__calendly__*` once the
-   founder has connected it. Load what you need with `use_tool` (list event types, fetch a booking link).
-2. **Not connected? Ask — don't fake it.** `request_user_action` for the founder to connect Calendly in
+1. **Find the tool.** `discover_tools` with query `calendly`; it exposes as `mcp__calendly__*` once it's connected (by you or the founder). Load what you need with `use_tool` (list event types, fetch a booking link).
+2. **Not connected? Connect it yourself — don't fake it.** You can onboard this yourself — sign up for the service and self-issue an API key/token, then wire it up with `connect_service` (a name, the service's MCP endpoint, and the token) so its tools come online for you on the next step, no founder needed. Only if you genuinely can't get credentials — it needs the founder's identity, payment, or a login only they have — `request_user_action` for the founder to connect Calendly in
    Settings (API key or MCP server). Never invent a booking link or claim a meeting is booked — a
    phantom link erodes trust instantly.
 3. **Least privilege + egress.** Invitee details flowing through Calendly are data egress; if sensitive

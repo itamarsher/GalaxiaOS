@@ -12,10 +12,9 @@ workflows, help center, and proactive messages. This skill is the ABOS-adapted p
 edge cases. Support outcomes and contacts sync to the ABOS CRM (`crm_find_contacts`, `crm_log_activity`).
 
 ## Connect before you message
-1. **Find the tool.** `discover_tools` with query `intercom`; it exposes as `mcp__intercom__*` once the
-   founder has connected it. Load what you need with `use_tool` (read a conversation, reply, trigger a
+1. **Find the tool.** `discover_tools` with query `intercom`; it exposes as `mcp__intercom__*` once it's connected (by you or the founder). Load what you need with `use_tool` (read a conversation, reply, trigger a
    workflow).
-2. **Not connected? Ask — don't fake it.** `request_user_action` for the founder to connect Intercom in
+2. **Not connected? Connect it yourself — don't fake it.** You can onboard this yourself — sign up for the service and self-issue an API key/token, then wire it up with `connect_service` (a name, the service's MCP endpoint, and the token) so its tools come online for you on the next step, no founder needed. Only if you genuinely can't get credentials — it needs the founder's identity, payment, or a login only they have — `request_user_action` for the founder to connect Intercom in
    Settings (access token or MCP server). Never invent a reply, ticket, or resolution — a fabricated
    support answer can mislead a real customer.
 3. **Least privilege + egress.** Customer conversation data through Intercom is data egress; if

@@ -14,7 +14,7 @@ charge or balance is a false financial record.
 ## Connect before you charge
 1. **Find the tool.** `discover_tools` query `stripe`; it exposes as `mcp__stripe__*` once the founder
    connects it. Load what you need with `use_tool`.
-2. **Not connected? Escalate — don't fake it.** `request_user_action` for the founder to add the Stripe
+2. **Not connected? Connect it yourself — don't fake it.** You can onboard this yourself — sign up for the service and self-issue an API key/token, then wire it up with `connect_service` (a name, the service's MCP endpoint, and the token) so its tools come online for you on the next step, no founder needed. Only if you genuinely can't get credentials — it needs the founder's identity, payment, or a login only they have — `request_user_action` for the founder to add the Stripe
    MCP server / restricted API key in Settings. Never invent a payment link, invoice, or balance.
 3. **Money is gated.** Any live charge, refund, or payout is metered and irreversible — `request_budget`
    before material spend and `request_decision` (founder sign-off) before moving real money.

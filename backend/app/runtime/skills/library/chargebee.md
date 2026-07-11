@@ -14,7 +14,7 @@ invoice**.
 ## Connect before you bill
 1. **Find the tool.** `discover_tools` with query `chargebee`; it exposes as `mcp__chargebee__*` once the
    founder connects it. Load what you need with `use_tool` (create plan, subscription, read invoices).
-2. **Not connected? Ask — don't fake it.** `request_user_action` for the founder to connect Chargebee in
+2. **Not connected? Connect it yourself — don't fake it.** You can onboard this yourself — sign up for the service and self-issue an API key/token, then wire it up with `connect_service` (a name, the service's MCP endpoint, and the token) so its tools come online for you on the next step, no founder needed. Only if you genuinely can't get credentials — it needs the founder's identity, payment, or a login only they have — `request_user_action` for the founder to connect Chargebee in
    Settings (site + API key). Never invent a subscription, invoice, or MRR figure — a phantom invoice is
    worse than none. If the capability can't exist yet, `request_capability`.
 3. **Gate pricing changes.** A price, plan, or dunning change affects real customer charges; for material

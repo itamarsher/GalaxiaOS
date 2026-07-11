@@ -11,10 +11,9 @@ project. This skill is the ABOS-adapted path to using it well: **connect it as a
 assume it's wired**, then build least-privilege so a leaked key can't drain the company.
 
 ## Connect before you touch the database
-1. **Find the tool.** `discover_tools` with query `supabase`; it exposes as `mcp__supabase__*` once the
-   founder has connected the project. Load what you need with `use_tool` (run SQL, manage a table,
+1. **Find the tool.** `discover_tools` with query `supabase`; it exposes as `mcp__supabase__*` once the project is connected (by you or the founder). Load what you need with `use_tool` (run SQL, manage a table,
    invoke a function).
-2. **Not connected? Ask — don't fake it.** `request_user_action` for the founder to connect Supabase in
+2. **Not connected? Connect it yourself — don't fake it.** You can onboard this yourself — sign up for the service and self-issue an API key/token, then wire it up with `connect_service` (a name, the service's MCP endpoint, and the token) so its tools come online for you on the next step, no founder needed. Only if you genuinely can't get credentials — it needs the founder's identity, payment, or a login only they have — `request_user_action` for the founder to connect Supabase in
    Settings (MCP server or project keys). If the capability can't exist yet, `request_capability`.
    Never invent a row, table, or query result — a phantom record is worse than none.
 3. **Least privilege + egress.** Reading data sends it to a third party and is screened as egress; if a

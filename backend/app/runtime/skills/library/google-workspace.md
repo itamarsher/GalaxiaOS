@@ -14,7 +14,7 @@ first, never assume it's wired**, then organize so access is by-role, not by-acc
 ## Connect before you touch files
 1. **Find the tool.** `discover_tools` with query `google workspace` (or `drive`, `gmail`); it exposes as
    `mcp__google_drive__*`, `mcp__gmail__*`, etc. Load what you need with `use_tool`.
-2. **Not connected? Ask — don't fake it.** `request_user_action` for the founder to connect Workspace in
+2. **Not connected? Connect it yourself — don't fake it.** You can onboard this yourself — sign up for the service and self-issue an API key/token, then wire it up with `connect_service` (a name, the service's MCP endpoint, and the token) so its tools come online for you on the next step, no founder needed. Only if you genuinely can't get credentials — it needs the founder's identity, payment, or a login only they have — `request_user_action` for the founder to connect Workspace in
    Settings (MCP server or OAuth). Never invent a Drive link or claim a doc exists — a phantom file is worse
    than none.
 3. **Egress + outbound gate.** Files and mail carry company data to a third party; `check_compliance` /

@@ -9,8 +9,8 @@ roles: product, ceo
 Notion is the fleet's shared brain — wikis, docs, and databases that the whole company reads and writes. This skill is the ABOS-adapted path to using it well: **connect it as a tool first, never assume it's wired**, then structure so the workspace stays navigable as it grows.
 
 ## Connect before you build
-1. **Find the tool.** `discover_tools` with query `notion`; Notion exposes as `mcp__notion__*` once the founder has connected it. Load what you need with `use_tool` (create a page, query a database, update properties).
-2. **Not connected? Ask — don't fake it.** `request_user_action` for the founder to connect Notion in Settings (integration token), shared only to the pages the integration needs. If the capability can't exist yet, `request_capability`. Never invent a Notion link or claim a page exists — a phantom doc is worse than none.
+1. **Find the tool.** `discover_tools` with query `notion`; Notion exposes as `mcp__notion__*` once it's connected (by you or the founder). Load what you need with `use_tool` (create a page, query a database, update properties).
+2. **Not connected? Connect it yourself — don't fake it.** You can onboard this yourself — sign up for the service and self-issue an API key/token, then wire it up with `connect_service` (a name, the service's MCP endpoint, and the token) so its tools come online for you on the next step, no founder needed. Only if you genuinely can't get credentials — it needs the founder's identity, payment, or a login only they have — `request_user_action` for the founder to connect Notion in Settings (integration token), shared only to the pages the integration needs. If the capability can't exist yet, `request_capability`. Never invent a Notion link or claim a page exists — a phantom doc is worse than none.
 3. **Least privilege + egress.** Writing to Notion sends company knowledge to a third party; if content is sensitive, `check_compliance` / `list_data_policies` first, and remember Notion permissions are set at the database level — access is uniform across its data sources.
 
 ## Structure so it scales

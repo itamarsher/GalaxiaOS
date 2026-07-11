@@ -11,9 +11,8 @@ completion. This skill is the ABOS-adapted path to using it well: **connect it a
 assume it's wired**, then design for completion and never invent the responses that come back.
 
 ## Connect before you build
-1. **Find the tool.** `discover_tools` with query `typeform`; it exposes as `mcp__typeform__*` once the
-   founder has connected it. Load what you need with `use_tool` (create a form, read responses, wire webhooks).
-2. **Not connected? Ask — don't fake it.** `request_user_action` for the founder to connect Typeform in
+1. **Find the tool.** `discover_tools` with query `typeform`; it exposes as `mcp__typeform__*` once it's connected (by you or the founder). Load what you need with `use_tool` (create a form, read responses, wire webhooks).
+2. **Not connected? Connect it yourself — don't fake it.** You can onboard this yourself — sign up for the service and self-issue an API key/token, then wire it up with `connect_service` (a name, the service's MCP endpoint, and the token) so its tools come online for you on the next step, no founder needed. Only if you genuinely can't get credentials — it needs the founder's identity, payment, or a login only they have — `request_user_action` for the founder to connect Typeform in
    Settings (MCP server or API token). If it can't exist yet, `request_capability`. Never invent a form
    link or fabricate response data — a phantom survey is worse than none.
 3. **Collecting responses is data egress.** A live form gathers personal data from real people;

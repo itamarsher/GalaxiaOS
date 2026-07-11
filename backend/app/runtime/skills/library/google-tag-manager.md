@@ -13,8 +13,8 @@ governance tool demands — versioned, previewed, and consent-aware.
 
 ## Connect before you tag
 1. **Find the tool.** `discover_tools` with query `tag manager`; GTM exposes as
-   `mcp__google-tag-manager__*` once the founder has connected the account. Load with `use_tool`.
-2. **Not connected? Ask — don't fake it.** `request_user_action` for the founder to connect GTM (MCP
+   `mcp__google-tag-manager__*` once the account is connected (by you or the founder). Load with `use_tool`.
+2. **Not connected? Connect it yourself — don't fake it.** You can onboard this yourself — sign up for the service and self-issue an API key/token, then wire it up with `connect_service` (a name, the service's MCP endpoint, and the token) so its tools come online for you on the next step, no founder needed. Only if you genuinely can't get credentials — it needs the founder's identity, payment, or a login only they have — `request_user_action` for the founder to connect GTM (MCP
    server or account access). Never claim a tag is live or a container is published when it isn't — a
    phantom tag silently breaks measurement, which is worse than none.
 3. **Tracking is data egress + consent.** Tags ship user data to third parties; `check_compliance` /

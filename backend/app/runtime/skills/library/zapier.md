@@ -14,7 +14,7 @@ wired**, then build Zaps that fail loudly, not silently.
 ## Connect before you build
 1. **Find the tool.** `discover_tools` with query `zapier`; it exposes as `mcp__zapier__*` once connected.
    Load what you need with `use_tool`.
-2. **Not connected? Ask — don't fake it.** `request_user_action` for the founder to connect Zapier in
+2. **Not connected? Connect it yourself — don't fake it.** You can onboard this yourself — sign up for the service and self-issue an API key/token, then wire it up with `connect_service` (a name, the service's MCP endpoint, and the token) so its tools come online for you on the next step, no founder needed. Only if you genuinely can't get credentials — it needs the founder's identity, payment, or a login only they have — `request_user_action` for the founder to connect Zapier in
    Settings. Never claim a Zap is live when none exists — a phantom automation silently drops real work.
 3. **Egress + spend.** Zaps consume metered tasks and push data to third parties; `check_compliance` if
    sensitive fields flow, and `request_budget` before standing up high-volume automations.

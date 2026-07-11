@@ -11,9 +11,8 @@ cohorts, journeys, and experiments. This skill is the ABOS-adapted path: **conne
 never assume it's wired**, then design a taxonomy disciplined enough to trust downstream.
 
 ## Connect before you analyze
-1. **Find the tool.** `discover_tools` with query `amplitude`; it exposes as `mcp__amplitude__*` once the
-   founder has connected it. Load what you need with `use_tool` (query charts, list events, read cohorts).
-2. **Not connected? Ask — don't fake it.** `request_user_action` for the founder to connect Amplitude in
+1. **Find the tool.** `discover_tools` with query `amplitude`; it exposes as `mcp__amplitude__*` once it's connected (by you or the founder). Load what you need with `use_tool` (query charts, list events, read cohorts).
+2. **Not connected? Connect it yourself — don't fake it.** You can onboard this yourself — sign up for the service and self-issue an API key/token, then wire it up with `connect_service` (a name, the service's MCP endpoint, and the token) so its tools come online for you on the next step, no founder needed. Only if you genuinely can't get credentials — it needs the founder's identity, payment, or a login only they have — `request_user_action` for the founder to connect Amplitude in
    Settings (MCP server or API key). Never invent a chart number or a cohort size — a phantom metric is
    worse than none. Query the real project, or escalate.
 3. **PII + egress.** Event properties and user identifiers can carry personal data; `check_compliance` /

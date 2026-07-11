@@ -11,10 +11,9 @@ ABOS-adapted path to using it well: **connect it as a tool first, never assume i
 every send as both metered spend and gated external comms — because it is both.
 
 ## Connect before you send
-1. **Find the tool.** `discover_tools` with query `twilio`; it exposes as `mcp__twilio__*` once the
-   founder has connected the account. Load what you need with `use_tool` (send a message, start a Verify
+1. **Find the tool.** `discover_tools` with query `twilio`; it exposes as `mcp__twilio__*` once the account is connected (by you or the founder). Load what you need with `use_tool` (send a message, start a Verify
    check, read delivery status).
-2. **Not connected? Ask — don't fake it.** `request_user_action` for the founder to connect Twilio in
+2. **Not connected? Connect it yourself — don't fake it.** You can onboard this yourself — sign up for the service and self-issue an API key/token, then wire it up with `connect_service` (a name, the service's MCP endpoint, and the token) so its tools come online for you on the next step, no founder needed. Only if you genuinely can't get credentials — it needs the founder's identity, payment, or a login only they have — `request_user_action` for the founder to connect Twilio in
    Settings (MCP server or Account SID + auth token). If the capability can't exist yet,
    `request_capability`. Never claim a text was sent — a phantom send is worse than none.
 3. **Metered + gated.** Every SMS costs money (US ~$0.0079/segment plus carrier surcharge) and is

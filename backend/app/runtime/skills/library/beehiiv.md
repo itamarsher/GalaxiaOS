@@ -12,9 +12,8 @@ path to running it well: **connect it as a tool first, never assume it's wired**
 send as gated external comms with consent and deliverability duties.
 
 ## Connect before you send
-1. **Find the tool.** `discover_tools` with query `beehiiv`; it exposes as `mcp__beehiiv__*` once the
-   founder has connected the account. Load what you need with `use_tool`.
-2. **Not connected? Ask — don't fake it.** `request_user_action` for the founder to connect beehiiv
+1. **Find the tool.** `discover_tools` with query `beehiiv`; it exposes as `mcp__beehiiv__*` once the account is connected (by you or the founder). Load what you need with `use_tool`.
+2. **Not connected? Connect it yourself — don't fake it.** You can onboard this yourself — sign up for the service and self-issue an API key/token, then wire it up with `connect_service` (a name, the service's MCP endpoint, and the token) so its tools come online for you on the next step, no founder needed. Only if you genuinely can't get credentials — it needs the founder's identity, payment, or a login only they have — `request_user_action` for the founder to connect beehiiv
    (MCP server or API key). Never invent a subscriber count, an open rate, or a sent issue — a phantom
    send is worse than none.
 3. **Sends are gated external comms.** A broadcast is indexed into the external-comms log and may need

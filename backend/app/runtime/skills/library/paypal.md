@@ -13,7 +13,7 @@ real money out irreversibly, **sandbox first, gate every disbursement, and never
 ## Connect before you transact
 1. **Find the tool.** `discover_tools` with query `paypal`; it exposes as `mcp__paypal__*` once the founder
    connects it. Load what you need with `use_tool` (create order, payout, read dispute).
-2. **Not connected? Ask — don't fake it.** `request_user_action` for the founder to connect PayPal in
+2. **Not connected? Connect it yourself — don't fake it.** You can onboard this yourself — sign up for the service and self-issue an API key/token, then wire it up with `connect_service` (a name, the service's MCP endpoint, and the token) so its tools come online for you on the next step, no founder needed. Only if you genuinely can't get credentials — it needs the founder's identity, payment, or a login only they have — `request_user_action` for the founder to connect PayPal in
    Settings (client ID + secret). Never invent a transaction ID, payout, or dispute outcome — a phantom
    payment is worse than none. If the capability can't exist yet, `request_capability`.
 3. **Gate the money.** A payout leaves the account and is hard to recover. `request_budget` before a payout

@@ -13,9 +13,8 @@ is a gated external comm that binds the company — never route around the appro
 stay the source of truth.
 
 ## Connect before you send
-1. **Find the tool.** `discover_tools` with query `pandadoc`; it exposes as `mcp__pandadoc__*` once the
-   founder has connected it. Load what you need with `use_tool` (create from template, send, read status).
-2. **Not connected? Ask — don't fake it.** `request_user_action` for the founder to connect PandaDoc in
+1. **Find the tool.** `discover_tools` with query `pandadoc`; it exposes as `mcp__pandadoc__*` once it's connected (by you or the founder). Load what you need with `use_tool` (create from template, send, read status).
+2. **Not connected? Connect it yourself — don't fake it.** You can onboard this yourself — sign up for the service and self-issue an API key/token, then wire it up with `connect_service` (a name, the service's MCP endpoint, and the token) so its tools come online for you on the next step, no founder needed. Only if you genuinely can't get credentials — it needs the founder's identity, payment, or a login only they have — `request_user_action` for the founder to connect PandaDoc in
    Settings (MCP server or API key). Never invent a document link, signed status, or contract value — a
    phantom agreement is a legal and financial hazard.
 3. **Signing is gated.** E-signature requests are indexed external comms that create obligations; pull deal

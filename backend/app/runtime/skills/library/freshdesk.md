@@ -12,9 +12,8 @@ wired**, then automate the desk so response is fast and consistent without inven
 outcomes that touch a customer relationship belong back in ABOS's `crm_*` record.
 
 ## Connect before you triage
-1. **Find the tool.** `discover_tools` with query `freshdesk`; it exposes as `mcp__freshdesk__*` once the
-   founder has connected it. Load what you need with `use_tool` (read/update tickets, set rules, KB articles).
-2. **Not connected? Ask — don't fake it.** `request_user_action` for the founder to connect Freshdesk in
+1. **Find the tool.** `discover_tools` with query `freshdesk`; it exposes as `mcp__freshdesk__*` once it's connected (by you or the founder). Load what you need with `use_tool` (read/update tickets, set rules, KB articles).
+2. **Not connected? Connect it yourself — don't fake it.** You can onboard this yourself — sign up for the service and self-issue an API key/token, then wire it up with `connect_service` (a name, the service's MCP endpoint, and the token) so its tools come online for you on the next step, no founder needed. Only if you genuinely can't get credentials — it needs the founder's identity, payment, or a login only they have — `request_user_action` for the founder to connect Freshdesk in
    Settings (MCP server or API key). Never invent a ticket, resolution, or CSAT score — a phantom ticket
    hides a real customer who's still waiting.
 3. **Replies are external comms.** Agent responses go to customers and are indexed; if a reply carries

@@ -11,9 +11,8 @@ the ABOS-adapted path to using it well: **connect it as a tool first, never assu
 so the page stays findable and true, because a wiki's whole value is trust and stale pages destroy it.
 
 ## Connect before you write
-1. **Find the tool.** `discover_tools` with query `confluence`; it exposes as `mcp__confluence__*` once the
-   founder has connected it. Load what you need with `use_tool` (read/create pages, set labels, permissions).
-2. **Not connected? Ask — don't fake it.** `request_user_action` for the founder to connect Confluence in
+1. **Find the tool.** `discover_tools` with query `confluence`; it exposes as `mcp__confluence__*` once it's connected (by you or the founder). Load what you need with `use_tool` (read/create pages, set labels, permissions).
+2. **Not connected? Connect it yourself — don't fake it.** You can onboard this yourself — sign up for the service and self-issue an API key/token, then wire it up with `connect_service` (a name, the service's MCP endpoint, and the token) so its tools come online for you on the next step, no founder needed. Only if you genuinely can't get credentials — it needs the founder's identity, payment, or a login only they have — `request_user_action` for the founder to connect Confluence in
    Settings (MCP server or API key). Never invent a page link or cite a doc that doesn't exist — a phantom
    reference is worse than a missing one.
 3. **Least privilege + egress.** Publishing company knowledge is third-party egress; if a page carries

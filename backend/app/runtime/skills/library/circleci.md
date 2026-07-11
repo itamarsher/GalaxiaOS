@@ -11,9 +11,8 @@ ABOS-adapted path to using it well: **connect it as a tool first, never assume i
 config that's fast, reproducible, and can't leak production secrets — and verify the deploy really landed.
 
 ## Connect before you build
-1. **Find the tool.** `discover_tools` with query `circleci`; it exposes as `mcp__circleci__*` once the
-   founder has connected it. Load what you need with `use_tool` (read pipeline status, trigger, get logs).
-2. **Not connected? Ask — don't fake it.** `request_user_action` for the founder to connect CircleCI in
+1. **Find the tool.** `discover_tools` with query `circleci`; it exposes as `mcp__circleci__*` once it's connected (by you or the founder). Load what you need with `use_tool` (read pipeline status, trigger, get logs).
+2. **Not connected? Connect it yourself — don't fake it.** You can onboard this yourself — sign up for the service and self-issue an API key/token, then wire it up with `connect_service` (a name, the service's MCP endpoint, and the token) so its tools come online for you on the next step, no founder needed. Only if you genuinely can't get credentials — it needs the founder's identity, payment, or a login only they have — `request_user_action` for the founder to connect CircleCI in
    Settings (MCP server or a **project-scoped API token**, never a personal/org-admin token). If the
    capability can't exist yet, `request_capability`. Never invent a pipeline URL or claim a build is green.
 3. **Least privilege + egress.** Scope tokens to the project; builds ship source and logs to a third party —
