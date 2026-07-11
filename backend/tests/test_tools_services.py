@@ -125,7 +125,10 @@ async def test_connect_service_registers_and_exposes_tools(
 
     async with session_factory() as db:
         outcome = await execute_tool(
-            db, _FakeCtx(), agent=agent, task=task,
+            db,
+            _FakeCtx(),
+            agent=agent,
+            task=task,
             name="connect_service",
             args={"name": "Acme CRM", "url": "https://mcp.acme.test/rpc"},
         )
@@ -157,7 +160,10 @@ async def test_failed_probe_rolls_back_a_new_registration(
 
     async with session_factory() as db:
         outcome = await execute_tool(
-            db, _FakeCtx(), agent=agent, task=task,
+            db,
+            _FakeCtx(),
+            agent=agent,
+            task=task,
             name="connect_service",
             args={"name": "broken", "url": "https://nope.test"},
         )
@@ -172,16 +178,17 @@ async def test_failed_probe_rolls_back_a_new_registration(
 
 
 @requires_db
-async def test_empty_server_is_not_kept(
-    session_factory, company_with_budget, monkeypatch
-):
+async def test_empty_server_is_not_kept(session_factory, company_with_budget, monkeypatch):
     company_id = company_with_budget
     agent, task = await _make_task(session_factory, company_id)
     monkeypatch.setattr(mcp_svc, "_client", _fake_client([]))  # reachable, but no tools
 
     async with session_factory() as db:
         outcome = await execute_tool(
-            db, _FakeCtx(), agent=agent, task=task,
+            db,
+            _FakeCtx(),
+            agent=agent,
+            task=task,
             name="connect_service",
             args={"name": "empty", "url": "https://empty.test"},
         )
@@ -204,7 +211,10 @@ async def test_connect_is_idempotent_and_does_not_clobber_a_working_server(
     # Seed a working server (as if the founder connected it) with a specific URL.
     async with session_factory() as db:
         server = await mcp_svc.add_server(
-            db, company_id=company_id, name="Acme", label="Acme",
+            db,
+            company_id=company_id,
+            name="Acme",
+            label="Acme",
             url="https://original.test",
         )
         server.tools_cache = [{"name": "existing_tool"}]
@@ -218,7 +228,10 @@ async def test_connect_is_idempotent_and_does_not_clobber_a_working_server(
 
     async with session_factory() as db:
         outcome = await execute_tool(
-            db, _FakeCtx(), agent=agent, task=task,
+            db,
+            _FakeCtx(),
+            agent=agent,
+            task=task,
             name="connect_service",
             args={"name": "Acme", "url": "https://malicious-overwrite.test"},
         )
@@ -241,7 +254,10 @@ async def test_connect_service_disabled_deployment(
 
     async with session_factory() as db:
         outcome = await execute_tool(
-            db, _FakeCtx(), agent=agent, task=task,
+            db,
+            _FakeCtx(),
+            agent=agent,
+            task=task,
             name="connect_service",
             args={"name": "acme", "url": "https://mcp.acme.test"},
         )
@@ -255,16 +271,17 @@ async def test_connect_service_disabled_deployment(
 
 
 @requires_db
-async def test_invalid_url_does_nothing(
-    session_factory, company_with_budget, monkeypatch
-):
+async def test_invalid_url_does_nothing(session_factory, company_with_budget, monkeypatch):
     company_id = company_with_budget
     agent, task = await _make_task(session_factory, company_id)
     # No client patch: a valid URL guard must reject before any network attempt.
 
     async with session_factory() as db:
         outcome = await execute_tool(
-            db, _FakeCtx(), agent=agent, task=task,
+            db,
+            _FakeCtx(),
+            agent=agent,
+            task=task,
             name="connect_service",
             args={"name": "acme", "url": "not-a-url"},
         )
@@ -303,7 +320,10 @@ async def test_configure_cloudflare_stores_verified_credentials(
 
     async with session_factory() as db:
         outcome = await execute_tool(
-            db, _FakeCtx(), agent=agent, task=task,
+            db,
+            _FakeCtx(),
+            agent=agent,
+            task=task,
             name="configure_integration",
             args={"provider": "cloudflare", "api_token": "cf-tok", "account_id": "acct-1"},
         )
@@ -335,7 +355,10 @@ async def test_configure_cloudflare_rejects_bad_credentials(
 
     async with session_factory() as db:
         outcome = await execute_tool(
-            db, _FakeCtx(), agent=agent, task=task,
+            db,
+            _FakeCtx(),
+            agent=agent,
+            task=task,
             name="configure_integration",
             args={"provider": "cloudflare", "api_token": "nope", "account_id": "acct-1"},
         )
@@ -364,7 +387,10 @@ async def test_configure_cloudflare_requires_both_fields(
 
     async with session_factory() as db:
         outcome = await execute_tool(
-            db, _FakeCtx(), agent=agent, task=task,
+            db,
+            _FakeCtx(),
+            agent=agent,
+            task=task,
             name="configure_integration",
             args={"provider": "cloudflare", "api_token": "cf-tok"},  # no account_id
         )
@@ -377,15 +403,120 @@ async def test_configure_cloudflare_requires_both_fields(
 
 
 @requires_db
-async def test_configure_integration_unknown_provider(
-    session_factory, company_with_budget
+async def test_configure_tavily_stores_verified_key(
+    session_factory, company_with_budget, monkeypatch
 ):
+    _set_master_key()
+    company_id = company_with_budget
+    agent, task = await _make_task(session_factory, company_id)
+
+    verified: list[str] = []
+
+    async def _ok(api_key):
+        verified.append(api_key)
+
+    async def _fake_write(db, **kwargs):
+        return None
+
+    monkeypatch.setattr("app.integrations.tavily.verify_credentials", _ok)
+    monkeypatch.setattr("app.services.memory.write", _fake_write)
+
+    async with session_factory() as db:
+        outcome = await execute_tool(
+            db,
+            _FakeCtx(),
+            agent=agent,
+            task=task,
+            name="configure_integration",
+            args={"provider": "tavily", "api_key": "tvly-xxx"},
+        )
+        await db.commit()
+
+    assert outcome.is_error is False
+    assert verified == ["tvly-xxx"]  # verified BEFORE storing
+    assert "web_search" in outcome.observation
+    # The key is now resolvable for the web_search / web_fetch tools.
+    from app.services import apikeys
+
+    async with session_factory() as db:
+        key = await apikeys.get_plaintext_key(db, company_id=company_id, provider="tavily")
+    assert key == "tvly-xxx"
+
+
+@requires_db
+async def test_configure_tavily_rejects_bad_key(session_factory, company_with_budget, monkeypatch):
+    _set_master_key()
+    company_id = company_with_budget
+    agent, task = await _make_task(session_factory, company_id)
+
+    from app.integrations.websearch import WebSearchError
+
+    async def _bad(api_key):
+        raise WebSearchError("Tavily request failed: 401")
+
+    monkeypatch.setattr("app.integrations.tavily.verify_credentials", _bad)
+
+    async with session_factory() as db:
+        outcome = await execute_tool(
+            db,
+            _FakeCtx(),
+            agent=agent,
+            task=task,
+            name="configure_integration",
+            args={"provider": "tavily", "api_key": "nope"},
+        )
+        await db.commit()
+
+    assert outcome.is_error is True
+    assert "rejected" in outcome.observation.lower()
+    from app.services import apikeys
+
+    async with session_factory() as db:
+        key = await apikeys.get_plaintext_key(db, company_id=company_id, provider="tavily")
+    assert key is None  # nothing stored when verification fails
+
+
+@requires_db
+async def test_configure_tavily_requires_api_key(session_factory, company_with_budget, monkeypatch):
+    _set_master_key()
+    company_id = company_with_budget
+    agent, task = await _make_task(session_factory, company_id)
+
+    async def _ok(api_key):  # pragma: no cover - must not be reached
+        raise AssertionError("should not verify without a key")
+
+    monkeypatch.setattr("app.integrations.tavily.verify_credentials", _ok)
+
+    async with session_factory() as db:
+        outcome = await execute_tool(
+            db,
+            _FakeCtx(),
+            agent=agent,
+            task=task,
+            name="configure_integration",
+            args={"provider": "tavily"},  # no api_key
+        )
+        await db.commit()
+
+    assert outcome.is_error is True
+    from app.services import apikeys
+
+    async with session_factory() as db:
+        key = await apikeys.get_plaintext_key(db, company_id=company_id, provider="tavily")
+    assert key is None
+
+
+@requires_db
+async def test_configure_integration_unknown_provider(session_factory, company_with_budget):
     company_id = company_with_budget
     agent, task = await _make_task(session_factory, company_id)
 
     async with session_factory() as db:
         outcome = await execute_tool(
-            db, _FakeCtx(), agent=agent, task=task,
+            db,
+            _FakeCtx(),
+            agent=agent,
+            task=task,
             name="configure_integration",
             args={"provider": "salesforce"},
         )

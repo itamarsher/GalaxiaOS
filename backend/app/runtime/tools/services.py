@@ -49,8 +49,9 @@ _MAX_TOOLS_SHOWN = 25
 #: Built-in integrations ABOS has its OWN adapter for (not MCP), and that an agent
 #: can therefore configure itself. Unlike ``connect_service`` (which registers an
 #: external MCP tool server), these credentials feed native capabilities — site
-#: hosting, custom domains, DNS — that resolve through :mod:`app.services.integrations`.
-_NATIVE_INTEGRATIONS = ("cloudflare",)
+#: hosting, custom domains, DNS (Cloudflare), and web search + page fetch (Tavily) —
+#: that resolve through native adapters, not an ``mcp__*`` namespace.
+_NATIVE_INTEGRATIONS = ("cloudflare", "tavily")
 
 
 SPECS: list[ToolSpec] = [
@@ -118,8 +119,9 @@ SPECS: list[ToolSpec] = [
             "for the provider and self-issue a scoped API token, then pass it here; ABOS "
             "verifies the credentials before storing them envelope-encrypted, so a bad token is "
             "rejected up front. Supported: 'cloudflare' (needs `api_token` + `account_id`) — "
-            "powers `publish_content` and `connect_domain`. Every downstream action is still "
-            "governed and budget-metered as usual."
+            "powers `publish_content` and `connect_domain`; 'tavily' (needs `api_key`) — powers "
+            "`web_search` and `web_fetch`. Every downstream action is still governed and "
+            "budget-metered as usual."
         ),
         input_schema={
             "type": "object",
@@ -133,12 +135,16 @@ SPECS: list[ToolSpec] = [
                     "type": "string",
                     "description": (
                         "A scoped API token for the provider (least privilege — the specific "
-                        "zone/permissions you need, never a global key)."
+                        "zone/permissions you need, never a global key). Cloudflare."
                     ),
                 },
                 "account_id": {
                     "type": "string",
                     "description": "Cloudflare account id (required for provider 'cloudflare').",
+                },
+                "api_key": {
+                    "type": "string",
+                    "description": "Tavily API key (required for provider 'tavily').",
                 },
             },
             "required": ["provider"],
@@ -157,11 +163,7 @@ def _valid_url(url: str) -> bool:
 
 
 def _tool_names(server) -> list[str]:
-    return [
-        t["name"]
-        for t in (server.tools_cache or [])
-        if isinstance(t, dict) and t.get("name")
-    ]
+    return [t["name"] for t in (server.tools_cache or []) if isinstance(t, dict) and t.get("name")]
 
 
 def _exposed(server) -> str:
@@ -311,6 +313,8 @@ async def _configure_integration(db, ctx, *, agent: Agent, task: Task, args: dic
         )
     if provider == "cloudflare":
         return await _configure_cloudflare(db, agent=agent, task=task, args=args)
+    if provider == "tavily":
+        return await _configure_tavily(db, agent=agent, task=task, args=args)
     # Guarded by the membership check above; kept exhaustive for future providers.
     return ToolOutcome(observation=f"{provider} is not configurable yet.", is_error=True)
 
@@ -380,6 +384,76 @@ async def _configure_cloudflare(db, *, agent: Agent, task: Task, args: dict) -> 
             "`connect_domain`) and use them directly. That's the NATIVE hosting flow; for "
             "generic Cloudflare API operations (cache purge, WAF, Workers) register the "
             "Cloudflare MCP server with `connect_service` instead."
+        )
+    )
+
+
+#: BYO key slot under which a company's Tavily key is stored (matches
+#: ``app.runtime.tools.core.WEB_SEARCH_PROVIDER`` — the same key powers web_search
+#: and web_fetch).
+_TAVILY_PROVIDER = "tavily"
+
+
+async def _configure_tavily(db, *, agent: Agent, task: Task, args: dict) -> ToolOutcome:
+    from app.integrations.tavily import verify_credentials
+    from app.integrations.websearch import WebSearchError
+    from app.services import apikeys
+
+    api_key = str(args.get("api_key") or "").strip()
+    if not api_key:
+        return ToolOutcome(
+            observation=(
+                "Tavily needs an `api_key`. Sign up at tavily.com (the free tier issues a key "
+                "with no card), copy the API key, then pass it here."
+            ),
+            is_error=True,
+        )
+
+    # Verify before storing so a bad key is rejected up front — the same honest
+    # check the Cloudflare flow does. Never store a credential we haven't proven works.
+    try:
+        await verify_credentials(api_key)
+    except WebSearchError as exc:
+        return ToolOutcome(
+            observation=(
+                f"Tavily rejected this key: {exc}. NOTHING was stored — check the key and "
+                "try again."
+            ),
+            is_error=True,
+        )
+
+    await apikeys.store_key(
+        db, company_id=task.company_id, provider=_TAVILY_PROVIDER, plaintext=api_key
+    )
+
+    from app.services import memory as memory_svc
+
+    await memory_svc.write(
+        db,
+        company_id=task.company_id,
+        type=MemoryType.result,
+        title="Integration configured: Tavily",
+        content=(
+            f"{agent.name} ({agent.role.value}) configured a Tavily API key. ABOS's built-in "
+            "web search and page-fetch tools (`web_search` / `web_fetch`) are now available to "
+            "the fleet, billed against the company budget."
+        ),
+        source_task_id=task.id,
+    )
+    await mission_log.record(
+        task.company_id,
+        agent_id=agent.id,
+        agent_name=agent.name,
+        role=agent.role.value,
+        headline="Configured Tavily (web search + page fetch)",
+        kind="update",
+    )
+
+    return ToolOutcome(
+        observation=(
+            "Tavily configured and verified. `web_search` and `web_fetch` now work — load them "
+            "with `use_tool` and use them directly. Each call is metered against the company "
+            "budget."
         )
     )
 

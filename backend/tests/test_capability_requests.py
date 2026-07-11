@@ -46,8 +46,12 @@ async def _make_agent_task(db, company_id):
     await db.flush()
     run.root_run_id = run.id
     task = Task(
-        company_id=company_id, run_id=run.id, root_run_id=run.id,
-        agent_id=agent.id, goal="g", status=TaskStatus.running,
+        company_id=company_id,
+        run_id=run.id,
+        root_run_id=run.id,
+        agent_id=agent.id,
+        goal="g",
+        status=TaskStatus.running,
     )
     db.add(task)
     await db.flush()
@@ -64,8 +68,11 @@ async def test_file_request_records_to_backlog(session_factory, company_with_bud
 
     async with session_factory() as db:
         outcome = await platform_requests.file_request(
-            db, company_id=company_with_budget, kind="capability",
-            title="Real web search", details="agents only get simulated results",
+            db,
+            company_id=company_with_budget,
+            kind="capability",
+            title="Real web search",
+            details="agents only get simulated results",
         )
         await db.commit()
 
@@ -97,8 +104,12 @@ async def test_file_request_attributes_user_and_dedupes(session_factory, company
     for uid in (owner_id, second_id, owner_id):  # owner asks twice → still one vote
         async with session_factory() as db:
             await platform_requests.file_request(
-                db, company_id=company_with_budget, kind="capability",
-                title="Real web search", details="need it", user_id=uid,
+                db,
+                company_id=company_with_budget,
+                kind="capability",
+                title="Real web search",
+                details="need it",
+                user_id=uid,
             )
             await db.commit()
 
@@ -112,26 +123,30 @@ async def test_file_request_attributes_user_and_dedupes(session_factory, company
 @requires_db
 async def test_file_request_unknown_kind_returns_none(session_factory, company_with_budget):
     async with session_factory() as db:
-        assert await platform_requests.file_request(
-            db, company_id=company_with_budget, kind="nonsense", title="x", details="y"
-        ) is None
+        assert (
+            await platform_requests.file_request(
+                db, company_id=company_with_budget, kind="nonsense", title="x", details="y"
+            )
+            is None
+        )
 
 
 # ── copilot command path ──────────────────────────────────────────────────────
 
 
 @requires_db
-async def test_copilot_command_records_capability_request(
-    session_factory, company_with_budget
-):
+async def test_copilot_command_records_capability_request(session_factory, company_with_budget):
     from app.models import FeatureRequest
 
     async with session_factory() as db:
         text = await copilot._execute_command(
             db,
             company_id=company_with_budget,
-            action={"action": "request_capability", "title": "Real web search",
-                    "details": "only simulated results today"},
+            action={
+                "action": "request_capability",
+                "title": "Real web search",
+                "details": "only simulated results today",
+            },
         )
         await db.commit()
 
@@ -156,7 +171,9 @@ async def test_web_search_is_unsupported_without_a_key(session_factory, company_
 
 
 @requires_db
-async def test_web_search_uses_tavily_with_a_cost_when_key_set(session_factory, company_with_budget):
+async def test_web_search_uses_tavily_with_a_cost_when_key_set(
+    session_factory, company_with_budget
+):
     _set_master_key()
     async with session_factory() as db:
         await apikeys.store_key(
@@ -265,6 +282,102 @@ async def test_web_search_commits_measured_credits_not_the_estimate(
     # The Tavily request id is kept for the auditable vendor trail.
     assert charge is not None and charge.external_ref == "req-abc123"
     assert charge.payload and charge.payload.get("credits") == 2
+
+
+# ── web_fetch (page extraction, shares the Tavily provider/key) ───────────────
+
+
+@requires_db
+async def test_web_fetch_is_unsupported_without_a_provider(session_factory, company_with_budget):
+    """No Tavily key and no global provider -> web_fetch reports unsupported."""
+    from app.runtime import tools as tools_pkg
+
+    _set_master_key()
+    async with session_factory() as db:
+        agent, task = await _make_agent_task(db, company_with_budget)
+        await db.commit()
+
+    ctx = SimpleNamespace(cost_meter=None)  # unused: it never reaches metering
+    async with session_factory() as db:
+        outcome = await tools_pkg.execute_tool(
+            db,
+            ctx,
+            agent=agent,
+            task=task,
+            name="web_fetch",
+            args={"url": "https://x.test"},
+        )
+    assert outcome.is_error is True
+    assert "not supported" in outcome.observation.lower()
+
+
+@requires_db
+async def test_web_fetch_requires_a_url(session_factory, company_with_budget):
+    from app.runtime import tools as tools_pkg
+
+    async with session_factory() as db:
+        agent, task = await _make_agent_task(db, company_with_budget)
+        await db.commit()
+
+    ctx = SimpleNamespace(cost_meter=None)
+    async with session_factory() as db:
+        outcome = await tools_pkg.execute_tool(
+            db, ctx, agent=agent, task=task, name="web_fetch", args={}
+        )
+    assert outcome.is_error is True
+    assert "url" in outcome.observation.lower()
+
+
+@requires_db
+async def test_web_fetch_extracts_and_charges_measured_credits(
+    session_factory, company_with_budget, monkeypatch
+):
+    """A paid web_fetch reserves the estimate then commits Tavily's real credits."""
+    from app.config import settings
+    from app.integrations.websearch import FetchResult
+    from app.models import Budget, SpendEntry
+    from app.runtime import tools as tools_pkg
+    from app.runtime.cost_meter import CostMeter
+
+    class _FakeTavily:
+        last_usage_credits = 1
+        last_request_id = "req-fetch-1"
+
+        async def extract(self, urls):
+            return [FetchResult(url=u, content=f"body of {u}") for u in urls]
+
+    async def _fake_resolve(_db, _cid):
+        return _FakeTavily(), settings.web_search_cost_cents, None, None
+
+    monkeypatch.setattr("app.runtime.tools.core._resolve_web_search", _fake_resolve)
+
+    async with session_factory() as db:
+        agent, task = await _make_agent_task(db, company_with_budget)
+        await db.commit()
+
+    ctx = SimpleNamespace(cost_meter=CostMeter(session_factory))
+    async with session_factory() as db:
+        outcome = await tools_pkg.execute_tool(
+            db,
+            ctx,
+            agent=agent,
+            task=task,
+            name="web_fetch",
+            args={"urls": ["https://a.test", "https://b.test"]},
+        )
+    assert outcome.is_error is False
+    assert "body of https://a.test" in outcome.observation
+    assert "body of https://b.test" in outcome.observation
+
+    async with session_factory() as db:
+        budget = await db.scalar(select(Budget).where(Budget.company_id == company_with_budget))
+        entry = await db.scalar(
+            select(SpendEntry).where(SpendEntry.company_id == company_with_budget)
+        )
+    # 2 URLs is 1 Tavily credit (basic, ~5 per credit); committed at measured credits.
+    assert budget.spent_cents == settings.web_search_cost_cents
+    assert budget.reserved_cents == 0
+    assert entry is not None and entry.amount_cents == settings.web_search_cost_cents
 
 
 # ── per-company email (Resend) key ───────────────────────────────────────────
