@@ -89,7 +89,12 @@ class Settings(BaseSettings):
     # only ever handed to ``provider.complete``. Empty key => managed LLM is
     # unavailable even when managed_mode_enabled (companies without a BYOK key
     # can't launch), so set both when turning managed mode on.
-    platform_llm_provider: str = "anthropic"
+    #
+    # Defaults to ``openrouter`` (open-source models over an OpenAI-compatible
+    # host): a subsidized free tier wants the cheapest capable tokens, and OSS
+    # models on OpenRouter are typically far cheaper per token than Claude. Point
+    # it at ``anthropic`` (or any supported provider) if you'd rather fund Claude.
+    platform_llm_provider: str = "openrouter"
     platform_llm_api_key: str = ""
     # Per-founder lifetime free allowance of platform-funded spend (cents). Once
     # a founder's cumulative platform spend crosses this, managed capabilities
