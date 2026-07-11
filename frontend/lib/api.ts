@@ -97,6 +97,17 @@ export interface BudgetView {
   by_agent: Record<string, number>;
 }
 export interface Task { id: string; agent_id: string; objective_id: string | null; root_run_id: string | null; goal: string; status: string; depth: number; cost_cents: number; output: Record<string, unknown> | null }
+/** An ephemeral live mission-log update posted by an agent at a milestone. */
+export interface MissionLogEntry {
+  id: string;
+  ts: string;               // ISO timestamp
+  agent_id: string | null;
+  agent_name: string;
+  role: string | null;
+  kind: string;             // "start" | "update"
+  headline: string;
+  detail: string | null;
+}
 // The game's "round" trigger + status (backend app/services/runs.py).
 export interface CycleStart { started: boolean; task_id: string | null; reason: string; active: boolean }
 export interface CycleStatus { active: boolean; can_start: boolean; reason: string; active_task_count: number }
@@ -360,6 +371,9 @@ export const api = {
         ? `/companies/${companyId}/sites/${siteId}/leads`
         : `/companies/${companyId}/sites/leads`,
     ),
+
+  missionLog: (companyId: string) =>
+    req<{ mission_log: MissionLogEntry[] }>(`/companies/${companyId}/mission-log`),
 
   tasks: (companyId: string) => req<Task[]>(`/companies/${companyId}/tasks`),
   task: (companyId: string, taskId: string) =>

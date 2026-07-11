@@ -8,13 +8,14 @@
 // .btnrow, .decision-panel, .pill) plus a small `Galaxia Command` block added to
 // globals.css.
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import {
   fmtUsd,
   statusLabel,
   type BudgetView,
   type Decision,
+  type MissionLogEntry,
   type Runway,
 } from "@/lib/api";
 import { type ModuleView } from "@/lib/game/scene";
@@ -456,6 +457,100 @@ export function CrewRoster({
             </div>
           ))}
         </div>
+      )}
+    </div>
+  );
+}
+
+// ── Mission log: the fleet's live, ephemeral milestone feed ───────────────────
+function relTime(iso: string): string {
+  const t = Date.parse(iso);
+  if (Number.isNaN(t)) return "";
+  const secs = Math.max(0, Math.round((Date.now() - t) / 1000));
+  if (secs < 5) return "just now";
+  if (secs < 60) return `${secs}s ago`;
+  const mins = Math.floor(secs / 60);
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  return `${Math.floor(hrs / 24)}d ago`;
+}
+
+export function MissionLog({ entries }: { entries: MissionLogEntry[] }) {
+  // Flash entries that just arrived: diff incoming ids against what we last saw,
+  // mark the new ones for a one-shot CSS highlight, then let them settle.
+  const seen = useRef<Set<string>>(new Set());
+  const mounted = useRef(false);
+  const [fresh, setFresh] = useState<Set<string>>(new Set());
+  // Tick so relative timestamps ("3m ago") keep advancing without new data.
+  const [, setTick] = useState(0);
+
+  useEffect(() => {
+    const ids = entries.map((e) => e.id);
+    if (!mounted.current) {
+      // Seed on first render so the initial batch doesn't all flash.
+      seen.current = new Set(ids);
+      mounted.current = true;
+      return;
+    }
+    const appeared = ids.filter((id) => !seen.current.has(id));
+    seen.current = new Set(ids);
+    if (appeared.length === 0) return;
+    setFresh((prev) => new Set([...prev, ...appeared]));
+    const timer = setTimeout(() => {
+      setFresh((prev) => {
+        const next = new Set(prev);
+        for (const id of appeared) next.delete(id);
+        return next;
+      });
+    }, 1600);
+    return () => clearTimeout(timer);
+  }, [entries]);
+
+  useEffect(() => {
+    const id = setInterval(() => setTick((n) => n + 1), 30000);
+    return () => clearInterval(id);
+  }, []);
+
+  return (
+    <div className="card mission-log">
+      <div className="mission-log-head">
+        <div className="step" style={{ margin: 0 }}>Mission log</div>
+        <span className="mission-log-live" aria-hidden>
+          <span className="mission-log-live-dot" /> live
+        </span>
+      </div>
+      {entries.length === 0 ? (
+        <p className="muted" style={{ marginTop: 10 }}>
+          No updates yet — advance a cycle and your crew will report milestones here as they work.
+        </p>
+      ) : (
+        <ul className="mission-log-list" aria-live="polite">
+          {entries.map((e) => (
+            <li
+              key={e.id}
+              className={`mission-log-item${fresh.has(e.id) ? " fresh" : ""}${
+                e.kind === "start" ? " start" : ""
+              }`}
+            >
+              <span className="mission-log-kind" aria-hidden>
+                {e.kind === "start" ? "▶" : "◆"}
+              </span>
+              <div className="mission-log-body">
+                <div className="mission-log-headline">{e.headline}</div>
+                {e.detail ? <div className="mission-log-detail muted">{e.detail}</div> : null}
+                <div className="mission-log-meta muted">
+                  <strong>{e.agent_name}</strong>
+                  {e.role ? ` · ${e.role}` : ""}
+                  {" · "}
+                  <time dateTime={e.ts} title={new Date(e.ts).toLocaleString()}>
+                    {relTime(e.ts)}
+                  </time>
+                </div>
+              </div>
+            </li>
+          ))}
+        </ul>
       )}
     </div>
   );
