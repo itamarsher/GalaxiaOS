@@ -13,6 +13,12 @@ export default function Home() {
   const [step, setStep] = useState<Step>("loading");
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [discarding, setDiscarding] = useState(false);
+
+  // Set true while a draft is being discarded so an in-flight generation's
+  // rejection (the company row is deleted out from under it) doesn't bounce us
+  // back to the key step. Reset when a fresh generation intentionally starts.
+  const discardingRef = useRef(false);
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -159,12 +165,40 @@ export default function Home() {
       await afterAuth(false);
     });
 
-  const newBusiness = () => {
-    // Reset the onboarding wizard so creating an Nth business starts clean.
+  // Clear every field the onboarding wizard collects so the next run starts clean.
+  const resetWizard = () => {
     setCompanyId(null); setApiKey(""); setTavilyKey(""); setResendKey(""); setPreview(null);
     setChat([]); setProgress(null); setMission(""); setBudget("500"); setErr(null);
     setReusable([]); setReusedKeyProviders([]); setManaged(null);
+  };
+
+  const newBusiness = () => {
+    resetWizard();
     setStep("mission");
+  };
+
+  // Discard the in-progress draft company and return to the main page. The draft
+  // exists once onboarding has started (the "key", "generating" and "review"
+  // steps), so this permanently deletes it; then we land on the founder's
+  // business list (or a fresh mission screen if they have none).
+  const discardDraft = async () => {
+    if (typeof window !== "undefined" &&
+        !window.confirm("Discard this draft company and delete its generated plan? This can't be undone.")) {
+      return;
+    }
+    setErr(null); setDiscarding(true);
+    discardingRef.current = true;
+    try {
+      if (companyId) await api.deleteCompany(companyId);
+      resetWizard();
+      const list = await api.myCompanies();
+      setBusinesses(list);
+      setStep(list.length > 0 ? "businesses" : "mission");
+    } catch (e) {
+      setErr(String(e instanceof Error ? e.message : e));
+    } finally {
+      setDiscarding(false);
+    }
   };
 
   const startOnboarding = () =>
@@ -186,6 +220,7 @@ export default function Home() {
   const submitKeyAndGenerate = () =>
     guard(async () => {
       if (!companyId) return;
+      discardingRef.current = false; // a fresh, intentional generation
       // A freshly typed key wins (lets the founder override a reused one); if they
       // reused an Anthropic key and typed nothing, it's already stored.
       if (apiKey.trim()) await api.addApiKey(companyId, apiKey.trim());
@@ -203,6 +238,10 @@ export default function Home() {
         setPreview(p);
         setStep("review");
       } catch (e) {
+        // If the founder discarded the draft mid-generation, the company was
+        // deleted out from under this call — stay on the main page instead of
+        // bouncing back to the key step for a company that no longer exists.
+        if (discardingRef.current) return;
         setStep("key"); // let them retry
         throw e;
       } finally {
@@ -238,6 +277,19 @@ export default function Home() {
       // live — so onboarding hands straight off to operating the starbase.
       router.push(`/c/${companyId}/game?launched=1`);
     });
+
+  // A compact "discard draft" control shown on every onboarding step that has a
+  // live draft, so the founder can bail out and return to the main page.
+  const discardButton = (
+    <button
+      className="ghost danger"
+      style={{ marginTop: 0, padding: "6px 12px", fontSize: 12 }}
+      disabled={discarding}
+      onClick={discardDraft}
+    >
+      {discarding ? "Discarding…" : "Discard draft"}
+    </button>
+  );
 
   return (
     <div className="wrap">
@@ -331,7 +383,10 @@ export default function Home() {
 
       {step === "key" && (
         <div className="card">
-          <div className="step">Step 2 · {managedCovers && !hasAnthropicKey ? "Launch — no keys needed" : "Keys"}</div>
+          <div className="step" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <span>Step 2 · {managedCovers && !hasAnthropicKey ? "Launch — no keys needed" : "Keys"}</span>
+            {discardButton}
+          </div>
 
           {/* Managed tier: lead with "you can just launch" when the platform will
               fund it. Only shown on a deployment with managed mode configured. */}
@@ -417,12 +472,20 @@ export default function Home() {
         </div>
       )}
 
-      {step === "generating" && <GeneratingCard progress={progress} />}
+      {step === "generating" && (
+        <>
+          <GeneratingCard progress={progress} />
+          <div style={{ display: "flex", justifyContent: "center", marginTop: 12 }}>{discardButton}</div>
+        </>
+      )}
 
       {step === "review" && preview && (
         <div>
           <div className="card">
-            <div className="step">Step 3 · Review generated organization</div>
+            <div className="step" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <span>Step 3 · Review generated organization</span>
+              {discardButton}
+            </div>
             <h2>{preview.company.name}</h2>
             {preview.cost_estimate_cents != null && (
               <p className="muted">Est. monthly cost: {fmtUsd(preview.cost_estimate_cents)}</p>
