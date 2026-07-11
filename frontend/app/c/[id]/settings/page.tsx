@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
-import { api, type ApiKey, type Company, type McpServer } from "@/lib/api";
+import { api, fmtUsd, type ApiKey, type Company, type ManagedStatus, type McpServer } from "@/lib/api";
 import { usePoll } from "@/lib/useApi";
 import { CloudflareCard, GoogleDriveCard } from "@/lib/connectors";
 
@@ -65,6 +65,8 @@ export default function SettingsPage() {
       <h2>Settings</h2>
       <p className="muted">Manage the API keys this company uses. Plaintext is never stored or shown — only a fingerprint.</p>
 
+      <ManagedCard companyId={id} />
+
       <FromAddress companyId={id} current={company.data ?? null} onChange={() => company.reload()} />
 
       {SLOTS.map((slot) => (
@@ -93,6 +95,78 @@ export default function SettingsPage() {
         .map((k) => (
           <OtherKey key={k.id} companyId={id} apiKey={k} onChange={() => keys.reload()} />
         ))}
+    </div>
+  );
+}
+
+// Managed tier: the founder's platform-funded standing. Only rendered when the
+// deployment has managed mode on; otherwise it's a pure-BYOK deployment and this
+// card stays hidden. Shows the free-tier meter and (when a BYO key is present)
+// notes that the fleet runs on the founder's own account instead.
+function ManagedCard({ companyId }: { companyId: string }) {
+  const status = usePoll(() => api.managedStatus(companyId), 0, [companyId]);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const s: ManagedStatus | null = status.data ?? null;
+
+  if (!s || !s.managed_mode) return null; // BYOK-only deployment → nothing to show
+
+  const upgrade = async () => {
+    setBusy(true); setErr(null);
+    try {
+      const { url } = await api.upgradeManaged(companyId);
+      window.location.href = url;
+    } catch (e) {
+      setErr(String(e instanceof Error ? e.message : e));
+      setBusy(false);
+    }
+  };
+
+  const usedPct = s.free_allowance_cents > 0
+    ? Math.min(100, Math.round((s.platform_spent_cents / s.free_allowance_cents) * 100))
+    : 0;
+
+  return (
+    <div className="card">
+      <div className="step" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <span>Managed plan</span>
+        <span className={`status ${s.tier === "paid_managed" ? "active" : s.allowed ? "active" : "pending"}`}>
+          {s.tier === "paid_managed" ? "Managed (paid)" : s.tier === "blocked" ? "Free — used up" : "Free tier"}
+        </span>
+      </div>
+
+      {s.has_own_llm_key ? (
+        <p className="muted" style={{ fontSize: 13, margin: "6px 0 0" }}>
+          You&apos;re running on your own model key ({s.byo_llm_providers.join(", ")}) — no platform cap
+          applies. The managed tier is a fallback if you remove your key.
+        </p>
+      ) : s.tier === "paid_managed" ? (
+        <p className="muted" style={{ fontSize: 13, margin: "6px 0 0" }}>
+          Metered managed usage — the platform runs your fleet and bills usage to your card. Add
+          your own model key anytime to switch back to bring-your-own.
+        </p>
+      ) : (
+        <>
+          <p className="muted" style={{ fontSize: 13, margin: "6px 0 0" }}>
+            The platform funds your fleet up to {fmtUsd(s.free_allowance_cents)} of usage — no keys
+            needed. Used {fmtUsd(s.platform_spent_cents)} ({fmtUsd(s.free_remaining_cents)} left).
+          </p>
+          <div className="bar" style={{ marginTop: 8 }}><span style={{ width: `${usedPct}%` }} /></div>
+          {!s.allowed && s.reason && <p className="err" style={{ fontSize: 13 }}>{s.reason}</p>}
+          <div className="btnrow">
+            {s.upgrade_available ? (
+              <button disabled={busy} onClick={upgrade}>
+                {busy ? "Redirecting…" : "Upgrade to managed (pay as you go)"}
+              </button>
+            ) : (
+              <span className="muted" style={{ fontSize: 12 }}>
+                Add your own model key below to keep going without limits.
+              </span>
+            )}
+          </div>
+        </>
+      )}
+      {err && <div className="err">{err}</div>}
     </div>
   );
 }

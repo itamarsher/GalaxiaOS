@@ -120,10 +120,14 @@ async def _build_deal_memo(db: AsyncSession, *, company: Company) -> str:
 
 async def review(db: AsyncSession, *, company: Company) -> list[InvestmentReview]:
     """Run the three investor personas and persist their verdicts (idempotent)."""
-    resolved = await apikeys.resolve_provider(db, company_id=company.id)
+    resolved = await apikeys.resolve_active_provider(db, company_id=company.id)
     if resolved is None:
-        raise InvestorError("Add a provider API key before running the investment review.")
-    provider, api_key = resolved
+        raise InvestorError(
+            "No model available for the investment review — add your own provider key, or "
+            "(managed mode) the free platform allowance is used up; upgrade or bring a key."
+        )
+    provider, api_key = resolved.provider, resolved.api_key
+    funding_user_id = resolved.funding_user_id
     model = settings.investor_model or provider.default_models["planner"]
 
     deal_memo = await _build_deal_memo(db, company=company)
@@ -149,6 +153,7 @@ async def review(db: AsyncSession, *, company: Company) -> list[InvestmentReview
                 messages=[Message(role="user", content=deal_memo)],
                 max_tokens=1200,
                 json_schema=INVESTOR_VERDICT_SCHEMA,
+                funding_user_id=funding_user_id,
             )
         except Exception:  # noqa: BLE001 - one persona must not abort the rest
             _log.exception("investor LLM call failed for persona %s", persona.value)

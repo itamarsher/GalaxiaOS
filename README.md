@@ -20,10 +20,12 @@ for the full statement and how we plan to sustain the open core.
 
 - **Backend:** Python + FastAPI (`backend/app/api`), async SQLAlchemy 2.0, Postgres + pgvector.
 - **Agent runtime:** `backend/app/runtime` — an `arq` worker running a think→act→observe loop.
-- **AI (BYOK):** provider-agnostic `LLMProvider` (`backend/app/providers`); Anthropic/Claude or
-  **open-source models** (Llama 3.3, DeepSeek R1, Qwen, gpt-oss) via OpenAI-compatible hosts
-  (OpenRouter/Groq/Together, or a self-hosted vLLM/Ollama server) — typically far cheaper per
-  token. Founders bring their own key, stored envelope-encrypted.
+- **AI (BYOK or managed):** provider-agnostic `LLMProvider` (`backend/app/providers`);
+  Anthropic/Claude or **open-source models** (Llama 3.3, DeepSeek R1, Qwen, gpt-oss) via
+  OpenAI-compatible hosts (OpenRouter/Groq/Together, or a self-hosted vLLM/Ollama server) —
+  typically far cheaper per token. Founders bring their own key, stored envelope-encrypted — or,
+  on a **hosted deployment with managed mode on**, bring *nothing*: the platform funds a free tier
+  of compute that converts to paid managed usage (see *Managed mode* below).
 - **Budget OS:** every billable action (LLM tokens **and** external charges like domains) passes
   through one chokepoint — `CostMeter` (`backend/app/runtime/cost_meter.py`) — which reserves
   against the budget *before* spending.
@@ -93,6 +95,36 @@ uv run uvicorn app.main:app --reload
 ```
 
 Open the API docs at http://localhost:8000/docs and the web app at http://localhost:3000.
+
+## Managed mode (hosted "no keys needed" tier)
+
+The core is BYOK, and **self-hosting stays strictly BYOK** — `ABOS_MANAGED_MODE_ENABLED`
+defaults to `false`, so nobody's key is ever shared unless an operator opts in. A **hosted**
+deployment can flip it on to let a founder launch with *zero* keys:
+
+- **One resolution seam.** `apikeys.resolve_active_provider` returns the founder's own stored
+  key first (BYOK always wins and is never metered against the platform); otherwise, under
+  managed mode, the shared `ABOS_PLATFORM_LLM_*` key — but only while the founder is *eligible*.
+  The same "BYO first, else platform default" pattern already governs the read-only capabilities
+  (web search, media-gen), now gated by managed eligibility too.
+- **Two-dimension accounting.** `CostMeter` still reserves/commits every action against the
+  company's own business budget exactly as before. When the funding source is the platform, it
+  *additionally* records the committed spend to a per-founder **platform ledger**
+  (`platform_billing_accounts` / `platform_charges`, keyed by `user_id` and pooled across all a
+  founder's companies) inside the same transaction — so LLM tokens and paid capabilities funnel
+  through one place.
+- **Free tier → paid managed.** Each founder gets `ABOS_PLATFORM_FREE_TIER_CENTS` of
+  platform-funded compute (with a per-day burst cap). Cross it and managed capabilities stop with
+  a clear "add your own key or upgrade" reason. Upgrading starts a Stripe metered-subscription
+  Checkout (`ABOS_STRIPE_MANAGED_PRICE_ID`); `checkout.session.completed` promotes the account and
+  subsequent platform spend is reported as usage (× `ABOS_MANAGED_BILLING_MARKUP`).
+- **Abuse guardrails.** The free tier is pooled **per founder account** (new companies can't
+  multiply it), a daily cap bounds bursts, and a cheap deterministic mission screen
+  (`services/screening.py`) gates clearly-disallowed free-tier missions (BYOK founders are exempt).
+
+Onboarding drops the hard key gate: with managed mode on, Step 2 leads with "launch — no keys
+needed" and demotes the key inputs to an optional *Advanced* disclosure. Settings shows the
+managed meter and the upgrade CTA.
 
 ## Security hardening (RLS)
 
