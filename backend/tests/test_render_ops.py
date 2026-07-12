@@ -1,8 +1,8 @@
 """Render observability: client parsing + credential scoping.
 
 The client is exercised offline with a mock transport; the resolver test proves
-the global (dogfooding-account) key is offered ONLY to Galaxia, while any company
-can use its own BYOK render key.
+the global (dogfooding-account) key is offered ONLY to the platform company, while
+any company can use its own BYOK render key.
 """
 
 from __future__ import annotations
@@ -16,8 +16,8 @@ import pytest
 from app.config import settings
 from app.integrations.render import RenderClient, RenderError
 from app.runtime.tools.render_ops import _resolve_client
-from app.services import apikeys, galaxia
-from tests.conftest import requires_db
+from app.services import apikeys
+from tests.conftest import make_company_with_fleet, requires_db
 
 
 def _client(handler) -> RenderClient:
@@ -115,7 +115,7 @@ async def test_401_is_explained():
     assert "401" in str(exc.value)
 
 
-# ── credential scoping (global key is Galaxia-only) ───────────────────────────
+# ── credential scoping (global key is platform-company-only) ──────────────────
 
 
 @requires_db
@@ -125,7 +125,7 @@ async def test_byok_render_key_resolves_for_any_company(
     _set_master_key()
     monkeypatch.setattr(settings, "render_api_key", "")  # no global key
     async with session_factory() as db:
-        assert await _resolve_client(db, company_with_budget) is None  # no key, not galaxia
+        assert await _resolve_client(db, company_with_budget) is None  # no key, not platform
         await apikeys.store_key(
             db, company_id=company_with_budget, provider="render", plaintext="rnd_byok"
         )
@@ -135,15 +135,15 @@ async def test_byok_render_key_resolves_for_any_company(
 
 
 @requires_db
-async def test_global_key_is_offered_only_to_galaxia(
+async def test_global_key_is_offered_only_to_platform_company(
     session_factory, company_with_budget, monkeypatch
 ):
     monkeypatch.setattr(settings, "render_api_key", "global-dogfooding-key")
     async with session_factory() as db:
         # A tenant company with no BYOK key does NOT get our global account.
         assert await _resolve_client(db, company_with_budget) is None
-        await galaxia._run(db)
+        platform_cid = await make_company_with_fleet(db, is_platform=True)
         await db.commit()
     async with session_factory() as db:
-        # Galaxia gets the global client.
-        assert await _resolve_client(db, galaxia.galaxia_company_id()) is not None
+        # The platform company gets the global client.
+        assert await _resolve_client(db, platform_cid) is not None

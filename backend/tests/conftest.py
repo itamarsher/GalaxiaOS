@@ -14,11 +14,46 @@ import pytest
 import pytest_asyncio
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from app.models import Base, Budget, Company, User
-from app.models.enums import BudgetPeriod, CompanyStatus
+from app.models import Base, Budget, Company, Membership, Mission, User
+from app.models.enums import BudgetPeriod, CompanyStatus, MembershipRole
 
 TEST_DB_URL = os.getenv("ABOS_TEST_DATABASE_URL")
 requires_db = pytest.mark.skipif(TEST_DB_URL is None, reason="ABOS_TEST_DATABASE_URL not set")
+
+
+async def make_company_with_fleet(db, *, is_platform: bool = True):
+    """Create a user + company (+ budget, mission, founder membership) and provision
+    the default fleet (no LLM), returning the company id.
+
+    Replaces the old ``galaxia._run`` test scaffolding now that the dogfooding
+    company is a normal onboarded company: tests that need a fully-provisioned org
+    (with a CEO + oversight roles) call this, passing ``is_platform`` to designate
+    the platform company for gate tests.
+    """
+    from app.services.onboarding import _fleet_specs, provision_fleet
+
+    user = User(email=f"{uuid.uuid4()}@t.io", hashed_password="x")
+    db.add(user)
+    await db.flush()
+    company = Company(
+        owner_user_id=user.id,
+        name="Platform Co" if is_platform else "T",
+        status=CompanyStatus.active,
+        is_platform=is_platform,
+    )
+    db.add(company)
+    await db.flush()
+    db.add(Membership(user_id=user.id, company_id=company.id, role=MembershipRole.founder))
+    db.add(Budget(company_id=company.id, period=BudgetPeriod.monthly, limit_cents=50_000))
+    mission = Mission(company_id=company.id, raw_text="Dogfood the product", constraints=[])
+    db.add(mission)
+    await db.flush()
+    company.mission_id = mission.id
+    await provision_fleet(
+        db, company=company, specs=_fleet_specs([]), total_budget_cents=50_000
+    )
+    await db.flush()
+    return company.id
 
 
 @pytest.fixture(autouse=True)

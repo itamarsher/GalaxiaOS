@@ -52,16 +52,11 @@ async def _lifespan(app: FastAPI):
     ``ABOS_RUN_WORKER_IN_PROCESS`` is set, the think→act loop and cron jobs run
     as a background task alongside the API so the whole app fits on one host.
     """
-    # Ensure the Galaxia dogfooding company exists (idempotent, self-contained
-    # transaction). This is what authorizes the Platform agent's promoter tools and
-    # gives the demand→issue loop an origin; without it a fresh deploy has no
-    # company driving the loop. It never raises — a failure is logged and the app
-    # still serves.
-    if settings.galaxia_bootstrap_enabled:
-        from app.services.galaxia import ensure_bootstrap
-
-        await ensure_bootstrap()
-
+    # The dogfooding company is no longer synthesized at startup. It is a real
+    # company the founder onboards: the first company created in a deployment is
+    # flagged as the platform company (services/platform_company.py), which is what
+    # authorizes the Platform agent's promoter tools and drives the demand→issue
+    # loop. The promoter/render/cron gates all key off that flag.
     worker = None
     task = None
     if settings.run_worker_in_process:

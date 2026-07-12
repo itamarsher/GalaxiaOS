@@ -79,15 +79,15 @@ class WorkerSettings:
         # Heal memories written without a vector (e.g. while a remote embedder was
         # cold-starting); every 10 minutes also keeps that embedder warm.
         cron(backfill_memory_embeddings, minute=set(range(0, 60, 10))),
-        # Galaxia dogfooding loop: promote accrued backlog demand into tracker
-        # issues (:07), then reconcile promoted entries whose issue has closed
-        # into "delivered" and notify requesters (:37, offset so they don't
-        # overlap). Both no-op until Galaxia is bootstrapped and a tracker is set.
-        cron(promote_feature_backlog, minute=settings.galaxia_promote_minute),
-        cron(reconcile_delivered_requests, minute=settings.galaxia_reconcile_minute),
-        # Galaxia reliability monitor: investigate its own failed tasks and file
+        # Dogfooding loop: promote accrued backlog demand into tracker issues
+        # (:07), then reconcile promoted entries whose issue has closed into
+        # "delivered" and notify requesters (:37, offset so they don't overlap).
+        # Both no-op until a platform company is designated and a tracker is set.
+        cron(promote_feature_backlog, minute=settings.platform_promote_minute),
+        cron(reconcile_delivered_requests, minute=settings.platform_reconcile_minute),
+        # Platform reliability monitor: investigate its own failed tasks and file
         # bug reports for the auto-fix pipeline (:22, offset from the others).
-        cron(monitor_failed_tasks, minute=settings.galaxia_failure_monitor_minute),
+        cron(monitor_failed_tasks, minute=settings.platform_failure_monitor_minute),
     ]
     on_startup = startup
     redis_settings = redis_settings()

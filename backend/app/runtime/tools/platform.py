@@ -8,14 +8,14 @@ now record the ask in the internal feature-request backlog
 accrues a vote per (company, user), so the same gap reported by many agents/
 companies becomes one entry with a running demand count.
 
-A gated promoter — the Platform agent inside the **abos** company (we dogfood our
-own product) — reads that backlog with ``list_feature_requests`` and turns
+A gated promoter — the Platform agent inside the **platform** company (we dogfood
+our own product) — reads that backlog with ``list_feature_requests`` and turns
 accrued demand into real tracker issues with ``promote_feature_request``. Both
-promoter tools are authorized against the Galaxia founder's user id (from config,
-``settings.galaxia_founder_user_id``), so only the Galaxia (abos) company's agent
-can file from the cross-company backlog. Promotion routes
-through the :mod:`app.integrations.issues` seam (``report_issue``), which keeps
-GitHub-side dedup/"+1" voting intact and records an audit-trail memory.
+promoter tools are authorized against the acting company's ``is_platform`` flag, so
+only the platform company's agent can file from the cross-company backlog.
+Promotion routes through the :mod:`app.integrations.issues` seam
+(``report_issue``), which keeps GitHub-side dedup/"+1" voting intact and records an
+audit-trail memory.
 
 ``open_issue`` remains available for the Platform agent to file a one-off issue
 directly. Filing/promoting are platform/meta actions — no budget charge.
@@ -25,33 +25,26 @@ from __future__ import annotations
 
 import uuid
 
-from sqlalchemy import select
-
-from app.config import settings
 from app.integrations.issues import IssueTrackerError
-from app.models import Agent, Membership, Task
+from app.models import Agent, Task
 from app.models.enums import FeatureRequestStatus, MemoryType
 from app.providers.base import ToolSpec
 from app.runtime.tools.base import ToolOutcome
 from app.services import feature_requests as fr_svc
-from app.services import promoter
+from app.services import platform_company, promoter
 
 #: Provider name under which a company's GitHub token is stored (BYOK). Canonical
 #: definition lives in the promoter service; re-exported here for callers/tests
 #: that reference it via this module.
 GITHUB_PROVIDER = promoter.GITHUB_PROVIDER
 
-# ── abos promoter gate ────────────────────────────────────────────────────────
+# ── platform promoter gate ────────────────────────────────────────────────────
 # The promoter tools (``list_feature_requests`` / ``promote_feature_request``)
-# only work inside the Galaxia (abos) company — the one whose founder is this
-# user. We authorize by checking that this user is a member of the acting
-# company, so a tool call from any other tenant's Platform agent is refused.
-#
-# The Galaxia founder's user id, sourced from config so the id lives in exactly
-# one place: the same value seeds the deterministic Galaxia bootstrap that creates
-# this user's membership (app.services.galaxia). Keep it a module global so tests
-# can monkeypatch the gate.
-ABOS_FEATURE_ADMIN_USER_ID = settings.galaxia_founder_user_id
+# only work inside the platform company (the one flagged ``is_platform``). We
+# authorize by that flag, so a tool call from any other tenant's Platform agent is
+# refused. The flag lives on the company, so it survives an ownership transfer —
+# unlike the old fixed founder-user gate it replaces.
+
 
 async def _resolve_issue_tracker(db, company_id):
     """The company's tracker (its own token, else the global default), or ``None``.
@@ -65,17 +58,8 @@ async def _resolve_issue_tracker(db, company_id):
 
 
 async def _is_abos_admin_company(db, company_id) -> bool:
-    """True if the acting company is the abos admin company (gate for the promoter)."""
-    try:
-        admin_id = uuid.UUID(str(ABOS_FEATURE_ADMIN_USER_ID))
-    except (ValueError, TypeError):
-        return False
-    membership_id = await db.scalar(
-        select(Membership.id).where(
-            Membership.user_id == admin_id, Membership.company_id == company_id
-        )
-    )
-    return membership_id is not None
+    """True if the acting company is the platform company (gate for the promoter)."""
+    return await platform_company.is_platform_company(db, company_id)
 
 
 SPECS: list[ToolSpec] = [

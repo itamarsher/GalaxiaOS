@@ -199,6 +199,83 @@ export function CloudflareCard({ companyId }: { companyId: string }) {
   );
 }
 
+// Account-wide Google Drive: connected ONCE per user (not per company). Every
+// business the user launches then files into this same Drive. The refresh token is
+// stored on the user, envelope-encrypted. Uses a popup + status poll so the
+// settings page isn't navigated away and reset mid-flow.
+export function UserGoogleDriveCard() {
+  const status = usePoll(() => api.userDriveStatus(), 0, []);
+  const configured = status.data?.configured ?? false;
+  const canConnect = status.data?.connect_available ?? false;
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const connect = async () => {
+    setBusy(true); setErr(null);
+    // Open the popup synchronously (inside the click gesture) so blockers don't
+    // swallow it after the await below.
+    const win = window.open("", "gdrive-user-oauth", "width=520,height=680");
+    try {
+      const { authorize_url } = await api.connectUserDrive();
+      if (win) win.location.href = authorize_url;
+      else { window.location.href = authorize_url; return; } // popup blocked → fall back
+      const poll = window.setInterval(async () => {
+        let done = false;
+        try {
+          const s = await api.userDriveStatus();
+          if (s.configured) done = true;
+        } catch { /* keep polling */ }
+        if (done || (win && win.closed)) {
+          window.clearInterval(poll);
+          try { win?.close(); } catch { /* ignore */ }
+          status.reload();
+          setBusy(false);
+        }
+      }, 1500);
+    } catch (e) {
+      try { win?.close(); } catch { /* ignore */ }
+      setErr(String(e instanceof Error ? e.message : e));
+      setBusy(false);
+    }
+  };
+
+  const remove = async () => {
+    if (!window.confirm("Disconnect Google Drive for your whole account? Agents across all your businesses will stop filing documents to your Drive.")) return;
+    setBusy(true); setErr(null);
+    try { await api.clearUserDrive(); status.reload(); }
+    catch (e) { setErr(String(e instanceof Error ? e.message : e)); }
+    finally { setBusy(false); }
+  };
+
+  return (
+    <div className="card">
+      <div className="step" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <span>Google Drive (account-wide file store)</span>
+        {configured ? <span className="status active">Connected</span> : <span className="status pending">Not set</span>}
+      </div>
+      <p className="muted" style={{ fontSize: 13, margin: "6px 0 0" }}>
+        Connect your Drive once for your <strong>whole account</strong>: every business you launch
+        files its deliverables, financial records and documents into your own Drive under{" "}
+        <code>.galaxia/&lt;company&gt;/…</code>. GalaxiaOS only ever touches the files it creates.
+      </p>
+
+      {!canConnect && !configured ? (
+        <p className="muted" style={{ fontSize: 13, marginTop: 10 }}>
+          Google Drive connect isn&apos;t enabled on this deployment.
+        </p>
+      ) : (
+        <div className="btnrow">
+          <button disabled={busy} onClick={connect}>
+            {busy ? "Waiting for Google…" : configured ? "Reconnect with Google" : "Connect with Google"}
+          </button>
+          {configured && <button className="ghost danger" disabled={busy} onClick={remove}>Disconnect</button>}
+        </div>
+      )}
+      {err && <div className="err">{err}</div>}
+    </div>
+  );
+}
+
 // Google Drive is the company's file store: agents file deliverables, financial
 // records, data-room docs, brand guidelines and received files into the founder's
 // own Drive under .galaxia/<company>/…. One-click connect: the button sends the

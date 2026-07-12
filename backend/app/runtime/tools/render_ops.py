@@ -103,11 +103,12 @@ async def _resolve_client(db, company_id) -> RenderClient | None:
     )
     if token:
         return RenderClient(token)
-    # The global key is the dogfooding Render account — only Galaxia may use it, so
-    # a tenant company never reaches our infra with a key it didn't provide.
-    from app.services.galaxia import galaxia_company_id
+    # The global key is the dogfooding Render account — only the platform company
+    # may use it, so a tenant company never reaches our infra with a key it didn't
+    # provide.
+    from app.services import platform_company
 
-    if company_id == galaxia_company_id():
+    if await platform_company.is_platform_company(db, company_id):
         return get_render_client()
     return None
 

@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import { api, fmtUsd, type ApiKey, type Company, type ManagedStatus, type McpServer } from "@/lib/api";
 import { usePoll } from "@/lib/useApi";
-import { CloudflareCard, GoogleDriveCard } from "@/lib/connectors";
+import { CloudflareCard, GoogleDriveCard, UserGoogleDriveCard } from "@/lib/connectors";
 
 // The keys GalaxiaOS understands today. The BYOK LLM provider key is required to
 // run; the rest are optional integrations. (GitHub issue filing is handled centrally
@@ -80,6 +80,10 @@ export default function SettingsPage() {
       ))}
 
       <CloudflareCard companyId={id} />
+      {/* Account-wide Drive (per user) is the default going forward: connect once,
+          and every business files into your Drive. The per-company card below stays
+          for a Drive linked to just this one company (it takes precedence when set). */}
+      <UserGoogleDriveCard />
       <GoogleDriveCard companyId={id} />
       <McpServersCard companyId={id} />
 

@@ -104,27 +104,29 @@ tool it claims to add, should be sent back for changes rather than merged.
 
 | Job | Default schedule | What it does |
 |---|---|---|
-| `promote_feature_backlog` | hourly at :07 | promote backlog demand ≥ `ABOS_GALAXIA_PROMOTE_MIN_VOTES` into issues (`batch` per tick) |
+| `promote_feature_backlog` | hourly at :07 | promote backlog demand ≥ `ABOS_PLATFORM_PROMOTE_MIN_VOTES` into issues (`batch` per tick) |
 | `reconcile_delivered_requests` | hourly at :37 | mark promoted entries `delivered` once their issue closes; notify requesters |
-| `monitor_failed_tasks` | hourly at :22 | investigate Galaxia's own failed tasks (Platform agent reads code + Render) and `report_bug` for the auto-fix pipeline |
-| `run_business_cycle` | daily | the fleet's operating run (Galaxia included, once active) |
+| `monitor_failed_tasks` | hourly at :22 | investigate the platform company's own failed tasks (Platform agent reads code + Render) and `report_bug` for the auto-fix pipeline |
+| `run_business_cycle` | daily | the fleet's operating run (the platform company included, once active) |
 
-All are gated (`ABOS_GALAXIA_PROMOTE_ENABLED`, `ABOS_GALAXIA_RECONCILE_ENABLED`)
-and no-op until Galaxia is bootstrapped and a tracker token is set.
+All are gated (`ABOS_PLATFORM_PROMOTE_ENABLED`, `ABOS_PLATFORM_RECONCILE_ENABLED`)
+and no-op until a **platform company** is designated (the first company onboarded
+in the deployment — see `services/platform_company.py`) and a tracker token is set.
 
 ## Kill switches, in order of bluntness
 
 1. `DOGFOODING_AUTOMERGE=off` — stops merges, keeps issues/PRs flowing (review only).
 2. `auto_merge.enabled: false` in `.github/dogfooding.yml` — same, via commit.
-3. `ABOS_GALAXIA_PROMOTE_ENABLED=false` — stop turning demand into new issues.
-4. `ABOS_GALAXIA_BOOTSTRAP_ENABLED=false` — don't provision/operate Galaxia at all.
+3. `ABOS_PLATFORM_PROMOTE_ENABLED=false` — stop turning demand into new issues.
+4. `ABOS_PLATFORM_FAILURE_MONITOR_ENABLED=false` — stop auto-investigating failures.
 
 ## Environments
 
 The **current default deployment is the dogfooding environment** (`ABOS_ENVIRONMENT
-=dogfooding`, the default). This is where GalaxiaOS runs on itself: it bootstraps
-the Galaxia company, experiments, self-modifies, and deploys. Dev tooling —
-including the Galaxia reset endpoint — is enabled here on purpose.
+=dogfooding`, the default). This is where GalaxiaOS runs on itself: the founder
+signs in (Google SSO) and onboards the first company, which is automatically
+designated the **platform company** — the one that drives the demand→issue loop,
+experiments, self-modifies, and deploys. Dev tooling is enabled here on purpose.
 
 > **TODO — production split (before the first external users).** Stand up a
 > **separate production environment** (its own Render services, database, and
@@ -132,9 +134,10 @@ including the Galaxia reset endpoint — is enabled here on purpose.
 > own experimentation/self-deploy loop. In that environment set:
 >
 > - `ABOS_ENVIRONMENT=production`
-> - `ABOS_GALAXIA_BOOTSTRAP_ENABLED=false` (Galaxia is the dogfooding company; it
->   doesn't belong in the customers' environment)
-> - `ABOS_DEV_TOOLS_ENABLED=false` (no reset/delete endpoints in prod)
+> - `ABOS_DEV_TOOLS_ENABLED=false` (no delete-accounts/default-login endpoints in prod)
+> - the platform company is whichever company you onboard first in that environment
+>   — in a pure customers' environment you typically won't designate one (leave the
+>   platform crons idle), keeping the dogfooding company in the dogfooding env
 > - a fresh `ABOS_MASTER_KEY` from a KMS, its own `ABOS_DATABASE_URL`, and its own
 >   deploy hooks / GitHub token.
 >
@@ -142,20 +145,20 @@ including the Galaxia reset endpoint — is enabled here on purpose.
 > changes first; promote to production deliberately. This split is the single
 > prerequisite for safely onboarding external users.
 
-## Resetting Galaxia (dogfooding only)
+## Resetting the platform company (dogfooding only)
 
-While the product is under heavy development, you can rebuild Galaxia from fleet
-creation **without losing saved keys** (BYOK provider keys survive):
+The dogfooding company is now a normal, founder-owned company (no synthetic
+`founder@galaxia.abos` account, no startup bootstrap). To rebuild it from fleet
+creation **without losing saved keys** (BYOK provider keys survive), use the
+founder-facing company reset: `POST /companies/{id}/reset`
+(`services/company_reset.py`). It wipes the generated + operational state — fleet,
+objectives, runs, memory — and re-provisions a clean draft, preserving the
+company's identity, mission, budget, memberships, the `is_platform` flag, and
+stored provider keys.
 
-- **Manual (preferred):** `POST /dev/galaxia/reset` (gated by `ABOS_DEV_TOOLS_ENABLED`).
-  Wipes Galaxia's generated state — fleet, mission, objectives, runs, memory — and
-  re-provisions it fresh from config, then restores the stored provider keys.
-- **On boot:** set `ABOS_GALAXIA_RESET_ON_BOOT=true`, redeploy once, then **unset
-  it** — it re-provisions on *every* boot while true.
-
-Ordinary boots (neither of the above) don't reset; they only **reconcile the
-mission text/constraints to config**, so editing `galaxia_mission` in `config.py`
-(or `ABOS_GALAXIA_MISSION`) takes effect on the next deploy without a full reset.
+To start over entirely in the dogfooding env, `POST /dev/delete-all-accounts`
+(gated by `ABOS_DEV_TOOLS_ENABLED`) then sign in and re-onboard — the first
+company created becomes the platform company again.
 
 ## Known follow-ups
 

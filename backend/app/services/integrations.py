@@ -268,19 +268,25 @@ async def _owner_google_drive(company_id: uuid.UUID) -> dict | None:
 
 
 async def resolve_file_provider(db: AsyncSession, *, company_id: uuid.UUID) -> FileProvider | None:
-    """The company's file store — enabled when this company, or its founder on a
-    sibling company, has connected Google Drive.
+    """The company's file store — enabled when the founder has connected Google Drive.
 
-    Bring-your-own, like the site host: with no saved OAuth bundle anywhere for the
-    founder this returns ``None`` so the file tools report the capability is
-    unsupported rather than pretending a document was filed. The founder-level
-    fallback means connecting Drive once covers every business they launch, instead
-    of silently only working for the one company that did the connecting.
+    Resolution order, all bring-your-own (no platform fallback):
+
+    1. This company's own Drive bundle (legacy per-company connect), if any.
+    2. The owner's **account-wide** Drive (connected once per user), which is the
+       current default — connecting Drive once covers every business they launch.
+    3. A Drive the same founder connected on a sibling company (legacy fallback).
+
+    With none of these this returns ``None`` so the file tools report the capability
+    is unsupported rather than pretending a document was filed.
     """
+    from app.services import user_drive
+
     creds = await get_google_drive(db, company_id=company_id)
     if creds is None:
-        # This business didn't connect Drive itself — use the founder's Drive
-        # connected on another of their companies, if any.
+        creds = await user_drive.get_user_drive_for_company(db, company_id=company_id)
+    if creds is None:
+        # Legacy: a Drive connected per-company on another of the founder's companies.
         creds = await _owner_google_drive(company_id)
     if creds is None:
         return None

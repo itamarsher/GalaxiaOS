@@ -463,111 +463,50 @@ class Settings(BaseSettings):
     github_token: str = ""
     github_repo: str = "itamarsher/just-launch-it"
 
-    # ── Galaxia: the dogfooding company (ABOS running on itself) ──────────────
-    # Galaxia is the reference business ABOS operates on its own product: its
-    # agents' unmet needs (report_bug / request_capability) accrue in the shared
-    # feature-request backlog, and Galaxia's Platform agent is the ONLY actor
-    # authorized to promote that backlog into real tracker issues on this repo
-    # (see runtime/tools/platform.py). Promotion authority is keyed to the
-    # founder-user's membership, so that company must actually exist in every
-    # deployment or the whole demand→issue loop is dead. It is therefore
-    # bootstrapped deterministically and idempotently at API startup
-    # (app.services.galaxia). Keep ``galaxia_founder_user_id`` stable — it is the
-    # promoter gate.
-    galaxia_bootstrap_enabled: bool = True
-    galaxia_founder_user_id: str = "91da8f48-d302-4921-bb4a-c3f2c18eaf3d"
-    galaxia_founder_email: str = "founder@galaxia.abos"
-    # Fixed company id makes the bootstrap idempotent. Empty → derived
-    # deterministically from the founder id (uuid5), so there is never a magic
-    # literal to keep in sync across environments.
-    galaxia_company_id: str = ""
-    galaxia_company_name: str = "GalaxiaOS"
-    # Galaxia's monthly operating budget (cents). Modest by default — its work is
-    # platform triage, metered through the same CostMeter as any company.
-    galaxia_monthly_budget_cents: int = 50_000
-    # The mission fed to the generator (mission → summary/objectives/KRs → fleet).
-    # Overridable via ABOS_GALAXIA_MISSION, but note the bootstrap reconciles the
-    # stored mission to this on the next boot (see app.services.galaxia), so config
-    # is the source of truth even for an already-provisioned Galaxia.
-    galaxia_mission: str = (
-        "Make owning an autonomous business a right, not a privilege. GalaxiaOS is a "
-        "free, open-source operating system that lets any person on the planet stand "
-        "up and run a real company operated by a fleet of AI agents — a CEO and the "
-        "functions a business actually needs (growth, research, product, finance, "
-        "governance, and more) — under a hard budget and a governance layer, with the "
-        "founder acting as a board member rather than an operator. Founders bring "
-        "their own model key (BYOK): owning or creating an autonomous business must "
-        "never depend on a subscription or a gatekeeper.\n\n"
-        "Our business is to build and operate GalaxiaOS itself — we dogfood our own "
-        "product. GalaxiaOS runs as a company on GalaxiaOS: the same agent fleet "
-        "every founder gets operates our own roadmap, growth, research, finance, and "
-        "governance. When any agent — ours, or any other company's on the platform — "
-        "hits a limitation, that unmet need becomes a demand signal, and the "
-        "highest-demand needs are turned into shipped product improvements "
-        "automatically: need → tracker issue → implementation → reviewed, merged, and "
-        "deployed, with no human in the loop except the decisions a founder must own "
-        "(security, money, data access, and irreversible calls). Every founder's "
-        "friction makes the product better for every founder, and the platform's "
-        "capabilities compound as its users' real needs ship continuously.\n\n"
-        "We serve aspiring and solo founders, indie hackers, and small teams "
-        "worldwide who have ideas and intent but not the capital, headcount, or "
-        "technical depth to operate a company — especially the people a paid "
-        "gatekeeper would exclude. We win when a non-technical person, anywhere, can "
-        "describe a mission and a budget and have a functioning, self-improving "
-        "business running the same day.\n\n"
-        "We sustain the open core without ever paywalling the core capability: "
-        "optional hosted/managed convenience, a future agent-and-capability "
-        "marketplace, and support/partnerships. The core stays free, open-source, and "
-        "BYOK so adoption is unconstrained."
-    )
-    # Standing constraints attached to Galaxia's mission (the founder's guardrails).
-    galaxia_constraints: list[str] = [
-        "Core product stays free, open-source, and BYOK — never paywall the core capability.",
-        "Reserve budget before spending; never exceed the budget.",
-        "Escalate security, money-movement, data-access, and irreversible changes to the founder.",
-        "Act only through real tools; never fabricate or assume an unverified result.",
-        "Prefer reusing the existing fleet over growing headcount.",
-    ]
+    # ── Platform (dogfooding) company: GalaxiaOS running on itself ────────────
+    # One real company carries ``is_platform=True`` (services/platform_company.py):
+    # the reference business ABOS operates on its own product. Its agents' unmet
+    # needs (report_bug / request_capability) accrue in the shared feature-request
+    # backlog, and its Platform agent is the ONLY actor authorized to promote that
+    # backlog into real tracker issues (see runtime/tools/platform.py). It is no
+    # longer synthesized at startup from a fixed founder id — the first company a
+    # founder onboards is designated automatically, so the dogfooding company is a
+    # real, founder-owned company.
 
     # Scheduled promoter: a cron drains the shared feature-request backlog into
-    # real tracker issues on Galaxia's behalf, so accrued demand becomes issues
-    # without waiting for a human to prompt the Platform agent. Only entries with
-    # at least ``min_votes`` are promoted, ``batch`` at a time per tick (the tracker
-    # dedupes, so re-promotion is a +1, not a duplicate).
-    galaxia_promote_enabled: bool = True
-    galaxia_promote_min_votes: int = 1
-    galaxia_promote_batch: int = 5
-    galaxia_promote_minute: int = 7  # once/hour at :07
+    # real tracker issues on the platform company's behalf, so accrued demand
+    # becomes issues without waiting for a human to prompt the Platform agent. Only
+    # entries with at least ``min_votes`` are promoted, ``batch`` at a time per tick
+    # (the tracker dedupes, so re-promotion is a +1, not a duplicate).
+    platform_promote_enabled: bool = True
+    platform_promote_min_votes: int = 1
+    platform_promote_batch: int = 5
+    platform_promote_minute: int = 7  # once/hour at :07
 
     # Loop-closing reconciler: a cron checks each promoted backlog entry's tracker
     # issue and, once it is closed (the fix merged), marks the entry ``delivered``
     # and notifies the companies that requested it — so agents learn the gap they
     # reported is now closed instead of re-requesting it forever.
-    galaxia_reconcile_enabled: bool = True
-    galaxia_reconcile_batch: int = 25
-    galaxia_reconcile_minute: int = 37  # once/hour at :37 (offset from the promoter)
+    platform_reconcile_enabled: bool = True
+    platform_reconcile_batch: int = 25
+    platform_reconcile_minute: int = 37  # once/hour at :37 (offset from the promoter)
 
     # Which deployment this is. The CURRENT default deployment is the *dogfooding*
     # environment: GalaxiaOS runs here and is allowed to experiment, self-modify,
-    # and deploy. Dev tooling (incl. the Galaxia reset endpoint) is enabled here.
+    # and deploy. Dev tooling is enabled here.
     #
     # TODO(production-split): before onboarding the FIRST external users, stand up a
     # SEPARATE production environment (own Render services + database + secrets) with
-    # environment="production", galaxia_bootstrap_enabled=false, and dev_tools_enabled
-    # =false — so real customer businesses never share infra with GalaxiaOS's own
-    # experimentation/self-deploy loop. See docs/DOGFOODING_OPERATIONS.md#environments.
+    # environment="production" and dev_tools_enabled=false — so real customer
+    # businesses never share infra with GalaxiaOS's own experimentation/self-deploy
+    # loop. See docs/DOGFOODING_OPERATIONS.md#environments.
     environment: str = "dogfooding"  # dogfooding | production
-
-    # Re-provision Galaxia from fleet creation on the next boot, preserving saved
-    # BYOK keys. A convenience for the heavily-developed phase: set it, redeploy
-    # once, then UNSET it (it fires on every boot while true). Manual, safer path:
-    # POST /dev/galaxia/reset.
-    galaxia_reset_on_boot: bool = False
 
     # Render deployment observability (so agents can see what's happening with our
     # own deploys). A read-only Render API key; global because GalaxiaOS owns the
-    # dogfooding Render account. A company may also connect its own via a BYOK
-    # "render" key. Without either, the render_* tools report they're not connected.
+    # dogfooding Render account. Only the platform company may use it; any other
+    # company must connect its own via a BYOK "render" key. Without either, the
+    # render_* tools report they're not connected.
     render_api_key: str = ""
     render_api_base_url: str = "https://api.render.com/v1"
     # Owner (team/user) id for the Render logs API — required by GET /v1/logs, which
@@ -575,14 +514,15 @@ class Settings(BaseSettings):
     # configuring (deploy-status tools still work with just the key).
     render_owner_id: str = ""
 
-    # Reliability monitor: Galaxia watches its OWN failed agent tasks, wakes the
-    # Platform agent to investigate each (reading the code, and the Render deploys
-    # when it looks infrastructure-related), and files a bug report — which flows
-    # through the promoter → tracker issue → Claude Code auto-fix pipeline. Scoped
-    # to Galaxia and to its own failures. ``batch`` caps investigations per tick.
-    galaxia_failure_monitor_enabled: bool = True
-    galaxia_failure_monitor_batch: int = 5
-    galaxia_failure_monitor_minute: int = 22  # once/hour (offset from :07 / :37)
+    # Reliability monitor: the platform company watches its OWN failed agent tasks,
+    # wakes the Platform agent to investigate each (reading the code, and the Render
+    # deploys when it looks infrastructure-related), and files a bug report — which
+    # flows through the promoter → tracker issue → Claude Code auto-fix pipeline.
+    # Scoped to the platform company and to its own failures. ``batch`` caps
+    # investigations per tick.
+    platform_failure_monitor_enabled: bool = True
+    platform_failure_monitor_batch: int = 5
+    platform_failure_monitor_minute: int = 22  # once/hour (offset from :07 / :37)
 
     # Investor review (onboarding): three agentic investors critique the venture.
     investor_review_enabled: bool = True

@@ -222,6 +222,18 @@ export const api = {
   signup: (email: string, password: string) =>
     req<TokenResponse>("/auth/signup", { method: "POST", body: JSON.stringify({ email, password }) }),
 
+  // ── Google SSO (default sign-in) ──────────────────────────────────────────
+  // Whether the deployment has a Google OAuth app, so the button can be shown.
+  googleAuthStatus: () => req<{ enabled: boolean }>("/auth/google/status"),
+  // The consent URL to send the browser to. On return the backend redirects to
+  // the web app with ?token=… which the page bootstrap picks up.
+  googleAuthorizeUrl: () => req<{ authorize_url: string }>("/auth/google/authorize"),
+
+  // ── Account-wide Google Drive (connected once per user) ───────────────────
+  userDriveStatus: () => req<GoogleDriveStatus>("/auth/google/drive"),
+  connectUserDrive: () => req<{ authorize_url: string }>("/auth/google/drive/connect"),
+  clearUserDrive: () => req<void>("/auth/google/drive", { method: "DELETE" }),
+
   myCompanies: () => req<Company[]>("/companies"),
 
   // TEMP dev tools — remove before launch (see backend app/api/dev.py).
