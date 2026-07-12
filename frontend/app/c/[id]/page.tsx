@@ -15,8 +15,6 @@ export default function Overview() {
   const chatChannels = usePoll(() => api.chatChannels(id), 5000, [id]);
   const digest = usePoll(() => api.digestLatest(id), 0, [id]);
   const sites = usePoll(() => api.sites(id), 10000, [id]);
-  // TEMP dev tools — remove before launch.
-  const dev = usePoll(() => api.devStatus(), 0, [id]);
 
   // Live task stream (SSE when healthy, polling fallback) so the founder sees work
   // happening and the feed keeps refreshing even when SSE drops (see useLiveTasks).
@@ -52,17 +50,6 @@ export default function Overview() {
     } catch (e) {
       alert(String(e instanceof Error ? e.message : e));
       setDeleting(false);
-    }
-  };
-
-  // TEMP dev tool — remove before launch. Wipes every account except the default.
-  const deleteOtherAccounts = async () => {
-    if (!window.confirm("DELETE ALL OTHER ACCOUNTS (everyone except the default dev account) and all their data? This cannot be undone.")) return;
-    try {
-      const res = await api.deleteOtherAccounts();
-      alert(`Deleted ${res.deleted_accounts} account(s). The default account is preserved.`);
-    } catch (e) {
-      alert(String(e instanceof Error ? e.message : e));
     }
   };
 
@@ -212,18 +199,6 @@ export default function Overview() {
             {deleting ? "Deleting…" : "Delete company"}
           </button>
         </div>
-
-        {/* TEMP DEV TOOL — remove before launch (backend app/api/dev.py + ABOS_DEV_TOOLS_ENABLED). */}
-        {dev.data?.enabled && (
-          <div style={{ marginTop: 16, paddingTop: 14, borderTop: "1px dashed var(--border)" }}>
-            <p className="muted" style={{ fontSize: 12, margin: "0 0 8px" }}>
-              ⚠️ Dev only — deletes every account except the default one. Remove before going live.
-            </p>
-            <button className="ghost danger" onClick={deleteOtherAccounts}>
-              Delete all other accounts
-            </button>
-          </div>
-        )}
       </div>
     </div>
   );

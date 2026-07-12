@@ -236,12 +236,6 @@ export const api = {
 
   myCompanies: () => req<Company[]>("/companies"),
 
-  // TEMP dev tools — remove before launch (see backend app/api/dev.py).
-  devStatus: () => req<{ enabled: boolean; default_email: string | null }>("/dev/status"),
-  defaultLogin: () => req<TokenResponse>("/dev/default-login", { method: "POST" }),
-  deleteOtherAccounts: () =>
-    req<{ deleted_accounts: number }>("/dev/delete-all-accounts", { method: "POST" }),
-
   login: async (email: string, password: string) => {
     const form = new URLSearchParams({ username: email, password });
     const res = await fetch(`${BASE}/auth/login`, {

@@ -29,7 +29,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.models import Company, PlatformBillingAccount, PlatformCharge, User
+from app.models import Company, PlatformBillingAccount, PlatformCharge
 from app.models.enums import ManagedTier
 
 
@@ -53,20 +53,6 @@ async def get_or_create_account(
         db.add(account)
         await db.flush()
     return account
-
-
-async def _is_dev_default_user(db: AsyncSession, *, user_id: uuid.UUID) -> bool:
-    """True for the dev auto-login account while the dev toolkit is on.
-
-    Debugging managed-mode flows against the default account shouldn't be cut
-    short by the $2 free allowance (or the daily burst cap), so this founder is
-    treated as unlimited. Scoped to ``dev_tools_enabled`` so it can never loosen
-    the caps in production — killing the dev toolkit restores the free tier.
-    """
-    if not settings.dev_tools_enabled:
-        return False
-    email = await db.scalar(select(User.email).where(User.id == user_id))
-    return email == settings.dev_default_email
 
 
 async def _spent_today_cents(db: AsyncSession, *, user_id: uuid.UUID) -> int:
@@ -93,11 +79,6 @@ async def eligibility(db: AsyncSession, *, user_id: uuid.UUID) -> Eligibility:
         return Eligibility(False, ManagedTier.blocked, "Managed mode is disabled on this deployment.")
 
     account = await get_or_create_account(db, user_id=user_id)
-
-    if await _is_dev_default_user(db, user_id=user_id):
-        # Dev-only: never gate the default debugging account on the free
-        # allowance or the daily cap. Off in production (dev tools disabled).
-        return Eligibility(True, account.tier)
 
     if account.tier == ManagedTier.paid_managed:
         # Paid usage is metered and billed; still honour the daily burst guard as

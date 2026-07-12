@@ -126,7 +126,7 @@ The **current default deployment is the dogfooding environment** (`ABOS_ENVIRONM
 =dogfooding`, the default). This is where GalaxiaOS runs on itself: the founder
 signs in (Google SSO) and onboards the first company, which is automatically
 designated the **platform company** — the one that drives the demand→issue loop,
-experiments, self-modifies, and deploys. Dev tooling is enabled here on purpose.
+experiments, self-modifies, and deploys.
 
 > **TODO — production split (before the first external users).** Stand up a
 > **separate production environment** (its own Render services, database, and
@@ -134,7 +134,6 @@ experiments, self-modifies, and deploys. Dev tooling is enabled here on purpose.
 > own experimentation/self-deploy loop. In that environment set:
 >
 > - `ABOS_ENVIRONMENT=production`
-> - `ABOS_DEV_TOOLS_ENABLED=false` (no delete-accounts/default-login endpoints in prod)
 > - the platform company is whichever company you onboard first in that environment
 >   — in a pure customers' environment you typically won't designate one (leave the
 >   platform crons idle), keeping the dogfooding company in the dogfooding env
@@ -147,7 +146,7 @@ experiments, self-modifies, and deploys. Dev tooling is enabled here on purpose.
 
 ## Resetting the platform company (dogfooding only)
 
-The dogfooding company is now a normal, founder-owned company (no synthetic
+The dogfooding company is a normal, founder-owned company (no synthetic
 `founder@galaxia.abos` account, no startup bootstrap). To rebuild it from fleet
 creation **without losing saved keys** (BYOK provider keys survive), use the
 founder-facing company reset: `POST /companies/{id}/reset`
@@ -156,9 +155,9 @@ objectives, runs, memory — and re-provisions a clean draft, preserving the
 company's identity, mission, budget, memberships, the `is_platform` flag, and
 stored provider keys.
 
-To start over entirely in the dogfooding env, `POST /dev/delete-all-accounts`
-(gated by `ABOS_DEV_TOOLS_ENABLED`) then sign in and re-onboard — the first
-company created becomes the platform company again.
+To start over entirely, delete the company from the dashboard's danger zone (or
+`DELETE /companies/{id}`), then sign in and re-onboard — the first company created
+becomes the platform company again.
 
 ## Known follow-ups
 
