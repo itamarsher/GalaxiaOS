@@ -13,9 +13,11 @@ Two related changes replace the old fixed-founder Galaxia bootstrap hack:
 Additive and idempotent like the other migrations: the 0001 baseline's
 ``create_all`` already builds these on a fresh DB, so add only what's absent.
 
-Revision ID: 0026_user_sso_and_platform_company
+Revision ID: 0026_user_sso_platform_company
 Revises: 0025_mission_language
 Create Date: 2026-07-12
+
+(Revision id kept ≤32 chars — the length of ``alembic_version.version_num``.)
 """
 
 from __future__ import annotations
@@ -23,7 +25,7 @@ from __future__ import annotations
 import sqlalchemy as sa
 from alembic import op
 
-revision = "0026_user_sso_and_platform_company"
+revision = "0026_user_sso_platform_company"
 down_revision = "0025_mission_language"
 branch_labels = None
 depends_on = None
