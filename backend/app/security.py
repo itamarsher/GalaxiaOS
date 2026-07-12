@@ -79,3 +79,55 @@ def decode_oauth_state(state: str) -> uuid.UUID | None:
         return uuid.UUID(sub) if sub else None
     except (JWTError, ValueError):
         return None
+
+
+# ── Google SSO login + account-wide Drive OAuth states ────────────────────────
+# The Google "Sign in with Google" flow and the account-wide Drive grant share one
+# callback endpoint (``/auth/google/callback``); the signed ``state`` carries the
+# intent (its ``aud``) so the callback knows which flow it is completing. Login
+# state carries no subject (there is no user yet — it's pure CSRF protection);
+# Drive state carries the authenticated user's id so the (unauthenticated) callback
+# can attribute the refresh token.
+_LOGIN_STATE_AUDIENCE = "google-login"
+_USER_DRIVE_STATE_AUDIENCE = "google-user-drive"
+
+
+def create_login_state(*, minutes: int = 10) -> str:
+    expire = datetime.now(UTC) + timedelta(minutes=minutes)
+    payload = {"exp": expire, "aud": _LOGIN_STATE_AUDIENCE}
+    return jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)
+
+
+def verify_login_state(state: str) -> bool:
+    try:
+        jwt.decode(
+            state,
+            settings.jwt_secret,
+            algorithms=[settings.jwt_algorithm],
+            audience=_LOGIN_STATE_AUDIENCE,
+            options={"require_aud": True},
+        )
+        return True
+    except JWTError:
+        return False
+
+
+def create_user_drive_state(user_id: uuid.UUID, *, minutes: int = 10) -> str:
+    expire = datetime.now(UTC) + timedelta(minutes=minutes)
+    payload = {"sub": str(user_id), "exp": expire, "aud": _USER_DRIVE_STATE_AUDIENCE}
+    return jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)
+
+
+def decode_user_drive_state(state: str) -> uuid.UUID | None:
+    try:
+        payload = jwt.decode(
+            state,
+            settings.jwt_secret,
+            algorithms=[settings.jwt_algorithm],
+            audience=_USER_DRIVE_STATE_AUDIENCE,
+            options={"require_aud": True},
+        )
+        sub = payload.get("sub")
+        return uuid.UUID(sub) if sub else None
+    except (JWTError, ValueError):
+        return None

@@ -58,32 +58,6 @@ async def default_login(db: DbDep) -> TokenResponse:
     return TokenResponse(access_token=create_access_token(user.id))
 
 
-@router.post("/galaxia/reset")
-async def galaxia_reset(db: DbDep) -> dict:
-    """Re-provision Galaxia from fleet creation, preserving saved BYOK keys.
-
-    For the heavily-developed phase: wipes Galaxia's generated state (fleet,
-    mission, objectives, runs, memory) and rebuilds it fresh from config, while
-    saved provider keys survive — so you don't re-enter the model key each time.
-
-    TEMP dev tool — do not ship to production.
-    """
-    _require_enabled()
-    from app.models import Company
-    from app.services.galaxia import reset_galaxia
-
-    company_id = await reset_galaxia(db)
-    await db.commit()
-    company = await db.get(Company, company_id)
-    # ``status`` reflects the new provisioning: a rebuilt Galaxia lands at the
-    # onboarding plan-approval phase (``draft``), pending the founder's launch.
-    return {
-        "reset": True,
-        "company_id": str(company_id),
-        "status": company.status.value if company else None,
-    }
-
-
 @router.post("/delete-all-accounts")
 async def delete_all_accounts(db: DbDep) -> dict:
     """Delete every account EXCEPT the default one, plus all data it owns.

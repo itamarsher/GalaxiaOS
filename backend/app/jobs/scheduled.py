@@ -84,26 +84,26 @@ async def backfill_memory_embeddings(ctx: dict) -> dict:
 
 
 async def promote_feature_backlog(ctx: dict) -> dict:
-    """Drain the shared feature-request backlog into tracker issues on Galaxia's behalf.
+    """Drain the shared feature-request backlog into tracker issues on the platform
+    company's behalf.
 
     Runs UNSCOPED (no ``set_tenant``): the backlog is a cross-company ledger, so the
-    promoter must see every company's votes. Skips when Galaxia hasn't been
-    bootstrapped or no tracker is connected.
+    promoter must see every company's votes. Skips until a platform company has been
+    designated (the first onboarded company) or when no tracker is connected.
     """
-    if not settings.galaxia_promote_enabled:
+    if not settings.platform_promote_enabled:
         return {"skipped": True}
-    from app.models import Company
-    from app.services import galaxia, promoter
+    from app.services import platform_company, promoter
 
-    company_id = galaxia.galaxia_company_id()
     async with SessionLocal() as db:
-        if await db.get(Company, company_id) is None:
-            return {"skipped": "no_galaxia"}
+        company_id = await platform_company.platform_company_id(db)
+        if company_id is None:
+            return {"skipped": "no_platform_company"}
         result = await promoter.promote_backlog(
             db,
             company_id=company_id,
-            min_votes=settings.galaxia_promote_min_votes,
-            limit=settings.galaxia_promote_batch,
+            min_votes=settings.platform_promote_min_votes,
+            limit=settings.platform_promote_batch,
         )
         await db.commit()
     return result
@@ -116,41 +116,39 @@ async def reconcile_delivered_requests(ctx: dict) -> dict:
     (its fix merged), mark it delivered and notify the requesting companies. Runs
     unscoped for the same cross-company reason as the promoter.
     """
-    if not settings.galaxia_reconcile_enabled:
+    if not settings.platform_reconcile_enabled:
         return {"skipped": True}
-    from app.models import Company
-    from app.services import galaxia, promoter
+    from app.services import platform_company, promoter
 
-    company_id = galaxia.galaxia_company_id()
     async with SessionLocal() as db:
-        if await db.get(Company, company_id) is None:
-            return {"skipped": "no_galaxia"}
+        company_id = await platform_company.platform_company_id(db)
+        if company_id is None:
+            return {"skipped": "no_platform_company"}
         result = await promoter.reconcile_delivered(
-            db, company_id=company_id, limit=settings.galaxia_reconcile_batch
+            db, company_id=company_id, limit=settings.platform_reconcile_batch
         )
         await db.commit()
     return result
 
 
 async def monitor_failed_tasks(ctx: dict) -> dict:
-    """Galaxia watches its own failed tasks and wakes the Platform agent to
-    investigate + report bugs (feeding the Claude Code auto-fix pipeline).
+    """The platform company watches its own failed tasks and wakes the Platform
+    agent to investigate + report bugs (feeding the Claude Code auto-fix pipeline).
 
-    Skips when Galaxia isn't bootstrapped. Enqueues the investigation tasks it
-    creates so the Platform agent actually runs them.
+    Skips until a platform company is designated. Enqueues the investigation tasks
+    it creates so the Platform agent actually runs them.
     """
-    if not settings.galaxia_failure_monitor_enabled:
+    if not settings.platform_failure_monitor_enabled:
         return {"skipped": True}
-    from app.models import Company
     from app.runtime.queue import enqueue_task
-    from app.services import galaxia, reliability
+    from app.services import platform_company, reliability
 
-    company_id = galaxia.galaxia_company_id()
     async with SessionLocal() as db:
-        if await db.get(Company, company_id) is None:
-            return {"skipped": "no_galaxia"}
+        company_id = await platform_company.platform_company_id(db)
+        if company_id is None:
+            return {"skipped": "no_platform_company"}
         result = await reliability.review_failed_tasks(
-            db, company_id=company_id, limit=settings.galaxia_failure_monitor_batch
+            db, company_id=company_id, limit=settings.platform_failure_monitor_batch
         )
         await db.commit()
     for task_id in result["review_task_ids"]:

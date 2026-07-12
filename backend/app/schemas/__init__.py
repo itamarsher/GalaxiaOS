@@ -26,6 +26,19 @@ class TokenResponse(BaseModel):
 class UserOut(ORMModel):
     id: uuid.UUID
     email: str
+    name: str | None = None
+
+
+class GoogleAuthStatusOut(BaseModel):
+    """Whether "Sign in with Google" is available on this deployment."""
+
+    enabled: bool
+
+
+class AuthorizeUrlOut(BaseModel):
+    """A Google consent URL the browser is redirected to, to begin an OAuth flow."""
+
+    authorize_url: str
 
 
 # ── Onboarding ───────────────────────────────────────────────────────────────

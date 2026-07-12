@@ -520,10 +520,19 @@ async def start(
     budget_cents: int,
     constraints: list[str] | None,
 ) -> Company:
-    """Create the draft company, budget, and mission. No LLM call yet."""
+    """Create the draft company, budget, and mission. No LLM call yet.
+
+    The first company created in a deployment is designated the platform
+    (dogfooding) company — the one that runs GalaxiaOS on itself and drives the
+    demand→issue loop — replacing the old startup bootstrap of a synthetic founder.
+    """
     company = Company(owner_user_id=user.id, name="Untitled Company", status=CompanyStatus.draft)
     db.add(company)
     await db.flush()
+
+    from app.services import platform_company
+
+    await platform_company.designate_if_first(db, company)
 
     db.add(Membership(user_id=user.id, company_id=company.id, role=MembershipRole.founder))
     db.add(

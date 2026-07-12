@@ -1,9 +1,9 @@
-"""Galaxia's reliability monitor: failed task → Platform-agent investigation.
+"""The platform company's reliability monitor: failed task → Platform investigation.
 
-Deterministic half of the loop: a failed Galaxia task is picked up exactly once
-and turned into a Platform-agent investigation task (which then reads code /
-Render and files report_bug). The agent's investigation itself is prompt-driven
-and not asserted here.
+Deterministic half of the loop: a failed task on the platform company is picked up
+exactly once and turned into a Platform-agent investigation task (which then reads
+code / Render and files report_bug). The agent's investigation itself is
+prompt-driven and not asserted here.
 """
 
 from __future__ import annotations
@@ -12,8 +12,8 @@ from sqlalchemy import select
 
 from app.models import Agent, AgentRun, Task
 from app.models.enums import AgentRole, RunStatus, RunTrigger, TaskStatus
-from app.services import galaxia, reliability
-from tests.conftest import requires_db
+from app.services import reliability
+from tests.conftest import make_company_with_fleet, requires_db
 
 
 async def _failed_task(db, company_id, agent_id, *, goal="grow signups") -> Task:
@@ -38,7 +38,7 @@ async def _failed_task(db, company_id, agent_id, *, goal="grow signups") -> Task
 @requires_db
 async def test_failed_task_becomes_a_platform_investigation_once(session_factory):
     async with session_factory() as db:
-        cid = await galaxia._run(db)
+        cid = await make_company_with_fleet(db)
         await db.commit()
 
     async with session_factory() as db:
@@ -85,7 +85,7 @@ async def test_failed_task_becomes_a_platform_investigation_once(session_factory
 @requires_db
 async def test_only_failed_tasks_are_reviewed(session_factory):
     async with session_factory() as db:
-        cid = await galaxia._run(db)
+        cid = await make_company_with_fleet(db)
         await db.commit()
 
     async with session_factory() as db:

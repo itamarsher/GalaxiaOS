@@ -1,5 +1,18 @@
 # Galaxia — full-dogfooding gap analysis
 
+> **Architecture update (2026-07): "Galaxia" is now a real, founder-owned company,
+> not a synthetic bootstrap.** The old startup bootstrap that provisioned a fixed
+> `founder@galaxia.abos` user + fixed company id at boot has been removed, along
+> with the user-id promoter gate and `POST /dev/galaxia/reset`. Instead: real user
+> registration (Google SSO by default, email/password fallback), and the **first
+> company onboarded** in a deployment is flagged `is_platform=True`
+> (`services/platform_company.py`). That flag — not a hard-coded founder id — is
+> what authorizes the promoter tools, the global Render key, and the platform cron
+> jobs, so it survives an ownership transfer. Google Drive is now connected
+> **account-wide** (per user) so every business a founder launches files into the
+> same Drive. Everything below that refers to "Galaxia the bootstrapped company"
+> should be read as "the platform company (the founder's first)".
+
 > *Galaxia* is the reference business a founder spins up on ABOS whose **mission is to
 > build and operate ABOS itself**. If Galaxia can run fully agentically — turning its own
 > agents' unmet needs into shipped code and a live deploy, with the founder only touching
@@ -77,15 +90,16 @@ without a human, and it never **closes back** onto the requesters. Details below
 
 Prioritised P0 (loop cannot run without it) → P2 (hardening).
 
-### P0-1 — Galaxia is never bootstrapped; the loop has no origin — ✅ IMPLEMENTED
+### P0-1 — the loop needs a driving company — ✅ RESOLVED (now via a real company)
 
-> **Status: done.** `app/services/galaxia.py` provisions the Galaxia founder, company, fleet
-> (guaranteeing the Platform agent), mission, budget, and governance deterministically and
-> idempotently under a Postgres advisory lock, called from the API lifespan
-> (`app/main.py`). The founder-user id now lives in one place (`settings.galaxia_founder_user_id`),
-> which both the bootstrap and the `platform.py` promoter gate read. Covered by
-> `tests/test_galaxia_bootstrap.py` (idempotency + the gate now authorizes Galaxia). The rest of
-> this section is the original analysis.
+> **Status: done, then re-architected (2026-07).** Originally solved by a startup
+> bootstrap (`app/services/galaxia.py`) that synthesized a fixed founder + company.
+> That bootstrap has since been **removed** in favour of a real, founder-owned
+> company: the first company onboarded is flagged `is_platform=True`
+> (`services/platform_company.py`), and the promoter gate (`_is_abos_admin_company`
+> in `runtime/tools/platform.py`) authorizes off that flag instead of a hard-coded
+> user id. Covered by `tests/test_platform_company.py`. The rest of this section is
+> the original analysis, retained for history.
 
 `ABOS_FEATURE_ADMIN_USER_ID = "91da8f48-…"` is hardcoded in `runtime/tools/platform.py`, and the
 promoter tools authorize by checking that this user is a member of the acting company

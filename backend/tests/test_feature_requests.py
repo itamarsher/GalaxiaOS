@@ -38,12 +38,20 @@ from app.services import feature_requests as fr_svc
 from tests.conftest import requires_db
 
 
-async def _make_company(db, *, with_member: bool = False) -> tuple[uuid.UUID, uuid.UUID]:
-    """Create a company (+ owner user, optionally a membership). Returns (company, user)."""
+async def _make_company(
+    db, *, with_member: bool = False, is_platform: bool = False
+) -> tuple[uuid.UUID, uuid.UUID]:
+    """Create a company (+ owner user, optionally a membership). Returns (company, user).
+
+    ``is_platform`` marks it as the platform (dogfooding) company — the only one the
+    promoter gate authorizes.
+    """
     user = User(email=f"{uuid.uuid4()}@t.io", hashed_password="x")
     db.add(user)
     await db.flush()
-    company = Company(owner_user_id=user.id, name="C", status=CompanyStatus.active)
+    company = Company(
+        owner_user_id=user.id, name="C", status=CompanyStatus.active, is_platform=is_platform
+    )
     db.add(company)
     await db.flush()
     if with_member:
@@ -137,11 +145,10 @@ async def test_list_open_orders_by_demand(session_factory):
 
 
 @requires_db
-async def test_promote_denied_for_non_abos_company(session_factory, monkeypatch):
-    # Admin id points at a user with no membership in this company → denied.
-    monkeypatch.setattr(platform_tools, "ABOS_FEATURE_ADMIN_USER_ID", str(uuid.uuid4()))
+async def test_promote_denied_for_non_abos_company(session_factory):
+    # A plain tenant company (is_platform=False) → the promoter gate denies it.
     async with session_factory() as db:
-        cid, uid = await _make_company(db, with_member=True)
+        cid, uid = await _make_company(db, with_member=True, is_platform=False)
         out = await fr_svc.record_request(
             db, kind="capability", title="X", details="d", company_id=cid, user_id=uid
         )
@@ -182,9 +189,8 @@ async def test_promote_files_issue_and_marks_promoted(session_factory, monkeypat
     monkeypatch.setattr("app.services.memory.write", _fake_write)
 
     async with session_factory() as db:
-        cid, uid = await _make_company(db, with_member=True)
-        # Gate on THIS company's owner user id.
-        monkeypatch.setattr(platform_tools, "ABOS_FEATURE_ADMIN_USER_ID", str(uid))
+        # The platform company is the one authorized to promote.
+        cid, uid = await _make_company(db, with_member=True, is_platform=True)
         out = await fr_svc.record_request(
             db, kind="capability", title="Real web search",
             details="agents only get stubs", company_id=cid, user_id=uid,
@@ -218,10 +224,10 @@ async def test_promote_files_issue_and_marks_promoted(session_factory, monkeypat
 
 
 @requires_db
-async def test_list_feature_requests_tool_gated(session_factory, monkeypatch):
-    monkeypatch.setattr(platform_tools, "ABOS_FEATURE_ADMIN_USER_ID", str(uuid.uuid4()))
+async def test_list_feature_requests_tool_gated(session_factory):
     async with session_factory() as db:
-        cid, _uid = await _make_company(db, with_member=True)
+        # Not the platform company → the backlog-listing tool is refused.
+        cid, _uid = await _make_company(db, with_member=True, is_platform=False)
         task = await _running_task(db, cid)
         await db.commit()
     async with session_factory() as db:

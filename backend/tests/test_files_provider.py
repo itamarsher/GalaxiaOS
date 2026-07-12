@@ -193,10 +193,30 @@ async def test_resolve_file_provider_uses_companys_own_drive(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_resolve_file_provider_falls_back_to_founder_drive(monkeypatch):
-    # This company connected nothing itself, but the founder linked Drive on a
-    # sibling company → the file store still resolves (connect-once-covers-all).
+async def test_resolve_file_provider_uses_owner_account_wide_drive(monkeypatch):
+    # The company connected nothing itself, but the founder connected Drive
+    # account-wide (on the user) → the file store resolves (connect-once-covers-all).
     from app.services import integrations as integrations_svc
+    from app.services import user_drive
+
+    async def _none(db, *, company_id):
+        return None
+
+    async def _account_wide(db, *, company_id):
+        return {"refresh_token": "rt-account"}
+
+    monkeypatch.setattr(integrations_svc, "get_google_drive", _none)
+    monkeypatch.setattr(user_drive, "get_user_drive_for_company", _account_wide)
+    provider = await integrations_svc.resolve_file_provider(object(), company_id=uuid.uuid4())
+    assert isinstance(provider, GoogleDriveFileProvider)
+
+
+@pytest.mark.asyncio
+async def test_resolve_file_provider_falls_back_to_founder_sibling_drive(monkeypatch):
+    # No own bundle and no account-wide Drive, but the founder linked Drive per-company
+    # on a sibling company → the legacy fallback still resolves it.
+    from app.services import integrations as integrations_svc
+    from app.services import user_drive
 
     async def _none(db, *, company_id):
         return None
@@ -205,6 +225,7 @@ async def test_resolve_file_provider_falls_back_to_founder_drive(monkeypatch):
         return {"refresh_token": "rt-owner"}
 
     monkeypatch.setattr(integrations_svc, "get_google_drive", _none)
+    monkeypatch.setattr(user_drive, "get_user_drive_for_company", _none)
     monkeypatch.setattr(integrations_svc, "_owner_google_drive", _owner)
     provider = await integrations_svc.resolve_file_provider(object(), company_id=uuid.uuid4())
     assert isinstance(provider, GoogleDriveFileProvider)
@@ -213,11 +234,13 @@ async def test_resolve_file_provider_falls_back_to_founder_drive(monkeypatch):
 @pytest.mark.asyncio
 async def test_resolve_file_provider_none_when_founder_has_no_drive(monkeypatch):
     from app.services import integrations as integrations_svc
+    from app.services import user_drive
 
     async def _none(*a, **k):
         return None
 
     monkeypatch.setattr(integrations_svc, "get_google_drive", _none)
+    monkeypatch.setattr(user_drive, "get_user_drive_for_company", _none)
     monkeypatch.setattr(integrations_svc, "_owner_google_drive", _none)
     assert await integrations_svc.resolve_file_provider(object(), company_id=uuid.uuid4()) is None
 

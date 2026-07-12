@@ -121,6 +121,30 @@ export default function Home() {
     }
 
     (async () => {
+      // 0) Returning from Google SSO: the backend redirects to "/?token=…" with a
+      //    fresh access token (or "?auth=denied|error" on failure). Consume it,
+      //    strip it from the address bar so it isn't bookmarked/shared, then route.
+      if (typeof window !== "undefined") {
+        const params = new URLSearchParams(window.location.search);
+        const ssoToken = params.get("token");
+        const authErr = params.get("auth");
+        if (ssoToken || authErr) {
+          window.history.replaceState({}, "", window.location.pathname);
+        }
+        if (ssoToken) {
+          api.setToken(ssoToken);
+          try {
+            await afterAuth(false);
+            return;
+          } catch {
+            api.logout();
+          }
+        } else if (authErr) {
+          setErr(authErr === "denied" ? "Google sign-in was cancelled." : "Google sign-in failed. Please try again.");
+          if (!cancelled) setStep("auth");
+          return;
+        }
+      }
       // 1) Reuse an existing session — but a stale/expired token must not
       //    block auto-login. If it fails, drop it and fall through.
       if (api.hasToken()) {
@@ -163,6 +187,20 @@ export default function Home() {
       const res = signup ? await api.signup(email, password) : await api.login(email, password);
       api.setToken(res.access_token);
       await afterAuth(false);
+    });
+
+  // Whether "Continue with Google" is available on this deployment.
+  const [googleEnabled, setGoogleEnabled] = useState(false);
+  useEffect(() => {
+    api.googleAuthStatus().then((s) => setGoogleEnabled(s.enabled)).catch(() => setGoogleEnabled(false));
+  }, []);
+
+  // Redirect the whole page to Google's consent screen. On return the backend
+  // bounces back to "/?token=…", which the bootstrap effect below consumes.
+  const doGoogle = () =>
+    guard(async () => {
+      const { authorize_url } = await api.googleAuthorizeUrl();
+      window.location.href = authorize_url;
     });
 
   // Clear every field the onboarding wizard collects so the next run starts clean.
@@ -311,6 +349,24 @@ export default function Home() {
       {step === "auth" && (
         <div className="card">
           <div className="step">Step 0 · Account</div>
+
+          {googleEnabled && (
+            <>
+              <button disabled={busy} onClick={doGoogle} style={{ width: "100%" }}>
+                Continue with Google
+              </button>
+              <p className="muted" style={{ fontSize: 12, margin: "6px 0 0", textAlign: "center" }}>
+                The fastest way in. You can connect Google Drive account-wide afterwards, so every
+                business you launch files into your own Drive.
+              </p>
+              <div className="or-divider" style={{ display: "flex", alignItems: "center", gap: 10, margin: "16px 0" }}>
+                <span style={{ flex: 1, height: 1, background: "var(--border, rgba(255,255,255,0.15))" }} />
+                <span className="muted" style={{ fontSize: 12 }}>or with email</span>
+                <span style={{ flex: 1, height: 1, background: "var(--border, rgba(255,255,255,0.15))" }} />
+              </div>
+            </>
+          )}
+
           <label>Email</label>
           <input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@startup.com" />
           <label>Password</label>

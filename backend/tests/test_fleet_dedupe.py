@@ -1,8 +1,8 @@
 """Single-CEO guarantees: no fleet ends up with two CEOs (→ two founder DMs).
 
-Provisioning is idempotent by role (can't create a second CEO), and a boot
-self-heals any legacy duplicate singleton agents, cleaning up the orphan DM the
-removed agent left behind.
+Provisioning is idempotent by role (can't create a second CEO), and the
+``dedupe_singleton_roles`` helper self-heals any duplicate singleton agents,
+cleaning up the orphan DM a removed agent left behind.
 """
 
 from __future__ import annotations
@@ -11,9 +11,10 @@ from sqlalchemy import func, select
 
 from app.models import Agent, ChatChannel, ChatParticipant, Company
 from app.models.enums import AgentRole, ChatChannelKind
-from app.services import chat, galaxia
+from app.services import chat
+from app.services.company_reset import dedupe_singleton_roles
 from app.services.onboarding import _fleet_specs, provision_fleet
-from tests.conftest import requires_db
+from tests.conftest import make_company_with_fleet, requires_db
 
 
 @requires_db
@@ -36,9 +37,9 @@ async def test_provision_fleet_is_idempotent_by_role(session_factory, company_wi
 
 
 @requires_db
-async def test_boot_dedupes_a_duplicate_ceo_and_cleans_its_orphan_dm(session_factory):
+async def test_dedupe_removes_a_duplicate_ceo_and_cleans_its_orphan_dm(session_factory):
     async with session_factory() as db:
-        cid = await galaxia._run(db)
+        cid = await make_company_with_fleet(db)
         await db.commit()
 
     # Inject a second CEO and give it a founder DM — the exact bug (two CEO DMs).
@@ -57,9 +58,9 @@ async def test_boot_dedupes_a_duplicate_ceo_and_cleans_its_orphan_dm(session_fac
         ).all()
         assert len(ceos) == 2  # bug reproduced
 
-    # A boot self-heals it.
+    # The dedupe helper self-heals it.
     async with session_factory() as db:
-        await galaxia._run(db)
+        await dedupe_singleton_roles(db, cid)
         await db.commit()
 
     async with session_factory() as db:
