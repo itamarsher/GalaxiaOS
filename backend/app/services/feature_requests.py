@@ -17,10 +17,11 @@ from __future__ import annotations
 import uuid
 from dataclasses import dataclass
 
+from sqlalchemy import func as sa_func
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import Company, FeatureRequest, FeatureRequestVote, User
+from app.models import Agent, Company, FeatureRequest, FeatureRequestVote, User
 from app.models.enums import FeatureRequestKind, FeatureRequestStatus
 
 
@@ -63,12 +64,17 @@ async def record_request(
     details: str,
     company_id: uuid.UUID,
     user_id: uuid.UUID | None = None,
+    agent_id: uuid.UUID | None = None,
+    task_id: uuid.UUID | None = None,
 ) -> RequestOutcome | None:
-    """Record a capability/bug request, deduped by title and voted per company/user.
+    """Record a capability/bug request, deduped by title and voted per company/user/agent.
 
-    Returns ``None`` if the kind is unknown or the title is empty. A repeat ask
-    from the same (company, user) refreshes that vote's details instead of adding
-    another vote, so ``vote_count`` is honest demand.
+    Founder/copilot asks carry ``user_id``; agent asks carry ``agent_id`` (and the
+    originating ``task_id``) so the platform can see which agent hit the gap and a
+    delivery can be routed back to it. Returns ``None`` if the kind is unknown or the
+    title is empty. A repeat ask from the same (company, user, agent) refreshes that
+    vote's details/task instead of adding another vote, so ``vote_count`` is honest
+    demand.
     """
     fk = coerce_kind(kind)
     if fk is None:
@@ -93,13 +99,16 @@ async def record_request(
         db.add(fr)
         await db.flush()
 
-    # One vote per (request, company, user). ``user_id is None`` (agent/system)
-    # collapses to a single per-company vote via the IS NULL match below.
+    # One vote per (request, company, user, agent). A founder ask keys on the user
+    # (agent NULL); an agent ask keys on the agent (user NULL) — so two distinct
+    # agents in one company each register demand, and a founder + an agent asking
+    # the same thing are counted separately. Both NULLs match via IS NULL below.
     existing_vote = await db.scalar(
         select(FeatureRequestVote).where(
             FeatureRequestVote.feature_request_id == fr.id,
             FeatureRequestVote.company_id == company_id,
             FeatureRequestVote.user_id == user_id,
+            FeatureRequestVote.agent_id == agent_id,
         )
     )
     is_new_vote = existing_vote is None
@@ -109,12 +118,19 @@ async def record_request(
                 feature_request_id=fr.id,
                 company_id=company_id,
                 user_id=user_id,
+                agent_id=agent_id,
+                task_id=task_id,
                 details=details or None,
             )
         )
         fr.vote_count = (fr.vote_count or 0) + 1
-    elif details:
-        existing_vote.details = details
+    else:
+        # Refresh the originating task (point delivery at the latest blocked work)
+        # and the framing on a repeat ask.
+        if task_id is not None:
+            existing_vote.task_id = task_id
+        if details:
+            existing_vote.details = details
 
     await db.flush()
     return RequestOutcome(
@@ -154,21 +170,49 @@ async def get(db: AsyncSession, feature_id: uuid.UUID) -> FeatureRequest | None:
     return await db.get(FeatureRequest, feature_id)
 
 
-async def load_attribution(
-    db: AsyncSession, feature_id: uuid.UUID
-) -> list[tuple[str, str | None, str | None]]:
-    """Return ``(company_name, user_email, details)`` for each vote on a request."""
+@dataclass(frozen=True)
+class Attribution:
+    """Who asked for a request: a company plus the requesting user *or* agent."""
+
+    company_id: uuid.UUID
+    company_name: str
+    user_email: str | None
+    agent_id: uuid.UUID | None
+    agent_name: str | None
+    details: str | None
+
+
+async def load_attribution(db: AsyncSession, feature_id: uuid.UUID) -> list[Attribution]:
+    """Return an :class:`Attribution` for each vote on a request (oldest first)."""
     rows = (
         await db.execute(
-            select(Company.name, User.email, FeatureRequestVote.details)
+            select(
+                FeatureRequestVote.company_id,
+                Company.name,
+                User.email,
+                FeatureRequestVote.agent_id,
+                Agent.name,
+                FeatureRequestVote.details,
+            )
             .select_from(FeatureRequestVote)
             .join(Company, Company.id == FeatureRequestVote.company_id)
             .outerjoin(User, User.id == FeatureRequestVote.user_id)
+            .outerjoin(Agent, Agent.id == FeatureRequestVote.agent_id)
             .where(FeatureRequestVote.feature_request_id == feature_id)
             .order_by(FeatureRequestVote.created_at.asc())
         )
     ).all()
-    return [(name, email, details) for name, email, details in rows]
+    return [
+        Attribution(
+            company_id=cid,
+            company_name=cname,
+            user_email=email,
+            agent_id=aid,
+            agent_name=aname,
+            details=details,
+        )
+        for cid, cname, email, aid, aname, details in rows
+    ]
 
 
 async def requesting_company_ids(
@@ -183,11 +227,33 @@ async def requesting_company_ids(
     return list(rows)
 
 
+async def requesting_agents(
+    db: AsyncSession, feature_id: uuid.UUID
+) -> list[tuple[uuid.UUID, uuid.UUID, str]]:
+    """``(company_id, agent_id, agent_name)`` for each agent that asked.
+
+    The delivery-routing targets: an agent-initiated vote carries the agent, so a
+    'your capability shipped' notice can name the agent that hit the gap. Founder
+    votes (no ``agent_id``) are excluded.
+    """
+    rows = (
+        await db.execute(
+            select(FeatureRequestVote.company_id, Agent.id, Agent.name)
+            .select_from(FeatureRequestVote)
+            .join(Agent, Agent.id == FeatureRequestVote.agent_id)
+            .where(FeatureRequestVote.feature_request_id == feature_id)
+            .order_by(FeatureRequestVote.created_at.asc())
+        )
+    ).all()
+    return [(cid, aid, aname) for cid, aid, aname in rows]
+
+
 async def build_issue_body(db: AsyncSession, fr: FeatureRequest) -> str:
     """Compose a tracker-issue body summarizing demand + who asked + their framing."""
     attribution = await load_attribution(db, fr.id)
-    companies = sorted({name for name, _email, _d in attribution})
-    users = sorted({email for _n, email, _d in attribution if email})
+    companies = sorted({a.company_name for a in attribution})
+    users = sorted({a.user_email for a in attribution if a.user_email})
+    agents = sorted({a.agent_name for a in attribution if a.agent_name})
 
     lines = [
         fr.details.strip(),
@@ -195,14 +261,20 @@ async def build_issue_body(db: AsyncSession, fr: FeatureRequest) -> str:
         "---",
         f"**Demand:** {fr.vote_count} vote(s) — "
         f"{len(companies)} compan{'y' if len(companies) == 1 else 'ies'}, "
-        f"{len(users)} named user(s).",
+        f"{len(users)} named user(s), {len(agents)} agent(s).",
     ]
     if companies:
         lines.append("**Companies:** " + ", ".join(companies))
     if users:
         lines.append("**Users:** " + ", ".join(users))
+    if agents:
+        lines.append("**Agents:** " + ", ".join(agents))
 
-    extra_framings = [d.strip() for _n, _e, d in attribution if d and d.strip() != fr.details.strip()]
+    extra_framings = [
+        a.details.strip()
+        for a in attribution
+        if a.details and a.details.strip() != fr.details.strip()
+    ]
     if extra_framings:
         lines.append("")
         lines.append("**Additional context from requesters:**")
@@ -248,16 +320,64 @@ async def list_promoted(
 
 
 async def mark_delivered(db: AsyncSession, fr: FeatureRequest) -> None:
-    """Flag a promoted entry as delivered (its tracker issue closed / fix merged)."""
+    """Flag an entry as delivered (its tracker issue closed / platform marked ready)."""
     fr.status = FeatureRequestStatus.delivered
     await db.flush()
 
 
+@dataclass(frozen=True)
+class CompanyRequest:
+    """A backlog entry as seen by a requesting company — for the founder's view.
+
+    Bundles the shared entry (title/kind/status/issue link/total demand) with *this
+    company's* own attribution rows (which of its agents/founders asked and why), so
+    a founder can see every capability their company requested and whether the
+    platform has delivered it.
+    """
+
+    feature_request: FeatureRequest
+    attributions: list[Attribution]
+
+
+async def list_for_company(
+    db: AsyncSession, *, company_id: uuid.UUID, limit: int = 100
+) -> list[CompanyRequest]:
+    """Every backlog entry this company requested, newest-requested first.
+
+    Scoped to the founder's own company: it lists the capabilities/bugs the
+    company's agents and founders asked for, each carrying its lifecycle status
+    (open → promoted → delivered) so the founder can audit what was requested and
+    what the platform has since delivered.
+    """
+    vote_rows = (
+        await db.execute(
+            select(FeatureRequestVote.feature_request_id)
+            .where(FeatureRequestVote.company_id == company_id)
+            .group_by(FeatureRequestVote.feature_request_id)
+            .order_by(sa_func.max(FeatureRequestVote.created_at).desc())
+            .limit(limit)
+        )
+    ).all()
+    out: list[CompanyRequest] = []
+    for (fr_id,) in vote_rows:
+        fr = await db.get(FeatureRequest, fr_id)
+        if fr is None:
+            continue
+        attributions = [
+            a for a in await load_attribution(db, fr_id) if a.company_id == company_id
+        ]
+        out.append(CompanyRequest(feature_request=fr, attributions=attributions))
+    return out
+
+
 __all__ = [
     "RequestOutcome",
+    "Attribution",
+    "CompanyRequest",
     "coerce_kind",
     "record_request",
     "list_open",
+    "list_for_company",
     "get",
     "load_attribution",
     "build_issue_body",
@@ -265,4 +385,5 @@ __all__ = [
     "list_promoted",
     "mark_delivered",
     "requesting_company_ids",
+    "requesting_agents",
 ]
