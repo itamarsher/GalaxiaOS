@@ -22,7 +22,7 @@ def _set_master_key():
         app_settings.master_key = base64.urlsafe_b64encode(os.urandom(32)).decode()
 
 
-async def _make_company(session_factory):
+async def _make_company(session_factory, *, is_platform: bool = False):
     from app.models import Budget, Company, User
     from app.models.enums import BudgetPeriod, CompanyStatus
 
@@ -30,7 +30,9 @@ async def _make_company(session_factory):
         user = User(email=f"{uuid.uuid4()}@t.io", hashed_password="x")
         db.add(user)
         await db.flush()
-        company = Company(owner_user_id=user.id, name="T", status=CompanyStatus.active)
+        company = Company(
+            owner_user_id=user.id, name="T", status=CompanyStatus.active, is_platform=is_platform
+        )
         db.add(company)
         await db.flush()
         db.add(Budget(company_id=company.id, period=BudgetPeriod.monthly, limit_cents=10_000))
@@ -184,3 +186,46 @@ async def test_paid_managed_allowed_beyond_free_allowance(session_factory, monke
         resolved = await apikeys.resolve_active_provider(db, company_id=cid)
     assert resolved is not None
     assert resolved.source == "platform"
+
+
+async def test_platform_company_is_unlimited_and_unmetered(session_factory, monkeypatch):
+    """The platform (dogfooding) company is never capped, and its spend isn't
+    metered against the free-tier ledger — even blown far past the free allowance."""
+    _set_master_key()
+    _managed_on(monkeypatch, free=100, daily=50)
+    cid, uid = await _make_company(session_factory, is_platform=True)
+    from app.services import apikeys, billing
+
+    # Spend well past both caps; for the platform company this must NOT be recorded.
+    async with session_factory() as db:
+        await billing.record_platform_spend(db, user_id=uid, company_id=cid, cents=500, kind="llm")
+        await db.commit()
+
+    async with session_factory() as db:
+        # Ledger stayed at zero (house account — unmetered).
+        acct = await billing.get_or_create_account(db, user_id=uid)
+        assert acct.platform_spent_cents == 0
+        # Funding is allowed for the platform company regardless of the caps.
+        elig = await billing.platform_available(db, company_id=cid)
+        assert elig.allowed is True
+        resolved = await apikeys.resolve_active_provider(db, company_id=cid)
+    assert resolved is not None
+    assert resolved.source == "platform"
+
+
+async def test_non_platform_company_still_capped(session_factory, monkeypatch):
+    """A normal company is still gated by the free allowance (the bypass is scoped)."""
+    _set_master_key()
+    _managed_on(monkeypatch, free=100, daily=0)
+    cid, uid = await _make_company(session_factory, is_platform=False)
+    from app.services import apikeys, billing
+
+    async with session_factory() as db:
+        await billing.record_platform_spend(db, user_id=uid, company_id=cid, cents=200, kind="llm")
+        await db.commit()
+
+    async with session_factory() as db:
+        elig = await billing.platform_available(db, company_id=cid)
+        assert elig.allowed is False
+        resolved = await apikeys.resolve_active_provider(db, company_id=cid)
+    assert resolved is None
