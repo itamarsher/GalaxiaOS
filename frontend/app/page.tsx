@@ -60,16 +60,10 @@ export default function Home() {
   }
 
   // After authentication, route to the right place: a fresh account starts
-  // onboarding; an account with businesses lands on its list. When we got here
-  // via the dev auto-login and a business already exists, jump straight to its
-  // dashboard (fast iteration — no clicks).
-  async function afterAuth(autoLoggedIn: boolean) {
+  // onboarding; an account with businesses lands on its list.
+  async function afterAuth() {
     const list = await api.myCompanies();
     setBusinesses(list);
-    if (autoLoggedIn && list.length > 0) {
-      await openCompany(list[0]);
-      return;
-    }
     setStep(list.length > 0 ? "businesses" : "mission");
   }
 
@@ -89,36 +83,11 @@ export default function Home() {
     router.push(`/c/${c.id}/game`);
   }
 
-  // Bootstrap: use an existing session; else try the dev default account
-  // (auto-login); else fall back to the normal auth screen. Each step is
-  // resilient: a stale/expired token is cleared rather than blocking
-  // auto-login, and a cold-started API (Render free tier spins down) is
-  // retried so it isn't mistaken for "dev tools disabled".
+  // Bootstrap: consume a Google SSO redirect, else reuse an existing session,
+  // else show the sign-in screen. A stale/expired token is cleared rather than
+  // blocking the sign-in screen.
   useEffect(() => {
     let cancelled = false;
-
-    const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-
-    // Auto-login as the dev default account. Returns true if it handled
-    // navigation (logged in OR dev genuinely disabled), false to keep trying.
-    async function tryDevAutoLogin(): Promise<boolean> {
-      for (let attempt = 0; attempt < 3 && !cancelled; attempt++) {
-        try {
-          const status = await api.devStatus();
-          if (!status.enabled) return false; // dev off -> normal auth screen
-          const res = await api.defaultLogin();
-          if (cancelled) return true;
-          api.setToken(res.access_token);
-          await afterAuth(true);
-          return true;
-        } catch {
-          // Network/cold-start error: wait and retry before giving up so a
-          // spun-down API doesn't silently bounce us to the login screen.
-          if (attempt < 2) await sleep(1500);
-        }
-      }
-      return false;
-    }
 
     (async () => {
       // 0) Returning from Google SSO: the backend redirects to "/?token=…" with a
@@ -134,7 +103,7 @@ export default function Home() {
         if (ssoToken) {
           api.setToken(ssoToken);
           try {
-            await afterAuth(false);
+            await afterAuth();
             return;
           } catch {
             api.logout();
@@ -145,20 +114,18 @@ export default function Home() {
           return;
         }
       }
-      // 1) Reuse an existing session — but a stale/expired token must not
-      //    block auto-login. If it fails, drop it and fall through.
+      // 1) Reuse an existing session — but a stale/expired token must not block
+      //    the sign-in screen. If it fails, drop it and fall through.
       if (api.hasToken()) {
         try {
-          await afterAuth(false);
+          await afterAuth();
           return;
         } catch {
           api.logout();
         }
       }
       if (cancelled) return;
-      // 2) Dev convenience: auto-login as the default account.
-      if (await tryDevAutoLogin()) return;
-      // 3) Normal auth screen.
+      // 2) Sign-in screen (Google SSO by default; email/password fallback).
       if (!cancelled) setStep("auth");
     })();
 
@@ -186,7 +153,7 @@ export default function Home() {
     guard(async () => {
       const res = signup ? await api.signup(email, password) : await api.login(email, password);
       api.setToken(res.access_token);
-      await afterAuth(false);
+      await afterAuth();
     });
 
   // Whether "Continue with Google" is available on this deployment.

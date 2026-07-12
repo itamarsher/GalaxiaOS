@@ -125,48 +125,6 @@ async def test_free_tier_exhaustion_blocks(session_factory, monkeypatch):
     assert resolved is None
 
 
-async def test_dev_default_user_bypasses_free_and_daily_caps(session_factory, monkeypatch):
-    _set_master_key()
-    _managed_on(monkeypatch, free=100, daily=50)
-    from app.config import settings as app_settings
-    from app.models import Budget, Company, User
-    from app.models.enums import BudgetPeriod, CompanyStatus
-
-    monkeypatch.setattr(app_settings, "dev_tools_enabled", True)
-    monkeypatch.setattr(app_settings, "dev_default_email", "dev@abos.local")
-
-    async with session_factory() as db:
-        user = User(email="dev@abos.local", hashed_password="x")
-        db.add(user)
-        await db.flush()
-        company = Company(owner_user_id=user.id, name="T", status=CompanyStatus.active)
-        db.add(company)
-        await db.flush()
-        db.add(Budget(company_id=company.id, period=BudgetPeriod.monthly, limit_cents=10_000))
-        await db.commit()
-        cid, uid = company.id, user.id
-
-    from app.services import apikeys, billing
-
-    # Blow well past both the free allowance and the daily burst cap.
-    async with session_factory() as db:
-        await billing.record_platform_spend(db, user_id=uid, company_id=cid, cents=500, kind="llm")
-        await db.commit()
-
-    async with session_factory() as db:
-        elig = await billing.eligibility(db, user_id=uid)
-        assert elig.allowed is True
-        resolved = await apikeys.resolve_active_provider(db, company_id=cid)
-    assert resolved is not None
-    assert resolved.source == "platform"
-
-    # Killing the dev toolkit restores the normal free-tier gate.
-    monkeypatch.setattr(app_settings, "dev_tools_enabled", False)
-    async with session_factory() as db:
-        elig = await billing.eligibility(db, user_id=uid)
-        assert elig.allowed is False
-
-
 async def test_record_platform_spend_writes_ledger_and_total(session_factory, monkeypatch):
     _set_master_key()
     _managed_on(monkeypatch)

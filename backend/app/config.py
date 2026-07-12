@@ -121,13 +121,6 @@ class Settings(BaseSettings):
     # leave false in production, where API and worker scale independently.
     run_worker_in_process: bool = False
 
-    # TEMP (dev only): enables the dev toolkit (auto-login default account +
-    # "delete all other accounts") used during active development. MUST be set to
-    # false (or this whole feature removed) before going live. Kill-switch:
-    # set ABOS_DEV_TOOLS_ENABLED=false.
-    dev_tools_enabled: bool = True
-    dev_default_email: str = "dev@abos.local"  # TEMP: the auto-login default account
-
     # Runtime safety caps (circuit breakers)
     max_task_depth: int = 4
     max_tasks_per_run: int = 200
@@ -493,13 +486,13 @@ class Settings(BaseSettings):
 
     # Which deployment this is. The CURRENT default deployment is the *dogfooding*
     # environment: GalaxiaOS runs here and is allowed to experiment, self-modify,
-    # and deploy. Dev tooling is enabled here.
+    # and deploy.
     #
     # TODO(production-split): before onboarding the FIRST external users, stand up a
     # SEPARATE production environment (own Render services + database + secrets) with
-    # environment="production" and dev_tools_enabled=false — so real customer
-    # businesses never share infra with GalaxiaOS's own experimentation/self-deploy
-    # loop. See docs/DOGFOODING_OPERATIONS.md#environments.
+    # environment="production" — so real customer businesses never share infra with
+    # GalaxiaOS's own experimentation/self-deploy loop. See
+    # docs/DOGFOODING_OPERATIONS.md#environments.
     environment: str = "dogfooding"  # dogfooding | production
 
     # Render deployment observability (so agents can see what's happening with our

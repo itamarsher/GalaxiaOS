@@ -23,7 +23,6 @@ from app.api import (
     companies,
     copilot,
     decisions,
-    dev,  # TEMP dev-only endpoints — remove before launch
     domains,
     events,
     files,
@@ -134,7 +133,6 @@ def create_app() -> FastAPI:
     app.include_router(events.router)
     app.include_router(marketplace.catalog_router)
     app.include_router(marketplace.company_router)
-    app.include_router(dev.router)  # TEMP dev-only endpoints — remove before launch
 
     @app.exception_handler(ProviderError)
     async def _provider_error(request: Request, exc: ProviderError) -> JSONResponse:
