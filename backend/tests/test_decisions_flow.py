@@ -264,9 +264,11 @@ async def test_approving_a_decision_makes_the_agent_acknowledge(
         assert "Approve register_domain" in ack
 
     # A founder note is folded into the acknowledgment (pure builder, no DB).
+    from app.services import decisions as decisions_svc
+
     async with session_factory() as db:
         decision = await db.get(DecisionRequest, decision_id)
-    noted = decisions_api._ack_note(decision, note="Ship it, but log the spend.")
+    noted = decisions_svc._ack_note(decision, note="Ship it, but log the spend.")
     assert "Ship it, but log the spend." in noted
     assert chat.FOUNDER_ACK_DIRECTIVE in noted
 
@@ -359,9 +361,11 @@ async def test_rejecting_a_decision_continues_the_task(
         assert "DECLINED" in note
 
     # The founder's reason is folded into the directive (pure builder, no DB).
+    from app.services import decisions as decisions_svc
+
     async with session_factory() as db:
         decision = await db.get(DecisionRequest, decision_id)
-    noted = decisions_api._reject_note(decision, note="Too aggressive — soften the tone.")
+    noted = decisions_svc._reject_note(decision, note="Too aggressive — soften the tone.")
     assert "Too aggressive — soften the tone." in noted
 
 

@@ -84,10 +84,21 @@ _COST_HINTS = {"register_domain": _DOMAIN_PRICE_HINT_CENTS}
 
 
 def _summarize_memory(entries) -> str:
-    """Render recalled memory entries as a compact ``type: title`` bullet list."""
+    """Render recalled memory entries as a compact bullet list.
+
+    Each bullet carries ``type: title`` plus a clip of the entry's ``content`` — the
+    title alone only says guidance *exists*; the substance (e.g. a founder's actual
+    reason for rejecting a decision) lives in ``content`` and must reach the prompt
+    for the agent to act on it.
+    """
     if not entries:
         return "No prior learnings recorded yet."
-    return "\n".join(f"- {e.type.value}: {e.title}" for e in entries)
+    lines = []
+    for e in entries:
+        content = (e.content or "").strip().replace("\n", " ")
+        clip = f": {content[:200]}" if content else ""
+        lines.append(f"- {e.type.value}: {e.title}{clip}")
+    return "\n".join(lines)
 
 
 def _model_for(agent: Agent, provider: LLMProvider, trust: float | None = None) -> str:

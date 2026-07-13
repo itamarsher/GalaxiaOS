@@ -15,7 +15,7 @@ import uuid
 from fastapi import APIRouter, HTTPException, Query, status
 from sqlalchemy import func, select
 
-from app.deps import CompanyDep, DbDep
+from app.deps import CompanyDep, CurrentUser, DbDep
 from app.models import Agent, ChatChannel, ChatMessage, ChatWait, DecisionRequest
 from app.models.enums import AgentRole, ChatChannelKind, ChatWaitStatus, DecisionStatus
 from app.runtime.queue import enqueue_task
@@ -29,6 +29,7 @@ from app.schemas import (
     DecisionOut,
 )
 from app.services import chat
+from app.services import decisions as decisions_svc
 
 router = APIRouter(prefix="/companies/{company_id}/chat", tags=["chat"])
 
@@ -199,7 +200,11 @@ async def list_messages(
 
 @router.post("/channels/{channel_id}/messages", response_model=ChatMessageOut)
 async def post_message(
-    company: CompanyDep, channel_id: uuid.UUID, body: ChatPostRequest, db: DbDep
+    company: CompanyDep,
+    channel_id: uuid.UUID,
+    body: ChatPostRequest,
+    db: DbDep,
+    user: CurrentUser,
 ):
     channel = await _load_channel(db, company, channel_id)
     message, woken = await chat.post_message(
@@ -211,12 +216,35 @@ async def post_message(
         thread_id=body.thread_id,
     )
 
-    # If this is a 1:1 DM with an agent and the founder's message didn't resume a
-    # parked agent (none was waiting), wake that agent with a fresh task so it
-    # reads and acts on the message — e.g. the founder steering the CEO live. The
-    # spawn coalesces if a task is already handling the DM.
+    # A structured decision (budget/hire/plan/external) has no separate widget: the
+    # founder resolves it by replying here. Classify this reply and, if it clearly
+    # approves or rejects the channel's pending decision, resolve it and resume the
+    # owning task — the same path the game's approve/reject buttons take. An
+    # ambiguous reply (a question/aside) leaves the decision open and falls through
+    # to the normal DM-steering behaviour below. Decisions live on the main
+    # timeline, so only main-timeline replies can resolve one.
+    resumed_decision_task: uuid.UUID | None = None
+    if body.thread_id is None:
+        resumed_decision_task = await decisions_svc.try_resolve_from_reply(
+            db,
+            company_id=company.id,
+            channel_id=channel.id,
+            reply=body.message,
+            user_id=user.id,
+        )
+
+    # If this is a 1:1 DM with an agent and the founder's message neither resumed a
+    # parked agent nor resolved a decision, wake that agent with a fresh task so it
+    # reads and acts on the message — e.g. the founder steering the CEO live, or
+    # answering a pending decision with a clarifying question. The spawn coalesces
+    # if a task is already handling the DM.
     spawned: uuid.UUID | None = None
-    if not woken and channel.kind == ChatChannelKind.direct and body.thread_id is None:
+    if (
+        not woken
+        and resumed_decision_task is None
+        and channel.kind == ChatChannelKind.direct
+        and body.thread_id is None
+    ):
         agent_members = [
             p.agent_id for p in await chat.participants(db, channel.id) if p.agent_id is not None
         ]
@@ -233,6 +261,8 @@ async def post_message(
     # Resume any agents that were waiting for this reply.
     for task_id in woken:
         await enqueue_task(task_id)
+    if resumed_decision_task is not None:
+        await enqueue_task(resumed_decision_task)
     if spawned is not None:
         await enqueue_task(spawned)
     return await _message_out(db, message)

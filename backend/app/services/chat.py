@@ -794,7 +794,10 @@ async def post_decision_dm(
     machinery (budget/plan/hire/external). The returned channel id is stored on the
     decision so resolving it can post a reply back into the same thread. Does NOT
     create a :class:`ChatWait` — the pending decision itself is the "waiting"
-    marker, and resolution flows through approve/reject, not a chat reply.
+    marker. Resolution flows through the founder's reply in this thread (classified
+    into approve/reject by ``app.services.decisions.try_resolve_from_reply``) or the
+    game's explicit approve/reject buttons; the reply path finds the pending
+    decision on the channel directly, so no wait is needed.
     """
     channel = await founder_dm(db, company_id=company_id, agent_id=agent_id)
     message = ChatMessage(
@@ -833,8 +836,9 @@ async def post_system_reply(
 
     Recorded as a founder message (``sender_agent_id`` NULL) so the thread reads as
     the founder answering. Deliberately bypasses :func:`post_message`'s wait
-    satisfaction — structured decisions resume via approve/reject, so this is a
-    display-only follow-up that must not also wake the task.
+    satisfaction — the resolver already resumes the owning task, so this closing
+    "✅ Approved / ❌ Rejected" note is a display-only follow-up that must not also
+    wake the task or re-enter decision resolution.
     """
     message = ChatMessage(
         company_id=company_id, channel_id=channel_id, sender_agent_id=None, body=body

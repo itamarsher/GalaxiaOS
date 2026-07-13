@@ -1,21 +1,23 @@
-"""Founder decision inbox: list pending, approve (resume task), reject (fail task)."""
+"""Founder decision inbox: list pending, approve (resume task), reject (resume + adapt).
+
+Resolution here is the game's explicit approve/reject click; the chat surface now
+resolves the same decisions by classifying a plain founder reply. Both paths share
+:mod:`app.services.decisions`, so they behave identically.
+"""
 
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime
 
 from fastapi import APIRouter, Body, HTTPException, status
 from sqlalchemy import select
 
 from app.deps import CompanyDep, CurrentUser, DbDep
-from app.models import Agent, DecisionRequest, MemoryEntry, Objective, Task
-from app.models.enums import DecisionStatus, MemoryType, TaskStatus
+from app.models import Agent, DecisionRequest, Objective, Task
+from app.models.enums import DecisionStatus
 from app.runtime.queue import enqueue_task
 from app.schemas import DecisionOut, DecisionResolveRequest
-from app.services import budget as budget_svc
-from app.services import chat as chat_svc
-from app.services import external_messages as ext
+from app.services import decisions as decisions_svc
 
 # Listing is company-scoped; resolve actions are by decision id (re-checked against membership).
 router = APIRouter(tags=["decisions"])
@@ -108,81 +110,6 @@ async def _load_decision(db, user, decision_id: uuid.UUID) -> DecisionRequest:
     return decision
 
 
-async def _apply_note(db, decision: DecisionRequest, note: str | None) -> None:
-    """Persist the founder's guidance and surface it to the agent on resume.
-
-    The note is stored on the decision and written to company memory so the
-    re-running agent recalls it — letting the founder *modify* how the action is
-    carried out, not just approve/reject it.
-    """
-    note = (note or "").strip()
-    if not note:
-        return
-    decision.payload = {**(decision.payload or {}), "founder_note": note}
-    await db.execute(
-        MemoryEntry.__table__.insert().values(
-            company_id=decision.company_id,
-            type=MemoryType.decision,
-            title=f"Founder guidance on: {decision.summary[:80]}",
-            content=note,
-        )
-    )
-
-
-def _ack_note(decision: DecisionRequest, *, note: str | None) -> str:
-    """The directive that makes a resuming agent acknowledge the founder's decision.
-
-    Stored on ``task.input['founder_ack']`` and surfaced once on resume (see
-    ``NativeBackend._inject_resume_notes``): an agent that escalated to the founder
-    and is now unparked by an approval should confirm back in the DM *before* it
-    carries out the approved action — so a founder who answers always gets an
-    immediate acknowledgment, not silence while the agent works.
-    """
-    note = (note or "").strip()
-    tail = f' They added a note: "{note[:400]}".' if note else ""
-    return (
-        f'The founder APPROVED your request: "{decision.summary[:200]}".{tail} '
-        + chat_svc.FOUNDER_ACK_DIRECTIVE
-    )
-
-
-def _reject_note(decision: DecisionRequest, *, note: str | None) -> str:
-    """The directive a resuming agent gets when the founder DECLINES its request.
-
-    A rejection no longer kills the task: it resumes so the agent can acknowledge
-    and adapt (the concrete action stays blocked — see ``consume_rejection_grant``).
-    This tells it what was declined, the founder's reason, and to confirm back and
-    take a different path rather than silently stopping or re-requesting the same
-    thing.
-    """
-    note = (note or "").strip()
-    tail = f' Their reason: "{note[:400]}".' if note else ""
-    return (
-        f'The founder DECLINED your request: "{decision.summary[:200]}".{tail} '
-        "Do not carry out that action or re-request it unchanged — adapt: take a "
-        "different approach, or ask them a clarifying follow-up. "
-        + chat_svc.FOUNDER_ACK_DIRECTIVE
-    )
-
-
-async def _post_resolution_dm(
-    db, decision: DecisionRequest, *, resolution: str, note: str | None
-) -> None:
-    """Post the founder's verdict back into the decision's DM thread.
-
-    Keeps the consolidated chat view honest: a structured decision surfaced as a
-    founder DM gets a closing message when it's approved/rejected, so the thread
-    reflects the outcome instead of going silent.
-    """
-    if decision.channel_id is None:
-        return
-    mark = "✅ Approved" if resolution == "approved" else "❌ Rejected"
-    body = f"{mark}." + (f" {note.strip()}" if (note or "").strip() else "")
-    await chat_svc.post_system_reply(
-        db, company_id=decision.company_id, channel_id=decision.channel_id, body=body
-    )
-
-
 @router.post("/decisions/{decision_id}/approve", response_model=DecisionOut)
 async def approve(
     decision_id: uuid.UUID,
@@ -191,40 +118,9 @@ async def approve(
     body: DecisionResolveRequest | None = Body(default=None),
 ):
     decision = await _load_decision(db, user, decision_id)
-    decision.status = DecisionStatus.approved
-    decision.resolved_by_user_id = user.id
-    decision.resolved_at = datetime.now(UTC)
-    await _apply_note(db, decision, body.note if body else None)
-    await _post_resolution_dm(db, decision, resolution="approved", note=body.note if body else None)
-
-    # Over-budget approvals carry the shortfall: authorising the spend lifts the
-    # budget ceiling by that amount so the action goes through on resume. (The
-    # actual top-up payment is wired in separately — this just clears the cap.)
-    increase = int((decision.payload or {}).get("budget_increase_cents") or 0)
-    if increase > 0:
-        await budget_svc.increase_limit(
-            db, company_id=decision.company_id, additional_cents=increase
-        )
-
-    resumed_task_id: uuid.UUID | None = None
-    if decision.task_id:
-        task = await db.get(Task, decision.task_id)
-        # ``running`` is accepted alongside ``waiting_approval`` to recover tasks
-        # that an earlier bug parked without flipping their status off ``running``.
-        if task is not None and task.status in (
-            TaskStatus.waiting_approval,
-            TaskStatus.running,
-        ):
-            task.status = TaskStatus.queued
-            resumed_task_id = task.id
-            # When the escalation was surfaced in the agent↔founder DM, have the
-            # resuming agent confirm back there first — an approval is the founder
-            # replying, and they should hear "got it, doing X" right away.
-            if decision.channel_id is not None:
-                task.input = {
-                    **(task.input or {}),
-                    "founder_ack": _ack_note(decision, note=body.note if body else None),
-                }
+    resumed_task_id = await decisions_svc.resolve_decision(
+        db, decision, approved=True, user_id=user.id, note=body.note if body else None
+    )
     await db.commit()
     if resumed_task_id is not None:
         await enqueue_task(resumed_task_id)
@@ -239,32 +135,9 @@ async def reject(
     body: DecisionResolveRequest | None = Body(default=None),
 ):
     decision = await _load_decision(db, user, decision_id)
-    decision.status = DecisionStatus.rejected
-    decision.resolved_by_user_id = user.id
-    decision.resolved_at = datetime.now(UTC)
-    await _apply_note(db, decision, body.note if body else None)
-    await _post_resolution_dm(db, decision, resolution="rejected", note=body.note if body else None)
-    # If this gated an outbound message, mark its indexed record rejected so the
-    # communications log shows it was never sent.
-    await ext.mark_decision_resolved(db, decision_id=decision.id, approved=False)
-    resumed_task_id: uuid.UUID | None = None
-    if decision.task_id:
-        task = await db.get(Task, decision.task_id)
-        if task is not None and task.status in (
-            TaskStatus.waiting_approval,
-            TaskStatus.running,
-        ):
-            # A rejection is the founder replying "no", not a dead end: resume the
-            # task so the agent acknowledges the decline and adapts (its transcript
-            # is kept so it continues with context). The declined action itself
-            # stays blocked at the gate (consume_rejection_grant).
-            task.status = TaskStatus.queued
-            resumed_task_id = task.id
-            if decision.channel_id is not None:
-                task.input = {
-                    **(task.input or {}),
-                    "founder_ack": _reject_note(decision, note=body.note if body else None),
-                }
+    resumed_task_id = await decisions_svc.resolve_decision(
+        db, decision, approved=False, user_id=user.id, note=body.note if body else None
+    )
     await db.commit()
     if resumed_task_id is not None:
         await enqueue_task(resumed_task_id)
