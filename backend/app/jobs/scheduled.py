@@ -156,6 +156,32 @@ async def monitor_failed_tasks(ctx: dict) -> dict:
     return {"reviewed": result["reviewed"], "enqueued": len(result["review_task_ids"])}
 
 
+async def monitor_render_platform(ctx: dict) -> dict:
+    """Scan our own Render services/deploys for failures and escalate each to an
+    auto-fix tracker issue.
+
+    Runs UNSCOPED (platform-level infrastructure, not a single tenant). No-op
+    unless error monitoring + the Render scan are enabled and a Render key is set.
+    Counts each escalation against the platform company's ``error_escalated`` tally
+    when a platform company exists.
+    """
+    from app.services import error_monitor
+
+    result = await error_monitor.scan_render_platform()
+    filed = int(result.get("issues_filed") or 0)
+    if filed:
+        from app.models.enums import EventType
+        from app.services import event_counters, platform_company
+
+        async with SessionLocal() as db:
+            company_id = await platform_company.platform_company_id(db)
+        if company_id is not None:
+            await event_counters.record_standalone(
+                company_id=company_id, event_type=EventType.error_escalated, n=filed
+            )
+    return result
+
+
 async def run_business_cycle(ctx: dict) -> dict:
     """Kick off a recurring business-cycle run for each active company."""
     if not settings.business_cycle_enabled:

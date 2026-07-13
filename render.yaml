@@ -122,6 +122,21 @@ envVarGroups:
         value: "true"
       - key: ABOS_RATE_LIMIT_PER_MINUTE
         value: "120"
+      # System-wide error monitoring: escalate code errors (any logged traceback)
+      # and Render platform failures (failed deploys / suspended services) to
+      # deduplicated auto-fix tracker issues. Needs a GitHub token + repo, and a
+      # Render API key for the platform scan. All secrets are sync:false, so set
+      # them per deployment; the feature no-ops until they're present.
+      - key: ABOS_ERROR_MONITOR_ENABLED
+        value: "true"
+      - key: ABOS_GITHUB_TOKEN
+        sync: false
+      - key: ABOS_GITHUB_REPO
+        sync: false
+      - key: ABOS_RENDER_API_KEY
+        sync: false
+      - key: ABOS_RENDER_OWNER_ID
+        sync: false
       # NB: landing-page hosting + domain connection (Cloudflare Pages + DNS) are
       # bring-your-own-key — each company sets its own Cloudflare API token + account
       # id in Settings. There are intentionally no global Cloudflare env vars here.

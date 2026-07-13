@@ -454,7 +454,9 @@ class Settings(BaseSettings):
     # ``ABOS_ISSUE_TRACKER=none`` to force the tracker off.
     issue_tracker: str = "github"  # github | none | simulated
     github_token: str = ""
-    github_repo: str = "itamarsher/just-launch-it"
+    # The ``owner/repo`` the platform files issues against. Set per deployment via
+    # ``ABOS_GITHUB_REPO``; empty by default so no repository is assumed.
+    github_repo: str = ""
 
     # ── Platform (dogfooding) company: GalaxiaOS running on itself ────────────
     # One real company carries ``is_platform=True`` (services/platform_company.py):
@@ -488,11 +490,10 @@ class Settings(BaseSettings):
     # environment: GalaxiaOS runs here and is allowed to experiment, self-modify,
     # and deploy.
     #
-    # TODO(production-split): before onboarding the FIRST external users, stand up a
-    # SEPARATE production environment (own Render services + database + secrets) with
-    # environment="production" — so real customer businesses never share infra with
-    # GalaxiaOS's own experimentation/self-deploy loop. See
-    # docs/DOGFOODING_OPERATIONS.md#environments.
+    # For a hardened production deployment, run a SEPARATE environment (its own
+    # services + database + secrets) with environment="production", so customer
+    # businesses never share infrastructure with a self-modifying/self-deploy loop.
+    # See docs/DOGFOODING_OPERATIONS.md#environments.
     environment: str = "dogfooding"  # dogfooding | production
 
     # Render deployment observability (so agents can see what's happening with our
@@ -517,6 +518,32 @@ class Settings(BaseSettings):
     platform_failure_monitor_batch: int = 5
     platform_failure_monitor_minute: int = 22  # once/hour (offset from :07 / :37)
 
+    # ── System-wide error monitoring → auto-fix issues ────────────────────────
+    # Captures errors from two sources and escalates each to a deduplicated
+    # tracker issue that the Claude Code auto-fix pipeline can pick up:
+    #   1. Code errors — any exception logged with a traceback anywhere in the API
+    #      or worker (the request 500 handler, cron jobs, the worker loop) is
+    #      forwarded by a logging handler (app.observability) to error_monitor.
+    #   2. Render platform errors — a cron scans our own Render services/deploys
+    #      (via the read-only Render API) for failed deploys and suspended
+    #      services and files an issue.
+    # Off by default (needs a tracker + a real deployment); flip on in the hosted
+    # env. Issues are filed with ``error_monitor_labels`` so they route to the
+    # right automation — the default routes through issue-triage, which adds
+    # ``claude-implement``; set it to ``claude-implement`` to auto-fix directly.
+    error_monitor_enabled: bool = False
+    error_monitor_labels: str = "bug,auto-detected"  # comma-separated tracker labels
+    # Don't refile the same fingerprint within this window (in-process dedup, on
+    # top of the tracker's own title-based dedup+"+1" demand counting).
+    error_monitor_cooldown_minutes: int = 60
+    # Max distinct error fingerprints to remember for the cooldown window.
+    error_monitor_cache_size: int = 512
+    # Render platform scan cron (once/hour at :52, offset from the others). Gated
+    # by error_monitor_enabled AND a Render API key being set.
+    render_monitor_enabled: bool = True
+    render_monitor_minute: int = 52
+    render_monitor_deploy_lookback: int = 5  # deploys inspected per service
+
     # Investor review (onboarding): three agentic investors critique the venture.
     investor_review_enabled: bool = True
     investor_model: str = ""  # empty -> provider's planner-tier default
@@ -524,11 +551,11 @@ class Settings(BaseSettings):
     # Public URL of THIS API as seen from the open internet (no trailing slash),
     # e.g. https://abos-api.onrender.com. Landing pages are static and hosted on a
     # third-party origin (Cloudflare Pages, *.pages.dev), so their built-in
-    # email/waitlist capture form must POST to an absolute URL back here. Defaults
-    # to the hosted API; override per environment. When empty, native on-page lead
-    # capture is disabled (the page still publishes; the growth agent is told to
-    # link to a hosted form instead).
-    public_api_base_url: str = "https://abos-api.onrender.com"
+    # email/waitlist capture form must POST to an absolute URL back here. Set per
+    # environment via ``ABOS_PUBLIC_API_BASE_URL``. When empty (the default),
+    # native on-page lead capture is disabled (the page still publishes; the
+    # growth agent is told to link to a hosted form instead).
+    public_api_base_url: str = ""
 
     # Google Drive one-click connect (OAuth authorization-code flow). The
     # deployment registers ONE Google Cloud OAuth client (Drive scope) and sets
@@ -540,9 +567,9 @@ class Settings(BaseSettings):
     google_oauth_client_id: str = ""
     google_oauth_client_secret: str = ""
     # Where to send the founder's browser once the OAuth callback finishes — the
-    # web app, so we can land them back on the company's Settings page. Defaults to
-    # the hosted web app; override per environment (no trailing slash).
-    web_base_url: str = "https://abos-web.onrender.com"
+    # web app, so we can land them back on the company's Settings page. Set per
+    # environment via ``ABOS_WEB_BASE_URL`` (no trailing slash).
+    web_base_url: str = ""
 
     # CORS: browser origins allowed to call the API. Comma-separated in the
     # environment, e.g.

@@ -23,6 +23,7 @@ from app.models.chat import (
 from app.models.comms import ExternalMessage
 from app.models.company import Company
 from app.models.crm import CrmActivity, CrmContact, CrmDeal
+from app.models.event_counter import EventCounter
 from app.models.feature_request import FeatureRequest, FeatureRequestVote
 from app.models.file import CompanyFile
 from app.models.founder import FounderDigest
@@ -73,6 +74,7 @@ __all__ = [
     "DecisionRequest",
     "MemoryEntry",
     "MetricSignal",
+    "EventCounter",
     "InvestmentReview",
     "ApiKey",
     "PlatformBillingAccount",

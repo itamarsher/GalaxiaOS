@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
 import contextvars
 import json
 import logging
 import sys
 import time
+import traceback
 import uuid
 
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -36,13 +38,72 @@ class JsonFormatter(logging.Formatter):
         return json.dumps(payload, default=str)
 
 
-def configure_logging(level: str = "INFO", json_logs: bool = True) -> None:
+#: Loggers we must never escalate — the escalation path itself and its
+#: dependencies — or a failure while reporting an error would report itself.
+_ESCALATION_SKIP_PREFIXES = ("abos.error_monitor", "abos.events", "httpx", "httpcore")
+
+
+class ErrorEscalationHandler(logging.Handler):
+    """Forward every ``ERROR``+ log record carrying a traceback to the error monitor.
+
+    This is the single, system-wide capture point for code errors: because the
+    request-500 handler, the worker loop, and the cron jobs all log their failures
+    with ``exc_info`` through the standard logging tree, attaching this one handler
+    to the root logger escalates all of them without touching each call site.
+
+    Emission is fire-and-forget on the running event loop and fully guarded, so it
+    never blocks or breaks the logging call. When no loop is running (a purely
+    synchronous context) it simply skips — the API and worker both run under a loop.
+    """
+
+    def __init__(self, level: int = logging.ERROR) -> None:
+        super().__init__(level=level)
+
+    def emit(self, record: logging.LogRecord) -> None:  # noqa: D401
+        try:
+            if record.levelno < logging.ERROR or not record.exc_info:
+                return
+            if record.name.startswith(_ESCALATION_SKIP_PREFIXES):
+                return
+            exc_type, exc_value, _tb = record.exc_info
+            if exc_type is None:
+                return
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                return  # no event loop; escalation is best-effort
+            error_type = getattr(exc_type, "__name__", str(exc_type))
+            message = str(exc_value) if exc_value else record.getMessage()
+            tb_text = "".join(traceback.format_exception(exc_type, exc_value, _tb))
+            context = dict(getattr(record, "extra_fields", None) or {})
+            context.setdefault("event", record.getMessage())
+            from app.services import error_monitor
+
+            loop.create_task(
+                error_monitor.report_code_error(
+                    error_type=error_type,
+                    message=message,
+                    where=record.name,
+                    traceback_text=tb_text,
+                    context=context,
+                )
+            )
+        except Exception:  # noqa: BLE001 — a logging handler must never raise
+            pass
+
+
+def configure_logging(
+    level: str = "INFO", json_logs: bool = True, escalate_errors: bool = False
+) -> None:
     handler = logging.StreamHandler(sys.stdout)
     handler.setFormatter(
         JsonFormatter() if json_logs else logging.Formatter("%(levelname)s %(name)s %(message)s")
     )
+    handlers: list[logging.Handler] = [handler]
+    if escalate_errors:
+        handlers.append(ErrorEscalationHandler())
     root = logging.getLogger()
-    root.handlers = [handler]
+    root.handlers = handlers
     root.setLevel(level.upper())
 
 
