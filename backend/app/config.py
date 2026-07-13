@@ -503,9 +503,10 @@ class Settings(BaseSettings):
     # render_* tools report they're not connected.
     render_api_key: str = ""
     render_api_base_url: str = "https://api.render.com/v1"
-    # Owner (team/user) id for the Render logs API — required by GET /v1/logs, which
-    # the `get_render_logs` debug tool uses. Without it, log reads report they need
-    # configuring (deploy-status tools still work with just the key).
+    # Owner (team/user) id for the Render logs API. Optional: when empty it is
+    # resolved automatically from the API key (GET /v1/owners) and cached, so the
+    # key alone is enough. Only set this to disambiguate a key that can see more
+    # than one owner.
     render_owner_id: str = ""
 
     # Reliability monitor: the platform company watches its OWN failed agent tasks,

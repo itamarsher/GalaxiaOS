@@ -90,13 +90,43 @@ async def test_get_logs_parses_and_collapses_whitespace():
 
 
 @pytest.mark.asyncio
-async def test_get_logs_requires_owner_id():
-    client = RenderClient(
-        api_key="k", owner_id="", transport=httpx.MockTransport(lambda r: httpx.Response(200, json={}))
-    )
+async def test_get_logs_auto_resolves_owner_from_key():
+    """With no explicit owner id, it is derived from the key via GET /v1/owners."""
+    from app.integrations.render import _OWNER_ID_CACHE
+
+    _OWNER_ID_CACHE.clear()
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.url.path.endswith("/owners"):
+            return httpx.Response(200, json=[{"owner": {"id": "own-9", "name": "Acme", "email": "a@b.c", "type": "team"}}])
+        assert req.url.path.endswith("/logs")
+        assert req.url.params.get("ownerId") == "own-9"      # the resolved id was used
+        return httpx.Response(200, json={"logs": [{"timestamp": "t", "message": "ok"}]})
+
+    client = RenderClient(api_key="auto-1", owner_id="", transport=httpx.MockTransport(handler))
+    logs = await client.get_logs("srv-1")
+    assert [ln.message for ln in logs] == ["ok"]
+    _OWNER_ID_CACHE.clear()
+
+
+@pytest.mark.asyncio
+async def test_resolve_owner_id_ambiguous_raises():
+    """A key that can see several owners is ambiguous — ask for the env var."""
+    from app.integrations.render import _OWNER_ID_CACHE
+
+    _OWNER_ID_CACHE.clear()
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=[
+            {"owner": {"id": "own-a", "name": "A", "email": "", "type": "team"}},
+            {"owner": {"id": "own-b", "name": "B", "email": "", "type": "team"}},
+        ])
+
+    client = RenderClient(api_key="auto-2", owner_id="", transport=httpx.MockTransport(handler))
     with pytest.raises(RenderError) as exc:
         await client.get_logs("srv-1")
-    assert "owner id" in str(exc.value).lower()
+    assert "ABOS_RENDER_OWNER_ID" in str(exc.value)
+    _OWNER_ID_CACHE.clear()
 
 
 @pytest.mark.asyncio
