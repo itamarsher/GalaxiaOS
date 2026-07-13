@@ -15,7 +15,10 @@ promoter tools are authorized against the acting company's ``is_platform`` flag,
 only the platform company's agent can file from the cross-company backlog.
 Promotion routes through the :mod:`app.integrations.issues` seam
 (``report_issue``), which keeps GitHub-side dedup/"+1" voting intact and records an
-audit-trail memory.
+audit-trail memory. Once the work ships, the platform agent closes the loop with
+``deliver_feature_request`` — flipping the entry to ``delivered`` and propagating a
+notice to the agents that asked so they resume the blocked work (the scheduled
+reconciler does the same automatically when a promoted issue is closed).
 
 ``open_issue`` remains available for the Platform agent to file a one-off issue
 directly. Filing/promoting are platform/meta actions — no budget charge.
@@ -159,6 +162,28 @@ SPECS: list[ToolSpec] = [
         },
     ),
     ToolSpec(
+        name="deliver_feature_request",
+        description=(
+            "abos only: mark a backlog entry as delivered/ready once the capability has "
+            "been implemented (or the bug fixed). Pass the feature_request_id from "
+            "`list_feature_requests`. This flips the entry to 'delivered' and propagates a "
+            "notice to every company that requested it — naming the specific agents that "
+            "asked — so they resume the work that was blocked. Use this to close the loop by "
+            "hand; the scheduled reconciler does the same automatically when a promoted "
+            "entry's tracker issue is closed."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "feature_request_id": {
+                    "type": "string",
+                    "description": "The backlog entry id to mark delivered.",
+                },
+            },
+            "required": ["feature_request_id"],
+        },
+    ),
+    ToolSpec(
         name="open_issue",
         description=(
             "Platform agent: file a tracker issue (bug or feature request) directly. It "
@@ -197,8 +222,9 @@ async def _record_request(
 ) -> ToolOutcome:
     """Record an agent-initiated bug/capability request in the demand backlog.
 
-    Agent context has no specific user, so the vote is attributed to the company
-    (``user_id=None``). Deduplicated by title with a running demand count.
+    Attributed to the requesting *agent* (and its task), not a user, so the platform
+    can see which agent hit the gap and route the delivery back to it. Deduplicated
+    by title with a running demand count.
     """
     outcome = await fr_svc.record_request(
         db,
@@ -207,6 +233,8 @@ async def _record_request(
         details=details,
         company_id=task.company_id,
         user_id=None,
+        agent_id=task.agent_id,
+        task_id=task.id,
     )
     if outcome is None:
         return ToolOutcome(
@@ -272,12 +300,18 @@ async def _list_feature_requests(db, ctx, *, agent: Agent, task: Task, args: dic
     lines = []
     for fr in entries:
         attribution = await fr_svc.load_attribution(db, fr.id)
-        companies = sorted({name for name, _e, _d in attribution})
+        companies = sorted({a.company_name for a in attribution})
+        agents = sorted({a.agent_name for a in attribution if a.agent_name})
         company_note = ", ".join(companies[:3]) + ("…" if len(companies) > 3 else "")
+        agent_note = (
+            "; agents: " + ", ".join(agents[:3]) + ("…" if len(agents) > 3 else "")
+            if agents
+            else ""
+        )
         lines.append(
             f"- [{fr.kind.value}] {fr.title!r} — {fr.vote_count} vote(s) "
             f"from {len(companies)} compan{'y' if len(companies) == 1 else 'ies'} "
-            f"({company_note})\n  id: {fr.id}"
+            f"({company_note}{agent_note})\n  id: {fr.id}"
         )
     return ToolOutcome(
         observation=(
@@ -337,6 +371,36 @@ async def _promote_feature_request(db, ctx, *, agent: Agent, task: Task, args: d
         observation=(
             f"Promoted {fr.title!r} (demand {fr.vote_count}); {verb} issue #{result.number} "
             f"via {result.provider} ({result.url}). GitHub demand now {result.demand}."
+        )
+    )
+
+
+async def _deliver_feature_request(db, ctx, *, agent: Agent, task: Task, args: dict) -> ToolOutcome:
+    if not await _is_abos_admin_company(db, task.company_id):
+        return ToolOutcome(
+            observation=(
+                "Not authorized: only the abos company can mark backlog entries delivered."
+            ),
+            is_error=True,
+        )
+
+    try:
+        fr_id = uuid.UUID(str(args["feature_request_id"]).strip())
+    except (ValueError, TypeError):
+        return ToolOutcome(observation="Invalid feature_request_id.", is_error=True)
+
+    fr = await fr_svc.get(db, fr_id)
+    if fr is None:
+        return ToolOutcome(observation="No backlog entry with that id.", is_error=True)
+    if fr.status is FeatureRequestStatus.delivered:
+        return ToolOutcome(observation=f"{fr.title!r} was already marked delivered.")
+
+    notified = await promoter.deliver_request(db, fr)
+    return ToolOutcome(
+        observation=(
+            f"Marked {fr.title!r} delivered and notified {notified} requesting "
+            f"compan{'y' if notified == 1 else 'ies'} — the agents that asked will resume "
+            "the work that was blocked."
         )
     )
 
@@ -466,5 +530,6 @@ HANDLERS = {
     "request_capability": _request_capability,
     "list_feature_requests": _list_feature_requests,
     "promote_feature_request": _promote_feature_request,
+    "deliver_feature_request": _deliver_feature_request,
     "open_issue": _open_issue,
 }

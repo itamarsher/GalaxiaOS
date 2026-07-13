@@ -239,3 +239,199 @@ async def test_list_feature_requests_tool_gated(session_factory):
         )
     assert outcome.is_error is True
     assert "abos" in outcome.observation.lower()
+
+
+# ── agent attribution ─────────────────────────────────────────────────────────
+
+
+@requires_db
+async def test_agent_initiated_request_attributes_the_agent(session_factory):
+    """An agent's request records the requesting agent + task, not a user."""
+    async with session_factory() as db:
+        cid, _uid = await _make_company(db)
+        task = await _running_task(db, cid)
+        await db.commit()
+
+    async with session_factory() as db:
+        task = await db.get(Task, task.id)
+        agent = await db.get(Agent, task.agent_id)
+        await execute_tool(
+            db, object(), agent=agent, task=task,
+            name="request_capability",
+            args={"title": "Slack tool", "details": "post updates"},
+        )
+        await db.commit()
+
+    async with session_factory() as db:
+        vote = await db.scalar(select(FeatureRequestVote))
+    assert vote.user_id is None
+    assert vote.agent_id == task.agent_id
+    assert vote.task_id == task.id
+
+
+@requires_db
+async def test_two_agents_in_one_company_each_hold_a_vote(session_factory):
+    """Distinct agents asking the same thing → one entry, two agent-attributed votes."""
+    async with session_factory() as db:
+        cid, _uid = await _make_company(db)
+        t1 = await _running_task(db, cid)
+        # A second, different agent in the same company.
+        a2 = Agent(company_id=cid, role=AgentRole.growth, name="Growth")
+        db.add(a2)
+        await db.flush()
+        t2 = Task(
+            company_id=cid, run_id=t1.run_id, root_run_id=t1.root_run_id,
+            agent_id=a2.id, goal="g2", status=TaskStatus.running,
+        )
+        db.add(t2)
+        await db.commit()
+        t1_id, t2_id = t1.id, t2.id
+
+    for tid in (t1_id, t2_id, t1_id):  # first agent asks twice → still one vote
+        async with session_factory() as db:
+            task = await db.get(Task, tid)
+            agent = await db.get(Agent, task.agent_id)
+            await execute_tool(
+                db, object(), agent=agent, task=task,
+                name="request_capability",
+                args={"title": "Slack tool", "details": "post updates"},
+            )
+            await db.commit()
+
+    async with session_factory() as db:
+        frs = (await db.scalars(select(FeatureRequest))).all()
+        votes = (await db.scalars(select(FeatureRequestVote))).all()
+        attribution = await fr_svc.load_attribution(db, frs[0].id)
+    assert len(frs) == 1 and frs[0].vote_count == 2  # two distinct agents
+    assert len(votes) == 2
+    assert sorted(a.agent_name for a in attribution) == ["Growth", "Platform"]
+
+
+# ── platform marks ready (deliver_feature_request) ────────────────────────────
+
+
+@requires_db
+async def test_deliver_feature_request_gated_to_platform(session_factory):
+    async with session_factory() as db:
+        cid, uid = await _make_company(db, with_member=True, is_platform=False)
+        out = await fr_svc.record_request(
+            db, kind="capability", title="X", details="d", company_id=cid, user_id=uid
+        )
+        task = await _running_task(db, cid)
+        await db.commit()
+        fr_id = out.feature_id
+    async with session_factory() as db:
+        task = await db.get(Task, task.id)
+        agent = await db.get(Agent, task.agent_id)
+        outcome = await execute_tool(
+            db, object(), agent=agent, task=task,
+            name="deliver_feature_request", args={"feature_request_id": str(fr_id)},
+        )
+    assert outcome.is_error is True
+    assert "authorized" in outcome.observation.lower()
+
+
+@requires_db
+async def test_deliver_feature_request_marks_delivered_and_notifies(session_factory, monkeypatch):
+    notices: list[dict] = []
+
+    async def _capture(_db, **kwargs):
+        notices.append(kwargs)
+        return None
+
+    monkeypatch.setattr("app.services.memory.write", _capture)
+
+    async with session_factory() as db:
+        # A requesting tenant company whose agent asked.
+        req_cid, _uid = await _make_company(db)
+        req_task = await _running_task(db, req_cid)
+        req_task = await db.get(Task, req_task.id)
+        req_agent = await db.get(Agent, req_task.agent_id)
+        await execute_tool(
+            db, object(), agent=req_agent, task=req_task,
+            name="request_capability",
+            args={"title": "Slack tool", "details": "post updates"},
+        )
+        # The platform company + agent that will mark it ready.
+        plat_cid, _puid = await _make_company(db, is_platform=True)
+        plat_task = await _running_task(db, plat_cid)
+        await db.commit()
+        fr_id = (await db.scalar(select(FeatureRequest))).id
+
+    async with session_factory() as db:
+        plat_task = await db.get(Task, plat_task.id)
+        plat_agent = await db.get(Agent, plat_task.agent_id)
+        outcome = await execute_tool(
+            db, object(), agent=plat_agent, task=plat_task,
+            name="deliver_feature_request", args={"feature_request_id": str(fr_id)},
+        )
+        await db.commit()
+
+    assert outcome.is_error is False
+    assert "delivered" in outcome.observation.lower()
+    async with session_factory() as db:
+        fr = await db.get(FeatureRequest, fr_id)
+    assert fr.status is FeatureRequestStatus.delivered
+    # The requesting company got a notice that names its agent.
+    assert len(notices) == 1
+    assert notices[0]["company_id"] == req_cid
+    assert "Platform" in notices[0]["content"]  # the agent that asked is addressed
+    assert notices[0]["structured"]["kind"] == "capability_delivered"
+
+
+# ── founder-facing view (list_for_company) ────────────────────────────────────
+
+
+@requires_db
+async def test_list_for_company_shows_status_and_requesters(session_factory):
+    async with session_factory() as db:
+        cid, uid = await _make_company(db)
+        other_cid, other_uid = await _make_company(db)
+        # This company's founder asks for one thing…
+        await fr_svc.record_request(
+            db, kind="capability", title="Real web search",
+            details="need it", company_id=cid, user_id=uid,
+        )
+        # …another company asks for something else (must NOT leak into cid's view).
+        await fr_svc.record_request(
+            db, kind="bug", title="Someone else's bug",
+            details="x", company_id=other_cid, user_id=other_uid,
+        )
+        await db.commit()
+
+    async with session_factory() as db:
+        mine = await fr_svc.list_for_company(db, company_id=cid)
+    assert len(mine) == 1
+    cr = mine[0]
+    assert cr.feature_request.title == "Real web search"
+    assert cr.feature_request.status is FeatureRequestStatus.open
+    assert len(cr.attributions) == 1
+    assert cr.attributions[0].user_email is not None
+
+
+@requires_db
+async def test_feature_requests_endpoint_serializes_for_founder(session_factory):
+    """The founder API maps the service output to the response DTO, scoped to the company."""
+    from types import SimpleNamespace
+
+    from app.api.companies import list_feature_requests
+
+    async with session_factory() as db:
+        cid, _uid = await _make_company(db)
+        task = await _running_task(db, cid)
+        task = await db.get(Task, task.id)
+        agent = await db.get(Agent, task.agent_id)
+        await execute_tool(
+            db, object(), agent=agent, task=task,
+            name="request_capability",
+            args={"title": "Slack tool", "details": "post updates"},
+        )
+        await db.commit()
+
+    async with session_factory() as db:
+        out = await list_feature_requests(company=SimpleNamespace(id=cid), db=db)
+    assert len(out) == 1
+    assert out[0].title == "Slack tool"
+    assert out[0].kind == "capability"
+    assert out[0].status == "open"
+    assert out[0].requesters[0].agent_name == "Platform"

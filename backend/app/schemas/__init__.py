@@ -656,5 +656,34 @@ class HireAgentRequest(BaseModel):
     listing_id: uuid.UUID
 
 
+# ── Feature requests (capabilities the platform delivers) ────────────────────
+class FeatureRequesterOut(BaseModel):
+    """Who, inside this company, asked for a capability — an agent or the founder."""
+
+    agent_id: uuid.UUID | None = None
+    agent_name: str | None = None
+    user_email: str | None = None
+    details: str | None = None
+
+
+class FeatureRequestOut(BaseModel):
+    """A capability/bug this company requested, with its delivery status.
+
+    The founder-facing view of the platform backlog: what the company's agents (and
+    founders) asked the platform for, and whether it has been delivered.
+    """
+
+    id: uuid.UUID
+    kind: str
+    title: str
+    details: str
+    status: str  # open | promoted | delivered
+    vote_count: int
+    github_issue_number: int | None = None
+    github_issue_url: str | None = None
+    created_at: datetime
+    requesters: list[FeatureRequesterOut]
+
+
 # Resolve the forward reference from TaskDetailOut -> DecisionOut.
 TaskDetailOut.model_rebuild()

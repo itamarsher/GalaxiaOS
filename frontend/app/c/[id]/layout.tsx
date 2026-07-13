@@ -25,6 +25,7 @@ const SPACES = [
   ["governance", "Governance"],
   ["communications", "Comms"],
   ["memory", "Memory"],
+  ["capabilities", "Capabilities"],
   ["files", "Files"],
   ["marketplace", "Marketplace"],
   ["copilot", "Copilot"],
