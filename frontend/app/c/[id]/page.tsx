@@ -55,18 +55,43 @@ export default function Overview() {
 
   // Reset this company to a fresh draft: wipes its generated org and all
   // operational state (tasks, runs, budget spend, memory, chat, sites…) and
-  // rebuilds the default fleet, keeping the mission and saved API keys. Lands at
-  // plan-approval, so we return to onboarding to review and relaunch.
+  // rebuilds the default fleet, keeping the saved API keys. Lands at
+  // plan-approval, so we return to onboarding to review and relaunch. The founder
+  // can edit the mission as part of the relaunch (prefilled with the current one).
   const [resetting, setResetting] = useState(false);
+  const [editingReset, setEditingReset] = useState(false);
+  const [missionText, setMissionText] = useState("");
+  const [constraintsText, setConstraintsText] = useState("");
+
+  const openResetEditor = async () => {
+    // Prefill the editor with the current mission so a reset defaults to "keep it".
+    setEditingReset(true);
+    try {
+      const m = await api.mission(id);
+      setMissionText(m.mission_text ?? "");
+      setConstraintsText((m.constraints ?? []).join("\n"));
+    } catch {
+      // Non-fatal: the founder can still type a mission (or leave it and reset).
+    }
+  };
+
   const resetCompany = async () => {
+    const mission = missionText.trim();
+    if (mission.length < 4) {
+      alert("The mission can't be empty — describe what this business should do.");
+      return;
+    }
     if (!window.confirm(
       "Reset this company? This wipes its agents, tasks, budget history, memory and " +
-      "activity and rebuilds a fresh draft to relaunch. Its mission and saved API keys " +
-      "are preserved. This cannot be undone."
+      "activity and rebuilds a fresh draft to relaunch with the mission below. Saved API " +
+      "keys are preserved. This cannot be undone."
     )) return;
     setResetting(true);
     try {
-      await api.resetCompany(id);
+      await api.resetCompany(id, {
+        mission_text: mission,
+        constraints: constraintsText.split("\n").map((c) => c.trim()).filter(Boolean),
+      });
       alert("Company reset — rebuilt as a fresh draft. Review the plan and relaunch when ready.");
       router.push("/");
     } catch (e) {
@@ -188,14 +213,50 @@ export default function Overview() {
         <div className="step">Danger zone</div>
         <p className="muted">
           Reset wipes this company&apos;s agents, tasks, budget history, memory and activity and
-          rebuilds a fresh draft to relaunch — keeping its mission and saved API keys. Delete
-          removes the company and everything under it. Neither can be undone.
+          rebuilds a fresh draft to relaunch — keeping your saved API keys, and letting you edit
+          the mission first. Delete removes the company and everything under it. Neither can be
+          undone.
         </p>
+        {editingReset && (
+          <div style={{ marginBottom: 12 }}>
+            <label className="muted" style={{ fontSize: 12, display: "block", marginBottom: 4 }}>
+              Mission (edit before relaunching, or leave as-is)
+            </label>
+            <textarea
+              value={missionText}
+              onChange={(e) => setMissionText(e.target.value)}
+              rows={4}
+              placeholder="Describe what this business should do…"
+              style={{ width: "100%", resize: "vertical" }}
+            />
+            <label className="muted" style={{ fontSize: 12, display: "block", margin: "8px 0 4px" }}>
+              Constraints (optional, one per line)
+            </label>
+            <textarea
+              value={constraintsText}
+              onChange={(e) => setConstraintsText(e.target.value)}
+              rows={2}
+              placeholder="e.g. Never spend more than $50/day&#10;Only sell in the EU"
+              style={{ width: "100%", resize: "vertical" }}
+            />
+          </div>
+        )}
         <div className="btnrow">
-          <button className="ghost danger" disabled={resetting || deleting} onClick={resetCompany}>
-            {resetting ? "Resetting…" : "Reset company"}
-          </button>
-          <button className="ghost danger" disabled={deleting || resetting} onClick={deleteCompany}>
+          {editingReset ? (
+            <>
+              <button className="ghost danger" disabled={resetting} onClick={resetCompany}>
+                {resetting ? "Resetting…" : "Reset & relaunch"}
+              </button>
+              <button className="ghost" disabled={resetting} onClick={() => setEditingReset(false)}>
+                Cancel
+              </button>
+            </>
+          ) : (
+            <button className="ghost danger" disabled={deleting} onClick={openResetEditor}>
+              Reset company
+            </button>
+          )}
+          <button className="ghost danger" disabled={deleting || resetting || editingReset} onClick={deleteCompany}>
             {deleting ? "Deleting…" : "Delete company"}
           </button>
         </div>

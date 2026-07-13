@@ -24,6 +24,27 @@ def _set_master_key() -> None:
     settings.master_key = base64.urlsafe_b64encode(os.urandom(32)).decode()
 
 
+async def _make_company(db, *, raw_text="Sell great widgets", constraints=("stay lean",)):
+    """A minimal active company (user, budget, mission) for reset tests."""
+    from app.models import Budget, Membership, User
+    from app.models.enums import BudgetPeriod, MembershipRole
+
+    user = User(email=f"founder-{os.urandom(4).hex()}@t.io", hashed_password="x")
+    db.add(user)
+    await db.flush()
+    company = Company(owner_user_id=user.id, name="Acme", status=CompanyStatus.active)
+    db.add(company)
+    await db.flush()
+    cid = company.id
+    db.add(Membership(user_id=user.id, company_id=cid, role=MembershipRole.founder))
+    db.add(Budget(company_id=cid, period=BudgetPeriod.monthly, limit_cents=50_000))
+    mission = Mission(company_id=cid, raw_text=raw_text, constraints=list(constraints))
+    db.add(mission)
+    await db.flush()
+    company.mission_id = mission.id
+    return cid
+
+
 @requires_db
 async def test_reset_company(session_factory):
     _set_master_key()
@@ -92,3 +113,61 @@ async def test_reset_company(session_factory):
             )
         ).all()
         assert len(active) == 1
+
+
+@requires_db
+async def test_reset_company_with_edited_mission(session_factory):
+    """A founder can revise the mission as part of the reset (relaunch)."""
+    _set_master_key()
+    async with session_factory() as db:
+        cid = await _make_company(db, raw_text="Sell great widgets", constraints=("stay lean",))
+        # A previously detected language must not stick to the new mission text.
+        mission = await db.scalar(select(Mission).where(Mission.company_id == cid))
+        mission.language = "en"
+        await db.commit()
+
+    async with session_factory() as db:
+        company = await db.get(Company, cid)
+        await reset_company(
+            db,
+            company=company,
+            mission_text="  Sell premium gadgets in the EU  ",
+            constraints=["EU only", "carbon neutral"],
+        )
+        await db.commit()
+
+    async with session_factory() as db:
+        mission = await db.scalar(select(Mission).where(Mission.company_id == cid))
+        # Edited text wins (and is stripped); language is re-derived on next generation.
+        assert mission.raw_text == "Sell premium gadgets in the EU"
+        assert mission.constraints == ["EU only", "carbon neutral"]
+        assert mission.language is None
+
+
+@requires_db
+async def test_reset_preserves_mission_when_not_edited(session_factory):
+    """Omitting the fields keeps the current mission; ``[]`` explicitly clears constraints."""
+    async with session_factory() as db:
+        cid = await _make_company(db, raw_text="Original mission", constraints=("keep me",))
+        await db.commit()
+
+    # No overrides → mission + constraints preserved verbatim.
+    async with session_factory() as db:
+        company = await db.get(Company, cid)
+        await reset_company(db, company=company)
+        await db.commit()
+    async with session_factory() as db:
+        mission = await db.scalar(select(Mission).where(Mission.company_id == cid))
+        assert mission.raw_text == "Original mission"
+        assert mission.constraints == ["keep me"]
+
+    # Blank/whitespace mission_text is ignored (treated as "not edited"), but an
+    # empty constraints list explicitly clears them.
+    async with session_factory() as db:
+        company = await db.get(Company, cid)
+        await reset_company(db, company=company, mission_text="   ", constraints=[])
+        await db.commit()
+    async with session_factory() as db:
+        mission = await db.scalar(select(Mission).where(Mission.company_id == cid))
+        assert mission.raw_text == "Original mission"
+        assert mission.constraints == []

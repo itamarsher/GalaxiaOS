@@ -56,6 +56,26 @@ class CompanyOut(ORMModel):
     email_from: str | None = None
 
 
+class MissionOut(BaseModel):
+    """The company's current mission text + constraints (for prefilling editors)."""
+
+    mission_text: str
+    constraints: list[str] = Field(default_factory=list)
+
+
+class ResetCompanyRequest(BaseModel):
+    """Optional overrides applied when resetting (relaunching) a company.
+
+    Both fields are optional so a bare ``POST /reset`` keeps the current mission
+    verbatim (backward compatible). Supplying ``mission_text`` relaunches with an
+    edited mission; a non-null ``constraints`` list replaces the constraints (``[]``
+    clears them). ``None`` on either field leaves that value untouched.
+    """
+
+    mission_text: str | None = Field(default=None, min_length=4)
+    constraints: list[str] | None = None
+
+
 class CompanyUpdateRequest(BaseModel):
     """Founder-editable company settings. Fields left unset are not changed."""
 

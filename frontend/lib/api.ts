@@ -334,8 +334,24 @@ export const api = {
     req<Company>(`/companies/${companyId}`, { method: "PATCH", body: JSON.stringify(patch) }),
   deleteCompany: (companyId: string) =>
     req<void>(`/companies/${companyId}`, { method: "DELETE" }),
-  resetCompany: (companyId: string) =>
-    req<Company>(`/companies/${companyId}/reset`, { method: "POST" }),
+  /** The company's current mission — used to prefill the editor before a reset. */
+  mission: (companyId: string) =>
+    req<{ mission_text: string; constraints: string[] }>(`/companies/${companyId}/mission`),
+  /**
+   * Reset (relaunch) a company to a fresh draft. Optionally edit the mission as
+   * part of the reset: pass `mission_text`/`constraints` to relaunch with a
+   * revised mission; omit them to keep the current one.
+   */
+  resetCompany: (
+    companyId: string,
+    edit?: { mission_text?: string; constraints?: string[] },
+  ) =>
+    req<Company>(`/companies/${companyId}/reset`, {
+      method: "POST",
+      body: edit && (edit.mission_text !== undefined || edit.constraints !== undefined)
+        ? JSON.stringify(edit)
+        : undefined,
+    }),
   advanceCycle: (companyId: string) =>
     req<CycleStart>(`/companies/${companyId}/cycle`, { method: "POST" }),
   cycleStatus: (companyId: string) =>
