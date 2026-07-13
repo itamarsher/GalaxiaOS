@@ -50,7 +50,7 @@ analysis, not an implementation.
   │  PR APPROVAL + MERGE                                                        │  ❌ MISSING — human gate
   │  "The PR is gated by CI + human review — nothing lands automatically."      │  (issue-implement.yml)
   └───────────────────────────────────────────────────────────────────────────┘
-        │  push to claude/abos-system-architecture-u9xny4
+        │  push to main
         ▼
   ci.yml deploy job → Render deploy hooks (preDeploy: alembic upgrade head)         ⚠️ EXISTS, no-op until
         │                                                                             hooks+token configured
@@ -169,7 +169,7 @@ bypassed and neither can a human sneak past CI.
 > verification + automated rollback (needs the Render API) and feeding deploy status back into
 > Galaxia's memory remain — tracked in `docs/DOGFOODING_OPERATIONS.md`.
 
-The deploy job fires on push to `claude/abos-system-architecture-u9xny4` (which auto-merge would
+The deploy job fires on push to `main` (which auto-merge would
 trigger), but: (a) it is a **no-op until `RENDER_DEPLOY_HOOK_*` and the app-side
 `ABOS_GITHUB_TOKEN` are configured** — `get_issue_tracker()` returns `None` with no token, so a
 tokenless prod also can't file issues; (b) there is **no smoke test / `/health/ready` gate after

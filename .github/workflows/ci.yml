@@ -3,7 +3,7 @@ name: CI
 on:
   pull_request:
   push:
-    branches: [claude/abos-system-architecture-u9xny4]
+    branches: [main]
 
 jobs:
   backend:
@@ -74,7 +74,7 @@ jobs:
 
   deploy:
     needs: [backend, frontend]
-    if: github.ref == 'refs/heads/claude/abos-system-architecture-u9xny4' && github.event_name == 'push'
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     runs-on: ubuntu-latest
     steps:
       - name: Trigger Render deploys (no-op until hooks are configured)

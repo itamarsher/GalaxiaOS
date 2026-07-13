@@ -28,7 +28,7 @@ services:
     # regardless of which branch the Blueprint itself is connected to (otherwise
     # services default to the Blueprint's branch). Keep these in sync if the
     # production branch ever changes.
-    branch: claude/abos-system-architecture-u9xny4
+    branch: main
     runtime: docker
     dockerfilePath: ./backend/Dockerfile
     dockerContext: ./backend
@@ -65,7 +65,7 @@ services:
   # arq worker (agent runtime + scheduled jobs). Same image, different command.
   - type: worker
     name: abos-worker
-    branch: claude/abos-system-architecture-u9xny4
+    branch: main
     runtime: docker
     dockerfilePath: ./backend/Dockerfile
     dockerContext: ./backend
@@ -93,7 +93,7 @@ services:
   # Next.js frontend.
   - type: web
     name: abos-web
-    branch: claude/abos-system-architecture-u9xny4
+    branch: main
     runtime: docker
     dockerfilePath: ./frontend/Dockerfile.prod
     dockerContext: ./frontend
