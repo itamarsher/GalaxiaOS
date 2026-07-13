@@ -14,6 +14,7 @@ from app.models import (
     Company,
     DecisionRequest,
     Membership,
+    Mission,
     Objective,
     SiteDomain,
     Task,
@@ -32,10 +33,12 @@ from app.schemas import (
     FeatureRequesterOut,
     FeatureRequestOut,
     MemoryOut,
+    MissionOut,
     ObjectiveOut,
     OrgChartOut,
     PlaybookOut,
     PlaybookUpdateRequest,
+    ResetCompanyRequest,
     SiteDomainOut,
     SiteLeadOut,
     SiteOut,
@@ -121,17 +124,36 @@ async def delete_company(company: CompanyDep, db: DbDep):
     return None
 
 
+@router.get("/mission", response_model=MissionOut)
+async def get_mission(company: CompanyDep, db: DbDep):
+    """The company's current mission text + constraints.
+
+    Lets the UI prefill the mission editor (e.g. before a reset/relaunch) with what
+    the company is running today.
+    """
+    mission = await db.scalar(select(Mission).where(Mission.company_id == company.id))
+    if mission is None:
+        return MissionOut(mission_text="", constraints=[])
+    return MissionOut(mission_text=mission.raw_text, constraints=list(mission.constraints or []))
+
+
 @router.post("/reset", response_model=CompanyOut)
-async def reset_company(company: CompanyDep, db: DbDep):
-    """Reset this company to a fresh draft, preserving its mission and saved keys.
+async def reset_company(company: CompanyDep, db: DbDep, body: ResetCompanyRequest | None = None):
+    """Reset this company to a fresh draft, preserving its saved keys.
 
     Wipes the generated org and all operational state (tasks, runs, budget spend,
     memory, chat, sites, decisions, …) and re-provisions the default fleet,
     returning the company to the onboarding plan-approval (``draft``) state so the
     founder can refine, regenerate, or relaunch. Saved BYOK provider keys survive.
-    Same effect as the Galaxia dev reset, but for the caller's own company.
+
+    The mission is preserved by default, but the founder can **edit it as part of
+    the relaunch**: an optional body may carry a revised ``mission_text`` and/or
+    ``constraints``. Omitting the body (or a field) keeps the current value.
     """
-    fresh = await company_reset_svc.reset_company(db, company=company)
+    body = body or ResetCompanyRequest()
+    fresh = await company_reset_svc.reset_company(
+        db, company=company, mission_text=body.mission_text, constraints=body.constraints
+    )
     await db.commit()
     return fresh
 

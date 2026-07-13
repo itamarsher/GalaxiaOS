@@ -167,7 +167,13 @@ async def _delete_orphan_direct_channels(db: AsyncSession, company_id: uuid.UUID
 # ── the founder-facing company reset ──────────────────────────────────────────
 
 
-async def reset_company(db: AsyncSession, *, company: Company) -> Company:
+async def reset_company(
+    db: AsyncSession,
+    *,
+    company: Company,
+    mission_text: str | None = None,
+    constraints: list[str] | None = None,
+) -> Company:
     """Wipe a company's generated + operational state and re-provision a draft.
 
     Snapshots the company's identity, mission, budget, memberships and API keys;
@@ -175,6 +181,13 @@ async def reset_company(db: AsyncSession, *, company: Company) -> Company:
     id as a ``draft``; and provisions the default fleet (no LLM), landing the
     founder at the onboarding plan-approval state — ready to refine/regenerate or
     launch. Saved BYOK keys survive. The caller commits.
+
+    The founder may **edit the mission as part of the reset**: pass ``mission_text``
+    and/or ``constraints`` to relaunch with a revised mission instead of the current
+    one. Either left as ``None`` keeps the existing value (so an unchanged field is
+    preserved, not blanked); an empty ``constraints`` list explicitly clears them.
+    A revised ``mission_text`` drops the previously detected language/summary so the
+    next generation re-derives them from the new text.
     """
     company_id = company.id
     owner_id = company.owner_user_id
@@ -182,8 +195,12 @@ async def reset_company(db: AsyncSession, *, company: Company) -> Company:
     is_platform = company.is_platform
 
     mission = await db.scalar(select(Mission).where(Mission.company_id == company_id))
-    mission_text = mission.raw_text if mission else ""
-    constraints = list(mission.constraints or []) if mission else []
+    existing_text = mission.raw_text if mission else ""
+    existing_constraints = list(mission.constraints or []) if mission else []
+    # Edited mission wins when supplied; otherwise preserve what was there.
+    edited_text = mission_text.strip() if mission_text is not None else None
+    mission_text = edited_text if edited_text else existing_text
+    constraints = constraints if constraints is not None else existing_constraints
 
     budget = await db.scalar(select(Budget).where(Budget.company_id == company_id))
     budget_cents = budget.limit_cents if budget else 0
