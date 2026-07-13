@@ -38,7 +38,7 @@ App-side (Render service env, not GitHub) — required for the loop's app half:
 | `ABOS_GITHUB_REPO` | `owner/repo` to file issues against (required; no default) |
 | `ABOS_MASTER_KEY` | envelope key for BYOK secrets (from a KMS in prod) |
 | `ABOS_RENDER_API_KEY` | read-only Render key so GalaxiaOS's agents can see our deploys (`list_render_services` / `list_render_deploys` / `get_render_deploy` / `get_render_logs`). Offered only to Galaxia; other companies use their own BYOK `render` key. Optional. |
-| `ABOS_RENDER_OWNER_ID` | Render owner (team/user) id — required by the Render logs API, so `get_render_logs` can read logs when the reliability monitor debugs an infra failure. Optional (deploy-status tools work without it). |
+| `ABOS_RENDER_OWNER_ID` | Render owner (team/user) id for the logs API. Optional — auto-derived from `ABOS_RENDER_API_KEY`; set only to disambiguate a key that can see multiple owners. |
 
 ### 2. Repository variables
 
@@ -55,7 +55,7 @@ directly. The CI-green gate is enforced *in the workflow*, not by GitHub — so
 nothing here needs a paid plan.
 
 When you make the repo **public** (branch protection becomes free), add a ruleset
-on the default branch (`claude/abos-system-architecture-u9xny4`) for defence in
+on the default branch (`main`) for defence in
 depth — it complements the workflow, it isn't required by it:
 
 - **Require status checks to pass:** the CI jobs (`backend`, `frontend`).
