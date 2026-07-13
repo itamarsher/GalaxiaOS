@@ -6,8 +6,8 @@
 // (POST /cycle), and the round plays out live over the SSE task stream. The page
 // polls live data, folds it into a SceneModel + RoundState, drives transient
 // canvas FX from data deltas (via a ref-owned queue the rAF loop consumes), and
-// lays out the DOM HUD (swipe-to-decide console, level/XP meter, gauges). Every
-// gesture also has an accessible DOM control.
+// lays out the DOM HUD (the Captain's Console notification center, level/XP
+// meter, gauges). Every gesture also has an accessible DOM control.
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "next/navigation";
@@ -424,11 +424,11 @@ export default function GalaxiaCommandPage() {
         <div className="deck-hud">
           <CycleProgress round={round} />
           <CaptainsConsole
+            companyId={id}
             decisions={decisionList}
             chatWaiting={chatWaiting}
             chatWaitingAgents={chatWaitingAgents}
             chatHref={chatHref}
-            onResolved={() => decisions.reload()}
           />
           <div className="deck-gauges">
             <ScorePanel health={scene.health} score={score} streak={streak} />

@@ -5,11 +5,10 @@
 // The canvas is a decorative, animated backdrop; every legible or interactive
 // surface lives here in the DOM so it's crisp, styleable, and accessible. All
 // components reuse the app's existing global CSS classes (.card, .bar, .status,
-// .btnrow, .decision-panel, .pill) plus a small `Galaxia Command` block added to
-// globals.css.
+// .btnrow, .pill) plus a small `Galaxia Command` block (incl. the Notification
+// Center) added to globals.css.
 
 import { useEffect, useRef, useState } from "react";
-import Link from "next/link";
 import {
   fmtUsd,
   statusLabel,
@@ -22,7 +21,7 @@ import { type ModuleView } from "@/lib/game/scene";
 import { type QuestView } from "@/lib/game/quests";
 import { levelFromScore } from "@/lib/game/score";
 import { phaseLabel, type RoundState } from "@/lib/game/round";
-import { SwipeDeck } from "./SwipeDeck";
+import { NotificationCenter } from "./NotificationCenter";
 
 // ── Cycle progress: live phase + task progress while a round runs ─────────────
 export function CycleProgress({ round }: { round: RoundState }) {
@@ -217,21 +216,24 @@ export function QuestLog({
   );
 }
 
-// ── Captain's Console: the decision inbox as a swipeable order deck ───────────
+// ── Captain's Console: the decision inbox as a Notification Center ────────────
+// Every item that needs the founder — a structured decision or an agent parked
+// on a chat reply — is a notification that opens the relevant conversation. The
+// founder resolves it there by replying; the console no longer decides inline.
 export function CaptainsConsole({
+  companyId,
   decisions,
   chatWaiting = 0,
   chatWaitingAgents = [],
   chatHref,
-  onResolved,
 }: {
+  companyId: string;
   decisions: Decision[];
   chatWaiting?: number;
   // Formatted "Name (role)" labels for the agents parked on a chat reply, so the
-  // console CTA can name who's waiting instead of a generic "an agent".
+  // notification can name who's waiting instead of a generic "an agent".
   chatWaitingAgents?: string[];
   chatHref?: string;
-  onResolved: () => void;
 }) {
   const pending = decisions.filter((d) => d.status === "pending" || d.status === "waiting_approval");
   const alert = pending.length > 0 || chatWaiting > 0;
@@ -248,25 +250,13 @@ export function CaptainsConsole({
         {alert && <span className="dot" style={{ background: "var(--danger)" }} />}
         <span>Captain&apos;s Console{note}</span>
       </div>
-      {/* Suppress the "all clear" line when a chat reply is owed — the CTA below
-          covers it, so the console never contradicts the "awaiting you" count. */}
-      <SwipeDeck decisions={decisions} onResolved={onResolved} showEmpty={chatWaiting === 0} />
-      {chatWaiting > 0 && chatHref && (
-        <Link href={chatHref} className="console-chat-cta">
-          <span aria-hidden>💬</span>
-          <span>
-            {/* Name the agent when exactly one is waiting; otherwise fall back to
-                the count so the line stays readable for multiple waits. */}
-            {chatWaiting === 1 && chatWaitingAgents[0]
-              ? `${chatWaitingAgents[0]} is`
-              : chatWaiting === 1
-                ? "An agent is"
-                : `${chatWaiting} agents are`}{" "}
-            waiting for your reply in Chat
-          </span>
-          <span className="console-chat-arrow" aria-hidden>→</span>
-        </Link>
-      )}
+      <NotificationCenter
+        companyId={companyId}
+        decisions={decisions}
+        chatWaiting={chatWaiting}
+        chatWaitingAgents={chatWaitingAgents}
+        chatHref={chatHref}
+      />
     </div>
   );
 }
