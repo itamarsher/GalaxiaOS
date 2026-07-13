@@ -135,8 +135,8 @@ envVarGroups:
         sync: false
       - key: ABOS_RENDER_API_KEY
         sync: false
-      - key: ABOS_RENDER_OWNER_ID
-        sync: false
+      # ABOS_RENDER_OWNER_ID is intentionally omitted — it is auto-derived from the
+      # Render API key. Set it only to disambiguate a key that sees multiple owners.
       # NB: landing-page hosting + domain connection (Cloudflare Pages + DNS) are
       # bring-your-own-key — each company sets its own Cloudflare API token + account
       # id in Settings. There are intentionally no global Cloudflare env vars here.
