@@ -13,13 +13,14 @@ import uuid
 
 import pytest
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.config import settings
 from app.models import Budget, Company, User
 from app.models.enums import BudgetPeriod, CompanyStatus
 from app.runtime.tools.platform import _is_abos_admin_company
-from app.services import platform_company, user_drive
-from tests.conftest import make_company_with_fleet, requires_db
+from app.services import company_reset, onboarding, platform_company, user_drive
+from tests.conftest import TEST_DB_URL, make_company_with_fleet, requires_db
 
 
 def _set_master_key() -> None:
@@ -76,6 +77,87 @@ async def test_promoter_gate_keys_off_the_platform_flag(session_factory):
     async with session_factory() as db:
         assert await _is_abos_admin_company(db, platform_cid) is True
         assert await _is_abos_admin_company(db, tenant_id) is False
+
+
+async def _reboot(fn):
+    """Run ``fn(db)`` against a BRAND-NEW engine on the same database.
+
+    A fresh engine has its own connection pool and an empty identity map, so it
+    reads only what was durably committed — the closest in-process stand-in for a
+    process restart (a redeploy, a worker bounce, a free-tier cold start). NB:
+    unlike the ``session_factory`` fixture, this does NOT reset the schema, so the
+    already-committed rows are still there.
+    """
+    engine = create_async_engine(TEST_DB_URL, future=True)
+    try:
+        async with async_sessionmaker(engine, expire_on_commit=False)() as db:
+            return await fn(db)
+    finally:
+        await engine.dispose()
+
+
+@requires_db
+async def test_platform_flag_survives_restart(session_factory):
+    """The designation is durable: it outlives the process that set it.
+
+    ``is_platform`` lives on the ``companies`` row, not in any cache or in-memory
+    config, so once the first onboarded company is flagged and committed, a restart
+    reads the same designation back — and a company onboarded AFTER the restart is
+    still an ordinary tenant (the singleton holds).
+    """
+    async with session_factory() as db:
+        user = User(email=f"{uuid.uuid4()}@t.io", hashed_password="x")
+        db.add(user)
+        await db.flush()
+        company = await onboarding.start(
+            db, user=user, mission_text="Build and operate GalaxiaOS", budget_cents=50_000, constraints=None
+        )
+        await db.commit()
+        platform_id = company.id
+        assert company.is_platform is True
+
+    # --- restart ---
+    async def _after_reboot(db):
+        assert await platform_company.platform_company_id(db) == platform_id
+        assert await platform_company.is_platform_company(db, platform_id) is True
+        # The promoter gate still authorizes the same company post-restart.
+        assert await _is_abos_admin_company(db, platform_id) is True
+        # A company onboarded after the restart stays a plain tenant.
+        user2 = User(email=f"{uuid.uuid4()}@t.io", hashed_password="x")
+        db.add(user2)
+        await db.flush()
+        later = await onboarding.start(
+            db, user=user2, mission_text="Some other business", budget_cents=10_000, constraints=None
+        )
+        await db.commit()
+        assert later.is_platform is False
+        assert await platform_company.platform_company_id(db) == platform_id
+
+    await _reboot(_after_reboot)
+
+
+@requires_db
+async def test_platform_flag_survives_reset_then_restart(session_factory):
+    """A founder-facing company reset preserves the designation across a restart.
+
+    ``reset_company`` deletes the company row (cascading its state) and recreates it
+    under the same id — the flag is identity, not operational state, so it must ride
+    through the reset AND the subsequent restart.
+    """
+    async with session_factory() as db:
+        platform_cid = await make_company_with_fleet(db, is_platform=True)
+        await db.commit()
+
+    async with session_factory() as db:
+        company = await db.get(Company, platform_cid)
+        await company_reset.reset_company(db, company=company)
+        await db.commit()
+
+    async def _after_reboot(db):
+        assert await platform_company.platform_company_id(db) == platform_cid
+        assert await platform_company.is_platform_company(db, platform_cid) is True
+
+    await _reboot(_after_reboot)
 
 
 @requires_db
