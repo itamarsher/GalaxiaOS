@@ -167,31 +167,64 @@ async def reconcile_delivered(
         state = await tracker.get_issue_state(fr.github_issue_number)
         if state != "closed":
             continue
-        await fr_svc.mark_delivered(db, fr)
-        await _notify_requesters(db, fr)
+        await deliver_request(db, fr)
         delivered += 1
     return {"delivered": delivered, "checked": len(entries)}
 
 
-async def _notify_requesters(db: AsyncSession, fr: FeatureRequest) -> None:
-    """Write a 'your requested capability shipped' notice to each requester."""
+async def deliver_request(db: AsyncSession, fr: FeatureRequest) -> int:
+    """Mark a backlog entry delivered and propagate the notice to its requesters.
+
+    Shared by the automatic reconciler (issue closed) and the platform agent's
+    ``deliver_feature_request`` tool (marked ready by hand), so both paths flip the
+    status and notify the same way. Returns the number of companies notified.
+    """
+    await fr_svc.mark_delivered(db, fr)
+    return await _notify_requesters(db, fr)
+
+
+async def _notify_requesters(db: AsyncSession, fr: FeatureRequest) -> int:
+    """Write a 'your requested capability shipped' notice to each requester.
+
+    The notice is company-scoped memory (the shared brain every agent recalls), but
+    it names the *specific agents* that asked — so the agent that hit the gap is told
+    directly to resume the work that was blocked. Returns the company count.
+    """
     company_ids = await fr_svc.requesting_company_ids(db, fr.id)
-    ref = (
-        f"issue #{fr.github_issue_number}"
-        + (f" ({fr.github_issue_url})" if fr.github_issue_url else "")
-    )
+    # Map company → the names of its agents that asked, so each notice can address them.
+    agents_by_company: dict[uuid.UUID, list[str]] = {}
+    for cid, _aid, aname in await fr_svc.requesting_agents(db, fr.id):
+        agents_by_company.setdefault(cid, [])
+        if aname not in agents_by_company[cid]:
+            agents_by_company[cid].append(aname)
+
+    if fr.github_issue_number:
+        ref = f"issue #{fr.github_issue_number}" + (
+            f" ({fr.github_issue_url})" if fr.github_issue_url else ""
+        )
+        shipped = f"{ref} was closed (its fix merged)"
+    else:
+        ref = None
+        shipped = "the platform marked it ready"
     noun = "bug fix" if fr.kind is FeatureRequestKind.bug else "capability"
+
     for cid in company_ids:
+        agents = agents_by_company.get(cid, [])
+        addressed = (
+            f"{', '.join(agents)}: the {noun} you requested"
+            if agents
+            else f"The {noun} your team requested"
+        )
         await memory_svc.write(
             db,
             company_id=cid,
             type=MemoryType.result,
             title=f"Delivered: {fr.title[:80]}",
             content=(
-                f"The {noun} your team requested — {fr.title!r} — has shipped: {ref} "
-                "was closed (its fix merged). If a tool you were waiting on is now "
-                "available, retry the work that was blocked; there is no need to "
-                "request this again."
+                f"{addressed} — {fr.title!r} — has shipped: {shipped}. If a tool you "
+                "were waiting on is now available, resume the work that was blocked; "
+                "there is no need to request this again."
             ),
             structured={"kind": "capability_delivered", "feature_request_id": str(fr.id)},
         )
+    return len(company_ids)

@@ -11,8 +11,9 @@ workflow), keeping GitHub-side dedup/voting intact on top of this ledger.
 :class:`FeatureRequest` is deliberately **global** (no ``company_id`` tenant
 boundary): it aggregates demand across every tenant company, which is the whole
 point of a shared backlog. Attribution of *who* asked lives in
-:class:`FeatureRequestVote`, one row per (request, company, user) so we can see
-exactly which companies and users want each thing.
+:class:`FeatureRequestVote`, one row per (request, company, user, agent) so we can
+see exactly which companies, founders, and **agents** want each thing — and so a
+delivered capability can be propagated back to the agent that asked for it.
 """
 
 from __future__ import annotations
@@ -64,11 +65,15 @@ class FeatureRequest(Base, PKMixin, TimestampMixin):
 
 
 class FeatureRequestVote(Base, PKMixin, TimestampMixin):
-    """One company/user's demand for a feature request (the unit of voting).
+    """One (company, user, agent)'s demand for a feature request (the unit of voting).
 
-    ``user_id`` is nullable: agent-initiated requests carry the company but no
-    specific user. A repeat ask from the same (company, user) updates this row
-    rather than adding another, so the count is honest demand, not spam.
+    ``user_id`` and ``agent_id`` are both nullable and mutually exclusive in
+    practice: a founder/copilot ask carries the ``user_id``; an agent-initiated ask
+    carries the ``agent_id`` (and the originating ``task_id``) instead. Tracking the
+    agent lets the platform see *which agent* hit the gap, and lets a delivered
+    capability be routed back to that agent. A repeat ask from the same
+    (company, user, agent) updates this row rather than adding another, so the count
+    is honest demand, not spam.
     """
 
     __tablename__ = "feature_request_votes"
@@ -77,6 +82,7 @@ class FeatureRequestVote(Base, PKMixin, TimestampMixin):
             "feature_request_id",
             "company_id",
             "user_id",
+            "agent_id",
             name="uq_feature_request_vote",
         ),
     )
@@ -103,6 +109,23 @@ class FeatureRequestVote(Base, PKMixin, TimestampMixin):
         ForeignKey("users.id", ondelete="SET NULL"),
         nullable=True,
         index=True,
+    )
+    #: The requesting agent, when the ask came from the runtime (an agent hit a gap
+    #: via ``request_capability``/``report_bug``); NULL for a founder/copilot ask.
+    #: This is how the platform sees *which agent* asked, and how a delivery notice
+    #: is routed back to it.
+    agent_id: Mapped[uuid.UUID | None] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("agents.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    #: The task the agent was running when it asked — kept so a delivery notice can
+    #: point back at the work that was blocked. NULL for a founder/copilot ask.
+    task_id: Mapped[uuid.UUID | None] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("tasks.id", ondelete="SET NULL"),
+        nullable=True,
     )
     #: This voter's own framing of the ask (why they need it).
     details: Mapped[str | None] = mapped_column(Text, nullable=True)

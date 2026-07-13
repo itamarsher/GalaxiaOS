@@ -29,6 +29,8 @@ from app.schemas import (
     CycleStartOut,
     CycleStatusOut,
     DecisionOut,
+    FeatureRequesterOut,
+    FeatureRequestOut,
     MemoryOut,
     ObjectiveOut,
     OrgChartOut,
@@ -42,6 +44,7 @@ from app.schemas import (
     TaskTranscriptOut,
 )
 from app.services import company_reset as company_reset_svc
+from app.services import feature_requests as fr_svc
 from app.services import memory as memory_svc
 from app.services import runs as runs_svc
 from app.services import sites as sites_svc
@@ -362,6 +365,40 @@ async def delete_memory(company: CompanyDep, entry_id: uuid.UUID, db: DbDep):
     if not removed:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Memory entry not found")
     await db.commit()
+
+
+@router.get("/feature-requests", response_model=list[FeatureRequestOut])
+async def list_feature_requests(company: CompanyDep, db: DbDep):
+    """Capabilities/bugs this company asked the platform for, and their delivery status.
+
+    The founder's audit of the request→delivery loop: every backlog entry the
+    company's agents (or founders) requested, which agent asked, and whether the
+    platform has promoted it into a tracker issue and delivered it. Newest first.
+    """
+    requests = await fr_svc.list_for_company(db, company_id=company.id)
+    return [
+        FeatureRequestOut(
+            id=cr.feature_request.id,
+            kind=cr.feature_request.kind.value,
+            title=cr.feature_request.title,
+            details=cr.feature_request.details,
+            status=cr.feature_request.status.value,
+            vote_count=cr.feature_request.vote_count,
+            github_issue_number=cr.feature_request.github_issue_number,
+            github_issue_url=cr.feature_request.github_issue_url,
+            created_at=cr.feature_request.created_at,
+            requesters=[
+                FeatureRequesterOut(
+                    agent_id=a.agent_id,
+                    agent_name=a.agent_name,
+                    user_email=a.user_email,
+                    details=a.details,
+                )
+                for a in cr.attributions
+            ],
+        )
+        for cr in requests
+    ]
 
 
 async def _set_agent_status(db, company_id, agent_id, new_status):

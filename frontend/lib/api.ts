@@ -172,6 +172,19 @@ export interface ReusableCredential {
   source_company_id: string; source_company_name: string;
 }
 export interface Memory { id: string; type: string; title: string; content: string; created_at: string }
+export interface FeatureRequester { agent_id: string | null; agent_name: string | null; user_email: string | null; details: string | null }
+export interface FeatureRequest {
+  id: string;
+  kind: string; // "bug" | "capability"
+  title: string;
+  details: string;
+  status: string; // "open" | "promoted" | "delivered"
+  vote_count: number;
+  github_issue_number: number | null;
+  github_issue_url: string | null;
+  created_at: string;
+  requesters: FeatureRequester[];
+}
 export interface Runway { projected_days_remaining: number | null; burn_rate_cents_per_day: number; balance_cents: number | null }
 export interface Digest { summary_md: string | null; open_decisions: number; period_date: string | null }
 export interface SiteDomain { id: string; domain: string; status: string }
@@ -439,6 +452,9 @@ export const api = {
     req<Memory[]>(`/companies/${companyId}/memory${q ? `?q=${encodeURIComponent(q)}` : ""}`),
   deleteMemory: (companyId: string, entryId: string) =>
     req<void>(`/companies/${companyId}/memory/${entryId}`, { method: "DELETE" }),
+
+  featureRequests: (companyId: string) =>
+    req<FeatureRequest[]>(`/companies/${companyId}/feature-requests`),
 
   digestLatest: (companyId: string) => req<Digest>(`/companies/${companyId}/digest/latest`),
   generateDigest: (companyId: string) =>
