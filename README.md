@@ -214,3 +214,8 @@ backend/app/
   jobs/        scheduled jobs (daily digest, runway recalc)
 frontend/      Next.js App Router
 ```
+
+## License
+
+Released under the [MIT License](LICENSE). The project is free and open-source —
+use, modify, and distribute it, with attribution.
