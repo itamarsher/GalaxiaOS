@@ -4,11 +4,9 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useSearchParams } from "next/navigation";
 import {
   api,
-  decisionKindLabel,
   type ChatChannel,
   type ChatMessage,
   type ChatThread,
-  type Decision,
 } from "@/lib/api";
 import { usePoll } from "@/lib/useApi";
 import { Markdown } from "@/lib/markdown";
@@ -17,10 +15,12 @@ import { Avatar, channelDisplayName, founderIsMember, isCeoDm } from "@/lib/chat
 // The unified collaboration surface, laid out like Slack: a channel header, a
 // linear message timeline (avatar · name · time · message), and a composer at
 // the bottom. Agents and the founder talk in channels and 1:1 DMs; what used to
-// be the "decision inbox" is now founder DMs marked "waiting for a response"
-// (open-ended asks resolve by replying; structured ones — budget/plan/hire/
-// external — show inline Approve/Reject). The founder sees every channel in the
-// company, including internal agent-to-agent ones (tagged "observing").
+// be the "decision inbox" is now founder DMs marked "waiting for a response".
+// Every ask — open-ended or structured (budget/plan/hire/external) — is just a
+// normal message the founder answers by replying: the backend classifies the
+// reply into approve/reject to resolve a structured decision. The founder sees
+// every channel in the company, including internal agent-to-agent ones (tagged
+// "observing").
 export default function ChatPage() {
   const { id } = useParams<{ id: string }>();
   const search = useSearchParams();
@@ -119,8 +119,6 @@ function Thread({
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const msgs = messages.data ?? [];
-  // Decisions live on the channel's main timeline, not inside a sub-thread.
-  const decision = activeThread ? null : channel.pending_decision;
 
   const isChannel = channel.kind !== "direct";
   const title = channelDisplayName(channel);
@@ -139,19 +137,6 @@ function Thread({
     setBusy(true);
     try {
       await api.postChatMessage(companyId, channel.id, text, activeThread ?? undefined);
-      messages.reload();
-      onChanged();
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const resolve = async (approve: boolean, note?: string) => {
-    if (!decision) return;
-    setBusy(true);
-    try {
-      if (approve) await api.approveDecision(decision.id, note);
-      else await api.rejectDecision(decision.id, note);
       messages.reload();
       onChanged();
     } finally {
@@ -186,13 +171,13 @@ function Thread({
       )}
 
       <div className="timeline">
-        {msgs.length === 0 && !decision && <div className="empty">No messages yet.</div>}
+        {msgs.length === 0 && <div className="empty">No messages yet.</div>}
+        {/* A pending decision is just the agent's ask, posted as a normal message
+            (backend `post_decision_dm`). The founder resolves it by replying — no
+            separate widget. */}
         {msgs.map((m, i) => (
           <MessageRow key={m.id} message={m} prev={msgs[i - 1]} />
         ))}
-        {/* A pending decision rides in the timeline as a special message with its
-            own Approve/Reject — seamless chat, no separate widget. */}
-        {decision && <DecisionMessage decision={decision} onResolve={resolve} busy={busy} />}
         {busy && <div className="muted" style={{ padding: "6px 16px", fontSize: 13 }}>sending…</div>}
         <div ref={endRef} />
       </div>
@@ -253,58 +238,6 @@ function ThreadBar({
           {t.escalation_pending && <span className="status pending"> · waiting</span>}
         </button>
       ))}
-    </div>
-  );
-}
-
-// A pending decision rendered inline as a special chat message: it reads as part
-// of the timeline (same avatar gutter + header), but its body is an action panel
-// with Approve/Reject and an optional note instead of plain text. Replaces the
-// old separate decision widget so the surface stays fully chat-based.
-function DecisionMessage({
-  decision,
-  onResolve,
-  busy,
-}: {
-  decision: Decision;
-  onResolve: (approve: boolean, note?: string) => Promise<void>;
-  busy: boolean;
-}) {
-  const [note, setNote] = useState("");
-  const who = decision.agent_name ?? "Agent";
-  const act = async (approve: boolean) => {
-    await onResolve(approve, note.trim() || undefined);
-    setNote("");
-  };
-  return (
-    <div className="smsg decision-msg">
-      <div className="smsg-gutter">
-        <Avatar name={who} size={36} />
-      </div>
-      <div className="smsg-body">
-        <div className="smsg-head">
-          <span className="smsg-name">{who}</span>
-          {decision.agent_role && <span className="smsg-role">{decision.agent_role}</span>}
-          <span className="status waiting_approval">needs your decision</span>
-        </div>
-        <div className="decision-panel">
-          <div className="decision-kind">{decisionKindLabel(decision.kind)}</div>
-          <p className="muted decision-hint">
-            Review the message above, then approve or reject. A note becomes your guidance to the agent.
-          </p>
-          <input
-            className="decision-note"
-            placeholder="Add a note for the agent (optional)…"
-            value={note}
-            onChange={(e) => setNote(e.target.value)}
-            disabled={busy}
-          />
-          <div className="btnrow">
-            <button onClick={() => act(true)} disabled={busy}>Approve</button>
-            <button className="ghost" onClick={() => act(false)} disabled={busy}>Reject</button>
-          </div>
-        </div>
-      </div>
     </div>
   );
 }
