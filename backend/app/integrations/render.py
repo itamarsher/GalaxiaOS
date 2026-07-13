@@ -19,6 +19,10 @@ import httpx
 
 from app.config import settings
 
+# Owner ids resolved from an API key, cached so we look them up from the key at
+# most once per process (keyed by the key itself, since a key maps to one owner).
+_OWNER_ID_CACHE: dict[str, str] = {}
+
 
 class RenderError(RuntimeError):
     """Raised when a Render API call fails (missing key, API error)."""
@@ -47,6 +51,14 @@ class RenderDeploy:
 class RenderLogEntry:
     timestamp: str
     message: str
+
+
+@dataclass(frozen=True)
+class RenderOwner:
+    id: str
+    name: str
+    email: str
+    type: str
 
 
 class RenderClient:
@@ -107,23 +119,61 @@ class RenderClient:
         data = await self._get(f"/services/{service_id}/deploys/{deploy_id}")
         return self._parse_deploy(_unwrap(data, "deploy"))
 
+    async def list_owners(self) -> list[RenderOwner]:
+        """The owners (teams/personal account) this API key can see."""
+        data = await self._get("/owners")
+        items = data if isinstance(data, list) else []
+        return [self._parse_owner(_unwrap(item, "owner")) for item in items]
+
+    async def resolve_owner_id(self) -> str:
+        """Return the owner id for owner-scoped calls (the logs API).
+
+        Uses the explicit ``render_owner_id`` when set; otherwise derives it from
+        the API key via ``GET /v1/owners`` and caches it — so ``ABOS_RENDER_OWNER_ID``
+        is optional. Raises :class:`RenderError` when the key maps to zero owners,
+        or to several (ambiguous — set the env var to pick one).
+        """
+        if self._owner_id:
+            return self._owner_id
+        key = self._require_key()
+        cached = _OWNER_ID_CACHE.get(key)
+        if cached:
+            return cached
+        owners = await self.list_owners()
+        if not owners:
+            raise RenderError("Render API key maps to no owners; cannot resolve an owner id.")
+        if len(owners) > 1:
+            raise RenderError(
+                "Render API key can see multiple owners — set ABOS_RENDER_OWNER_ID to one of: "
+                + ", ".join(f"{o.name}={o.id}" for o in owners)
+            )
+        _OWNER_ID_CACHE[key] = owners[0].id
+        return owners[0].id
+
     async def get_logs(self, resource_id: str, *, limit: int = 50) -> list[RenderLogEntry]:
         """Recent log lines for a Render resource (service id), newest last.
 
-        Uses GET /v1/logs, which requires the owner id; raises :class:`RenderError`
-        if ``render_owner_id`` isn't configured so the caller can say logs aren't
-        available rather than silently returning nothing.
+        Uses GET /v1/logs, which is owner-scoped. The owner id is resolved from the
+        API key automatically (see :meth:`resolve_owner_id`), so no separate owner
+        setting is required; :class:`RenderError` is raised only if it can't be
+        determined (no owners, or an ambiguous multi-owner key).
         """
-        if not self._owner_id:
-            raise RenderError(
-                "Render owner id missing (set ABOS_RENDER_OWNER_ID) — required to read logs."
-            )
+        owner_id = await self.resolve_owner_id()
         data = await self._get(
             "/logs",
-            {"ownerId": self._owner_id, "resource": resource_id, "limit": max(1, limit)},
+            {"ownerId": owner_id, "resource": resource_id, "limit": max(1, limit)},
         )
         rows = data.get("logs") if isinstance(data, dict) else None
         return [self._parse_log(r) for r in (rows or []) if isinstance(r, dict)]
+
+    @staticmethod
+    def _parse_owner(d: dict) -> RenderOwner:
+        return RenderOwner(
+            id=str(d.get("id") or ""),
+            name=str(d.get("name") or ""),
+            email=str(d.get("email") or ""),
+            type=str(d.get("type") or ""),
+        )
 
     @staticmethod
     def _parse_log(d: dict) -> RenderLogEntry:
