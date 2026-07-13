@@ -37,6 +37,7 @@ import {
   totalScore,
 } from "@/lib/game/score";
 import { AdvanceButton } from "./AdvanceButton";
+import { ConsoleDock } from "./panels";
 import {
   CaptainsConsole,
   CrewRoster,
@@ -382,32 +383,32 @@ export default function GalaxiaCommandPage() {
       : `/c/${id}/chat`;
 
   return (
-    <div>
-      <div className="game-header">
-        <h2 style={{ margin: 0 }}>
-          Galaxia Command <span className="muted" style={{ fontSize: 14 }}>· {company.data?.name ?? "Starbase"}</span>
+    <div className="command-deck">
+      <header className="deck-top">
+        <h2 className="deck-title">
+          Galaxia Command
+          <span className="muted deck-sub"> · {company.data?.name ?? "Starbase"}</span>
         </h2>
-        <AdvanceButton
-          companyId={id}
-          phase={round.phase}
-          canStart={cycleData?.can_start ?? false}
-          statusReason={cycleData?.reason ?? "already_running"}
-          onAdvanced={() => { cycle.reload(); }}
-        />
-      </div>
-      <p className="muted" style={{ marginTop: 4 }}>
-        Advance a cycle to run your fleet. Watch the round play out, swipe to give orders, and level
-        up your starbase.
-      </p>
+        <div className="deck-top-right">
+          <span className="deck-phase step">{phaseLabel(round.phase)}</span>
+          <AdvanceButton
+            companyId={id}
+            phase={round.phase}
+            canStart={cycleData?.can_start ?? false}
+            statusReason={cycleData?.reason ?? "already_running"}
+            onAdvanced={() => { cycle.reload(); }}
+          />
+        </div>
+      </header>
 
       {/* Screen-reader announcer for canvas-only FX and round phases. */}
       <div aria-live="polite" className="sr-only">{announce}</div>
 
-      {/* Live cycle/task progress while a round runs. */}
-      <CycleProgress round={round} />
-
-      <div className="gamewrap">
-        <div className="station-stage">
+      {/* The visual dashboard: pixel-art station (fills its cell) + the live HUD.
+          A CSS grid reflows this from side-by-side (wide/landscape) to stacked
+          (portrait phones), and the stage flexes to fill whatever space is left. */}
+      <div className="deck-main">
+        <div className="deck-stage">
           <canvas
             ref={canvasRef}
             className="station-canvas"
@@ -420,31 +421,31 @@ export default function GalaxiaCommandPage() {
           {hover && <ModuleTooltip module={hover.module} left={hover.left} top={hover.top} />}
         </div>
 
-        <QuestLog quests={quests} newIds={newQuestIds} clearedIds={clearedQuestIds} />
-
-        <MissionLog entries={missionLog} />
-
-        <div className="hud-grid">
-          <div className="hud-primary">
-            <CaptainsConsole
-              decisions={decisionList}
-              chatWaiting={chatWaiting}
-              chatWaitingAgents={chatWaitingAgents}
-              chatHref={chatHref}
-              onResolved={() => decisions.reload()}
-            />
-          </div>
-          <div className="hud-gauges">
+        <div className="deck-hud">
+          <CycleProgress round={round} />
+          <CaptainsConsole
+            decisions={decisionList}
+            chatWaiting={chatWaiting}
+            chatWaitingAgents={chatWaitingAgents}
+            chatHref={chatHref}
+            onResolved={() => decisions.reload()}
+          />
+          <div className="deck-gauges">
             <ScorePanel health={scene.health} score={score} streak={streak} />
             <RunwayGauge runway={runway.data} />
             <ReactorGauge budget={budget.data} />
           </div>
-          <div className="hud-secondary">
-            <CrewRoster modules={scene.modules} onToggle={toggleAgent} busyKey={busyKey} />
-            <Legend />
-          </div>
+          <QuestLog quests={quests} newIds={newQuestIds} clearedIds={clearedQuestIds} />
+          <CrewRoster modules={scene.modules} onToggle={toggleAgent} busyKey={busyKey} />
+          <MissionLog entries={missionLog} />
+          <Legend />
         </div>
       </div>
+
+      {/* The Systems Console: everything that isn't on the visual dashboard —
+          ledger, governance, comms, reports, memory, crew, growth, files,
+          marketplace, backlog, copilot, and the raw event counters — folded in. */}
+      <ConsoleDock companyId={id} budget={budget.data} />
 
       {sheetModule && (
         <ModuleSheet

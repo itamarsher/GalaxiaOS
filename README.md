@@ -158,6 +158,22 @@ docstring for the procedure.
   with `Retry-After` (`app.ratelimit`).
 - **Probes**: `GET /health` (liveness) and `GET /health/ready` (readiness —
   checks the database, returns `503` when unreachable).
+- **Error monitoring → auto-fix issues** (`app.services.error_monitor`): with
+  `ABOS_ERROR_MONITOR_ENABLED` on, two error sources are escalated to
+  deduplicated tracker issues the Claude Code auto-fix pipeline can pick up.
+  (1) *Code errors* — a root logging handler (`app.observability`) forwards every
+  traceback logged anywhere in the API or worker (the request-500 handler, cron
+  jobs, the worker loop). (2) *Render platform errors* — an hourly cron scans our
+  own Render services/deploys via the read-only Render API and files an issue for
+  failed deploys and suspended services. An in-process TTL cache plus the tracker's
+  own title dedup keep a hot error path from spamming issues; issues are labelled
+  (`ABOS_ERROR_MONITOR_LABELS`) so they route to the right automation.
+- **Event counters** (`event_counters` table, `app.services.event_counters`): a
+  per-company running tally of everything the fleet does — LLM calls, tool calls,
+  task lifecycle, decisions escalated, outbound messages, errors escalated —
+  incremented atomically at the runtime chokepoints and read via
+  `GET /companies/{id}/event-counters`. Best-effort (SAVEPOINT-isolated) so a
+  counter write never breaks the work it counts.
 - **Deploy**: `docker-compose.yml` is dev-oriented (Postgres+pgvector, Redis,
   api, worker, web). For production set `ABOS_RATE_LIMIT_BACKEND=redis`, a real
   `ABOS_MASTER_KEY` from a KMS, and run the API and `arq` worker as separate

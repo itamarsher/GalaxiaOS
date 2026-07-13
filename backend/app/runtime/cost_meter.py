@@ -22,9 +22,10 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.db import set_tenant
 from app.models import ExternalCharge, LLMCall
-from app.models.enums import SpendCategory
+from app.models.enums import EventType, SpendCategory
 from app.providers.base import LLMProvider, LLMResponse, Message, ToolSpec, Usage
 from app.services import budget as budget_svc
+from app.services import event_counters
 
 
 @dataclass
@@ -138,6 +139,9 @@ class CostMeter:
                     company_id=company_id,
                     cents=actual_cents,
                     kind="llm",
+                )
+                await event_counters.record(
+                    db, company_id=company_id, event_type=EventType.llm_call
                 )
                 await db.commit()
             committed["done"] = True

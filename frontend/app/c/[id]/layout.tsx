@@ -41,6 +41,9 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
   const convos = channels.data ?? [];
   const activeChannel = search.get("channel");
   const onChat = pathname === `${base}/chat`;
+  // The Game is a full-screen dashboard: it breaks out of the centered `.dash`
+  // column and fills the whole viewport so it can adapt to any phone aspect ratio.
+  const onGame = pathname === `${base}/game`;
 
   // On phones the rail is a slide-in left drawer (like Slack mobile). Close it
   // whenever the route changes — i.e. after the founder taps a nav item.
@@ -145,8 +148,8 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
         </div>
       </aside>
 
-      <main className="shell-main">
-        <div className="dash">{children}</div>
+      <main className={`shell-main${onGame ? " shell-main-full" : ""}`}>
+        {onGame ? children : <div className="dash">{children}</div>}
       </main>
     </div>
   );

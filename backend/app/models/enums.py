@@ -244,6 +244,26 @@ class ApiKeyStatus(str, enum.Enum):
     revoked = "revoked"
 
 
+class EventType(str, enum.Enum):
+    """A countable thing the system does, tallied per company in ``event_counters``.
+
+    Deliberately coarse — one bucket per meaningful runtime beat — so the totals
+    stay a cheap activity summary. The runtime increments these at its chokepoints
+    (see :mod:`app.services.event_counters`). Values are stored as plain strings,
+    so adding a member here never needs a migration.
+    """
+
+    llm_call = "llm_call"  # one LLM completion metered through the CostMeter
+    tool_call = "tool_call"  # one agent tool invocation executed
+    task_started = "task_started"  # a task picked up and moved to running
+    task_completed = "task_completed"  # a task finished successfully
+    task_failed = "task_failed"  # a task ended in failure
+    run_started = "run_started"  # a business-cycle / launch run kicked off
+    decision_requested = "decision_requested"  # an action escalated to the founder inbox
+    external_message = "external_message"  # an outbound external communication sent
+    error_escalated = "error_escalated"  # an error auto-filed as a tracker issue
+
+
 class MetricSource(str, enum.Enum):
     """Where a real-world outcome signal came from."""
 

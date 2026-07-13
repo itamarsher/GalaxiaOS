@@ -25,6 +25,7 @@ from app.models.enums import (
     AgentRole,
     DecisionKind,
     DecisionStatus,
+    EventType,
     ExternalMessageStatus,
     PolicyEffect,
     TaskStatus,
@@ -44,7 +45,7 @@ from app.runtime.tools.base import DEFAULT_MAX_OBSERVATION_CHARS, ToolOutcome, c
 from app.runtime.tools.base import consume_approval_grant as _consume_approval_grant
 from app.runtime.tools.base import consume_rejection_grant as _consume_rejection_grant
 from app.runtime.transcript import dump_messages, load_messages, sanitize_messages, transcript_lines
-from app.services import apikeys, chat, memory, metrics, mission_log, reputation
+from app.services import apikeys, chat, event_counters, memory, metrics, mission_log, reputation
 from app.services import external_messages as ext
 from app.services import governance as gov
 from app.services import integrations as integrations_svc
@@ -625,6 +626,9 @@ class NativeBackend:
                     )
                 task_row = await db.get(Task, task.id)
                 task_row.status = TaskStatus.waiting_approval
+                await event_counters.record(
+                    db, company_id=task.company_id, event_type=EventType.decision_requested
+                )
                 await db.commit()
                 return {
                     "terminal": True,
@@ -673,6 +677,9 @@ class NativeBackend:
                 task_row = await db.get(Task, task.id)
                 if task_row is not None:
                     task_row.status = TaskStatus.waiting_approval
+                await event_counters.record(
+                    db, company_id=task.company_id, event_type=EventType.decision_requested
+                )
                 await db.commit()
                 return {
                     "terminal": True,
@@ -693,6 +700,13 @@ class NativeBackend:
                     sent=not outcome.is_error,
                     detail=outcome.observation,
                 )
+                if not outcome.is_error:
+                    await event_counters.record(
+                        db, company_id=task.company_id, event_type=EventType.external_message
+                    )
+            await event_counters.record(
+                db, company_id=task.company_id, event_type=EventType.tool_call
+            )
             await db.commit()
 
         if outcome.stop:
@@ -815,6 +829,14 @@ class NativeBackend:
             # having resolved its target, don't strand the target in ``auditing``
             # — accept it so the result still propagates and the run can wind down.
             await self._resolve_dangling_audit(db, row)
+            if status is TaskStatus.done:
+                await event_counters.record(
+                    db, company_id=task.company_id, event_type=EventType.task_completed
+                )
+            elif status is TaskStatus.failed:
+                await event_counters.record(
+                    db, company_id=task.company_id, event_type=EventType.task_failed
+                )
             await db.commit()
         return {"status": status.value, "output": output}
 

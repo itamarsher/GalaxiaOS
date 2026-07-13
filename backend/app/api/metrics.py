@@ -7,7 +7,7 @@ from fastapi import APIRouter, Query
 from app.deps import CompanyDep, DbDep
 from app.models.enums import MetricSource
 from app.schemas.metrics import MetricSignalIn, MetricSignalOut
-from app.services import metrics
+from app.services import event_counters, metrics
 
 router = APIRouter(prefix="/companies/{company_id}", tags=["metrics"])
 
@@ -32,3 +32,17 @@ async def list_metrics(
     company: CompanyDep, db: DbDep, limit: int = Query(default=8, ge=1, le=100)
 ):
     return await metrics.latest_signals(db, company_id=company.id, limit=limit)
+
+
+@router.get("/event-counters")
+async def list_event_counters(company: CompanyDep, db: DbDep) -> dict:
+    """Per-company running totals of every countable system event.
+
+    Returns both a ``{event_type: count}`` map (for quick lookups) and a sorted
+    ``counters`` list carrying the last-seen timestamp per type.
+    """
+    counters = await event_counters.snapshot(db, company_id=company.id)
+    return {
+        "totals": {c["event_type"]: c["count"] for c in counters},
+        "counters": counters,
+    }
