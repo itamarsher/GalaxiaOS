@@ -220,6 +220,9 @@ export interface McpServer {
   id: string; name: string; label: string; url: string; transport: string;
   enabled: boolean; has_auth: boolean; tool_count: number; tools: string[]; last_error: string | null;
 }
+/** One per-company event tally: how many of each event the system has recorded. */
+export interface EventCounter { event_type: string; count: number; last_event_at: string | null }
+export interface EventCounters { totals: Record<string, number>; counters: EventCounter[] }
 export interface ArtifactSummary {
   id: string; kind: string; title: string;
   source_task_id: string | null; source_agent_id: string | null; created_at: string;
@@ -399,6 +402,9 @@ export const api = {
     req<TaskDetail>(`/companies/${companyId}/tasks/${taskId}`),
   taskTranscript: (companyId: string, taskId: string) =>
     req<TaskTranscript>(`/companies/${companyId}/tasks/${taskId}/transcript`),
+
+  eventCounters: (companyId: string) =>
+    req<EventCounters>(`/companies/${companyId}/event-counters`),
 
   policies: (companyId: string) => req<Policy[]>(`/companies/${companyId}/policies`),
   breakers: (companyId: string) => req<Breaker[]>(`/companies/${companyId}/circuit-breakers`),

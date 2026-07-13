@@ -23,6 +23,7 @@ from app.models.enums import (
     BreakerState,
     BreakerType,
     CompanyStatus,
+    EventType,
     RunStatus,
     RunTrigger,
     TaskStatus,
@@ -33,6 +34,7 @@ from app.runtime.backends import get_backend
 from app.runtime.context import RuntimeContext
 from app.runtime.tools.base import DEFAULT_MAX_OBSERVATION_CHARS, clip
 from app.services import budget as budget_svc
+from app.services import event_counters
 from app.services import objectives as objectives_svc
 from app.services import tasks as task_svc
 
@@ -87,6 +89,7 @@ async def _create_ceo_run(
     )
     db.add(task)
     await db.flush()
+    await event_counters.record(db, company_id=company_id, event_type=EventType.run_started)
     return task.id
 
 
@@ -220,6 +223,9 @@ async def run_task(ctx: RuntimeContext, task_id: uuid.UUID) -> dict:
             return {"status": "blocked", "reason": "agent paused"}
 
         task.status = TaskStatus.running
+        await event_counters.record(
+            db, company_id=task.company_id, event_type=EventType.task_started
+        )
         await db.commit()
         backend_type = agent.backend_type.value
 
@@ -253,6 +259,9 @@ async def run_task(ctx: RuntimeContext, task_id: uuid.UUID) -> dict:
                     row.status = TaskStatus.failed
                     row.output = {"error": error_text}
                     row.transcript = None  # terminal: drop the working-memory checkpoint
+                    await event_counters.record(
+                        db, company_id=task.company_id, event_type=EventType.task_failed
+                    )
                 await db.commit()
         if review_task_id is not None:
             # Handled gracefully: the CEO will decide on a retry. Don't re-raise.

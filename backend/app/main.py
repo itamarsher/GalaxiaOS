@@ -77,7 +77,11 @@ async def _lifespan(app: FastAPI):
 
 
 def create_app() -> FastAPI:
-    configure_logging(level=settings.log_level, json_logs=settings.log_json)
+    configure_logging(
+        level=settings.log_level,
+        json_logs=settings.log_json,
+        escalate_errors=settings.error_monitor_enabled,
+    )
     app = FastAPI(
         title="ABOS — Autonomous Business Operating System",
         version="0.1.0",

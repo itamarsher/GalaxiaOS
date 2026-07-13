@@ -13,6 +13,7 @@ from app.jobs.scheduled import (
     backfill_memory_embeddings,
     generate_digests,
     monitor_failed_tasks,
+    monitor_render_platform,
     promote_feature_backlog,
     recompute_runway,
     reconcile_delivered_requests,
@@ -35,6 +36,17 @@ async def run_task(ctx: dict, task_id: str) -> dict:
 
 
 async def startup(ctx: dict) -> None:
+    # Configure structured logging in the standalone worker process too, so worker
+    # and cron failures get the same JSON format and (when enabled) flow through the
+    # error-escalation handler exactly like the API's. The in-process worker shares
+    # the API's already-configured root logger, so re-running this is harmless.
+    from app.observability import configure_logging
+
+    configure_logging(
+        level=settings.log_level,
+        json_logs=settings.log_json,
+        escalate_errors=settings.error_monitor_enabled,
+    )
     redis = ctx["redis"]
 
     async def enqueue_task(task_id: uuid.UUID, *, delay_seconds: float = 0) -> None:
@@ -88,6 +100,11 @@ class WorkerSettings:
         # Platform reliability monitor: investigate its own failed tasks and file
         # bug reports for the auto-fix pipeline (:22, offset from the others).
         cron(monitor_failed_tasks, minute=settings.platform_failure_monitor_minute),
+        # Render platform monitor: scan our own Render services/deploys for failed
+        # deploys and suspended services and escalate each to an auto-fix issue
+        # (:52, offset from the others). No-op unless error monitoring + a Render
+        # key are configured.
+        cron(monitor_render_platform, minute=settings.render_monitor_minute),
     ]
     on_startup = startup
     redis_settings = redis_settings()

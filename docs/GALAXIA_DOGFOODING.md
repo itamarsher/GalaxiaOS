@@ -73,7 +73,7 @@ without a human, and it never **closes back** onto the requesters. Details below
 - **Promoter tools** — `list_feature_requests` / `promote_feature_request`, gated to the abos
   admin company, file real GitHub issues with demand attribution (`runtime/tools/platform.py`).
 - **GitHub issue seam** — real REST adapter with title-dedup and "+1" demand counting
-  (`integrations/issues.py`); default repo `itamarsher/just-launch-it`.
+  (`integrations/issues.py`); the target repo is set via `ABOS_GITHUB_REPO`.
 - **Triage → implement workflows** — `issue-triage.yml` (investigate → close or label) and
   `issue-implement.yml` (implement on a branch, open a PR, run tests).
 - **CI** — `ci.yml` runs lint, the provider-boundary guard, the full Alembic chain against
