@@ -20,6 +20,7 @@ from app.jobs.scheduled import (
     reconcile_delivered_requests,
     reconcile_site_domains,
     run_business_cycle,
+    triage_founder_decisions,
 )
 from app.observability import get_logger
 from app.providers.registry import get_provider
@@ -85,6 +86,11 @@ class WorkerSettings:
     cron_jobs = [
         cron(recompute_runway, minute=settings.runway_recompute_minute),
         cron(generate_digests, hour=settings.digest_hour_utc, minute=0),
+        # Founder decision delegate: notify the founder's webhook of new pending
+        # decisions and auto-resolve the routine ones (opt-in). Every minute so a
+        # "needs your approval" ping is near-real-time; no-ops for companies with
+        # no delegate configured, and entirely off via ABOS_DELEGATE_ENABLED.
+        cron(triage_founder_decisions, minute=set(range(0, 60))),
         cron(run_business_cycle, hour=settings.business_cycle_hour_utc, minute=0),
         # Push in-flight domain connections forward (zone activation + HTTPS take
         # minutes and happen out-of-band); every 5 minutes is plenty.

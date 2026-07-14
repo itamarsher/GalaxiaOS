@@ -131,6 +131,53 @@ async def reconcile_delivered_requests(ctx: dict) -> dict:
     return result
 
 
+async def triage_founder_decisions(ctx: dict) -> dict:
+    """Notify the founder's webhook of pending decisions, and auto-resolve the
+    routine ones when the Claude delegate is enabled (see app.services.delegate).
+
+    Runs per active company that has a delegate configured; a company with no
+    config is skipped untouched. Heavy work (the LLM triage, the webhook POST) is
+    kept off the agent hot path — this cron is its own place. Auto-resolutions go
+    through the normal decision-resolution path, so their resumed tasks are
+    enqueued exactly like a founder's click.
+    """
+    if not settings.delegate_enabled:
+        return {"skipped": True}
+    from app.runtime.queue import enqueue_task
+    from app.services import delegate
+
+    to_enqueue: list = []
+    webhooks: list[tuple[str, dict]] = []
+    handled = 0
+
+    for company_id in await _active_company_ids():
+        async with SessionLocal() as db:
+            await set_tenant(db, company_id)
+            cfg = await delegate.get_config(db, company_id)
+            if cfg is None or not cfg.active:
+                continue
+            company = await db.get(Company, company_id)
+            if company is None:
+                continue
+            for decision in await delegate.untriaged_pending(db, company_id):
+                outcome = await delegate.handle(db, company=company, decision=decision, cfg=cfg)
+                handled += 1
+                if outcome.resumed_task_id is not None:
+                    to_enqueue.append(outcome.resumed_task_id)
+                if outcome.webhook_payload is not None and cfg.webhook_url:
+                    webhooks.append((cfg.webhook_url, outcome.webhook_payload))
+            await db.commit()
+
+    # Fire side effects only after the DB is durably committed.
+    from app.services import delegate as _delegate
+
+    for task_id in to_enqueue:
+        await enqueue_task(task_id)
+    for url, payload in webhooks:
+        await _delegate.send_webhook(url, payload)
+    return {"handled": handled, "resumed": len(to_enqueue), "notified": len(webhooks)}
+
+
 async def monitor_failed_tasks(ctx: dict) -> dict:
     """The platform company watches its own failed tasks and wakes the Platform
     agent to investigate + report bugs (feeding the Claude Code auto-fix pipeline).

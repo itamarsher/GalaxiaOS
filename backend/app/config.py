@@ -272,6 +272,10 @@ class Settings(BaseSettings):
     roi_pause_floor: float = 0.05  # reputation.roi below this is "low ROI"
     digest_hour_utc: int = 13  # daily digest cron hour
     runway_recompute_minute: int = 0  # hourly runway recompute
+    # Founder decision delegate (webhook notify + opt-in Claude auto-triage).
+    # Global kill switch for the per-minute triage cron; per-company config
+    # (webhook URL, auto-pilot, allowed kinds, spend cap) lives in the DB.
+    delegate_enabled: bool = True
 
     # Closed-loop runtime
     memory_recall_limit: int = 6  # prior learnings injected into an agent's context
