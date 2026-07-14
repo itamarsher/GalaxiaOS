@@ -46,6 +46,9 @@ escalate_paths:
   - "backend/app/runtime/cost_meter.py"        # the single budget chokepoint
   - "backend/app/services/budget.py"           # budget accounting
   - "backend/app/services/governance.py"       # the escalation engine itself
+  - "backend/app/services/decisions.py"         # the founder-approval gate (a wrong change here can act without real sign-off)
+  - "backend/app/services/apikeys.py"           # key resolution / managed-mode funding (whose key pays)
+  - "backend/app/providers/**"                  # LLM provider + credential handling
   - "backend/app/integrations/stripe_issuing.py"   # real-money spend
   - "backend/app/integrations/stripe_link.py"
   - "backend/app/integrations/card_checkout.py"
@@ -54,3 +57,16 @@ escalate_paths:
   - "backend/app/services/galaxia.py"          # the dogfooding bootstrap itself
   - ".github/workflows/**"                     # the pipeline can't rewrite itself unreviewed
   - ".github/dogfooding.yml"                    # …nor loosen its own guardrails
+  # Supply chain: a dependency bump (incl. a malicious/breaking transitive dep) is
+  # exactly the "expensive + hard to reason about" case a human should eyeball.
+  - "backend/pyproject.toml"
+  - "backend/uv.lock"
+  - "frontend/package.json"
+  - "frontend/pnpm-lock.yaml"
+
+# Second escalation trigger, independent of paths: a diff this large is beyond what
+# the autonomous reviewer should wave through unreviewed, even in "safe" files.
+# The auto-merge workflow escalates (founder-review) when EITHER bound is exceeded.
+escalate_diff:
+  max_files: 15
+  max_total_lines: 400

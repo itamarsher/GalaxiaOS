@@ -82,13 +82,20 @@ jobs:
                passing/success. If anything is pending or failing, stop (do not
                merge). This is belt-and-suspenders on top of the workflow_run gate.
 
-            5. ESCALATION BOUNDARY. Get changed files:
-               `gh pr diff <n> --name-only`. If ANY file matches ANY glob in
-               `escalate_paths`, this is founder-level and NOT yours to merge:
+            5. ESCALATION BOUNDARY. This is founder-level — NOT yours to merge — if
+               EITHER of these holds:
+                 (a) PATH: any changed file (`gh pr diff <n> --name-only`) matches
+                     ANY glob in `escalate_paths`; or
+                 (b) SIZE: the diff exceeds `escalate_diff` from the config — more
+                     than `max_files` files changed, or more than `max_total_lines`
+                     total added+deleted lines (`gh pr diff <n> --patch` counts, or
+                     sum additions+deletions from
+                     `gh pr view <n> --json additions,deletions,changedFiles`).
+               If either triggers:
                  - add the label `founder-review` (create with `gh label create` if
                    missing),
-                 - post ONE comment naming the file(s) that triggered escalation and
-                   that a founder must review/merge,
+                 - post ONE comment naming what triggered escalation (the specific
+                   file(s), and/or the diff size vs. the limit),
                  - do NOT approve, do NOT merge. Stop.
 
             6. RUNAWAY CAP. Count PRs merged in the last 24h
