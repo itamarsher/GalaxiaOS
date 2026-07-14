@@ -42,6 +42,33 @@ def normalize_db_url(url: str) -> str:
     return _url.urlunsplit(parts._replace(query=_url.urlencode(kept)))
 
 
+def normalize_base_url(url: str) -> str:
+    """Coerce a configured public base URL into a clean absolute origin.
+
+    The OAuth redirect URI is built as ``<base>/auth/google/callback`` and must
+    match — byte for byte — the URI registered on the Google OAuth client. Two
+    operator mistakes silently break that match:
+
+    - a **missing scheme** (``abos-api.onrender.com``) — the common Render trap,
+      since ``NEXT_PUBLIC_API_BASE_URL`` is auto-wired from the service *host*
+      (no scheme), so the same host-only value gets pasted here; and
+    - a **trailing slash** (``https://abos-api.onrender.com/``).
+
+    Both would otherwise produce a redirect URI Google rejects with
+    ``redirect_uri_mismatch``. Normalize to ``<scheme>://host[:port][/path]`` with
+    no trailing slash. Scheme defaults to ``https`` (``http`` for local hosts, so
+    dev keeps working). An empty value is left empty (feature stays disabled).
+    """
+    v = (url or "").strip().rstrip("/")
+    if not v:
+        return v
+    if "://" not in v:
+        host = v.split("/", 1)[0].split(":", 1)[0].lower()
+        scheme = "http" if host in ("localhost", "127.0.0.1") else "https"
+        v = f"{scheme}://{v}"
+    return v
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="ABOS_", env_file=".env", extra="ignore")
 
@@ -600,6 +627,13 @@ class Settings(BaseSettings):
     # web app, so we can land them back on the company's Settings page. Set per
     # environment via ``ABOS_WEB_BASE_URL`` (no trailing slash).
     web_base_url: str = ""
+
+    @field_validator("public_api_base_url", "web_base_url")
+    @classmethod
+    def _normalize_base_url(cls, v: str) -> str:
+        # Tolerate a scheme-less or trailing-slashed value so the OAuth redirect
+        # URI we build always matches the one registered on the Google client.
+        return normalize_base_url(v)
 
     # CORS: browser origins allowed to call the API. Comma-separated in the
     # environment, e.g.

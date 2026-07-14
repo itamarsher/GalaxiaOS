@@ -55,11 +55,27 @@ services:
       # (comma-separated for multiple), e.g. https://abos-web.onrender.com.
       - key: ABOS_CORS_ALLOW_ORIGINS
         sync: false
-      # This API's own public URL (no trailing slash), e.g. https://abos-api.onrender.com.
-      # Landing pages are static on Cloudflare Pages, so their built-in lead-capture
-      # form POSTs to an absolute URL back here. Without it, on-page capture is off.
+      # This API's own public URL — the OAuth redirect base and the absolute POST
+      # target for landing-page lead-capture forms (static pages on Cloudflare
+      # Pages can't use a relative URL). Auto-wired from THIS service's own host so
+      # the API domain lives in exactly one place: change the service's domain and
+      # every consumer follows. Render supplies the host with no scheme
+      # (abos-api.onrender.com); the backend normalizes it to https:// at load
+      # (config.normalize_base_url), so the constructed OAuth redirect URI still
+      # matches the one registered on the Google client.
       - key: ABOS_PUBLIC_API_BASE_URL
-        sync: false
+        fromService:
+          type: web
+          name: abos-api
+          property: host
+      # Where the OAuth callback sends the founder's browser afterwards (the web
+      # app's Settings page). Auto-wired from the web service's host, so the web
+      # domain likewise lives in one place.
+      - key: ABOS_WEB_BASE_URL
+        fromService:
+          type: web
+          name: abos-web
+          property: host
       - fromGroup: abos-shared
 
   # arq worker (agent runtime + scheduled jobs). Same image, different command.
@@ -88,6 +104,13 @@ services:
           name: abos-api
           type: web
           envVarKey: ABOS_JWT_SECRET
+      # Agents (running here) generate landing pages whose lead-capture form POSTs
+      # back to the API — same single-source API host the web service uses.
+      - key: ABOS_PUBLIC_API_BASE_URL
+        fromService:
+          type: web
+          name: abos-api
+          property: host
       - fromGroup: abos-shared
 
   # Next.js frontend.
