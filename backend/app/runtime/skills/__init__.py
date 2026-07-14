@@ -61,18 +61,28 @@ def _parse_front_matter(text: str) -> tuple[dict[str, str], str]:
     return meta, body
 
 
-def _load_skill_file(path: Path) -> Skill | None:
-    meta, body = _parse_front_matter(path.read_text(encoding="utf-8"))
-    name = meta.get("name") or path.stem
+def parse_skill_text(text: str, *, default_name: str = "") -> Skill:
+    """Parse raw skill-file text (front matter + body) into a :class:`Skill`.
+
+    ``default_name`` is used when the front matter omits ``name`` (the on-disk
+    loader passes the filename stem). Exposed so the optimizer can validate a
+    candidate file with exactly the same rules the loader applies.
+    """
+    meta, body = _parse_front_matter(text)
+    name = meta.get("name") or default_name
     roles_raw = meta.get("roles", "")
     roles = tuple(r.strip() for r in roles_raw.replace(";", ",").split(",") if r.strip())
     return Skill(
         name=name,
-        title=meta.get("title") or name.replace("-", " ").title(),
+        title=meta.get("title") or (name.replace("-", " ").title() if name else ""),
         description=meta.get("description", ""),
         roles=roles,
         body=body.strip(),
     )
+
+
+def _load_skill_file(path: Path) -> Skill | None:
+    return parse_skill_text(path.read_text(encoding="utf-8"), default_name=path.stem)
 
 
 def _load_all() -> dict[str, Skill]:
@@ -95,6 +105,24 @@ def all_skills() -> list[Skill]:
 
 def get_skill(name: str) -> Skill | None:
     return _SKILLS.get((name or "").strip())
+
+
+def skill_file(name: str) -> Path | None:
+    """Absolute path to a skill's markdown file, or ``None`` if there is no such
+    skill or its ``<name>.md`` file is missing.
+
+    The optimizer treats the *whole* file (front matter + body) as the trainable
+    unit — the ``description``/``roles`` trigger matters as much as the steps — so
+    it needs the raw file, not just the parsed :class:`Skill`.
+    """
+    if get_skill(name) is None:
+        return None
+    path = _LIBRARY / f"{(name or '').strip()}.md"
+    return path if path.is_file() else None
+
+
+#: Repo-relative path of the skill library, for issue bodies / PR targets.
+LIBRARY_REPO_PATH = "backend/app/runtime/skills/library"
 
 
 def skills_for_role(role: str) -> list[Skill]:

@@ -37,6 +37,18 @@ async def _load_skill(db, ctx, *, agent, task, args: dict) -> ToolOutcome:
             observation=f"No skill named {name!r}. Available skills: {available}.",
             is_error=True,
         )
+    # Telemetry: record that this task used this skill so its outcome can later be
+    # attributed to the playbook (the transcript is dropped at terminal state).
+    # Best-effort — never let a bookkeeping write break the load.
+    from app.services import skill_signal
+
+    await skill_signal.record_usage(
+        db,
+        company_id=task.company_id,
+        task_id=task.id,
+        agent_id=agent.id,
+        skill_name=skill.name,
+    )
     return ToolOutcome(observation=f"# Skill: {skill.title}\n\n{skill.body}")
 
 
