@@ -144,10 +144,11 @@ async def triage_founder_decisions(ctx: dict) -> dict:
     if not settings.delegate_enabled:
         return {"skipped": True}
     from app.runtime.queue import enqueue_task
+    from app.services import budget as budget_svc
     from app.services import delegate
 
     to_enqueue: list = []
-    webhooks: list[tuple[str, dict]] = []
+    webhooks: list[tuple[str, dict, str | None]] = []  # (url, payload, secret)
     handled = 0
 
     for company_id in await _active_company_ids():
@@ -159,13 +160,29 @@ async def triage_founder_decisions(ctx: dict) -> dict:
             company = await db.get(Company, company_id)
             if company is None:
                 continue
+            budget = await budget_svc.get_active_budget(db, company_id)
+            remaining = (
+                budget.limit_cents - budget.spent_cents - budget.reserved_cents
+                if budget is not None
+                else None
+            )
             for decision in await delegate.untriaged_pending(db, company_id):
-                outcome = await delegate.handle(db, company=company, decision=decision, cfg=cfg)
+                outcome = await delegate.handle(
+                    db,
+                    company=company,
+                    decision=decision,
+                    cfg=cfg,
+                    remaining_budget_cents=remaining,
+                )
                 handled += 1
                 if outcome.resumed_task_id is not None:
                     to_enqueue.append(outcome.resumed_task_id)
-                if outcome.webhook_payload is not None and cfg.webhook_url:
-                    webhooks.append((cfg.webhook_url, outcome.webhook_payload))
+                if outcome.webhook_payload is not None:
+                    for target in cfg.webhooks:
+                        if delegate.webhook_wants(target.events, outcome.disposition):
+                            webhooks.append(
+                                (target.url, outcome.webhook_payload, cfg.signing_secret)
+                            )
             await db.commit()
 
     # Fire side effects only after the DB is durably committed.
@@ -173,8 +190,8 @@ async def triage_founder_decisions(ctx: dict) -> dict:
 
     for task_id in to_enqueue:
         await enqueue_task(task_id)
-    for url, payload in webhooks:
-        await _delegate.send_webhook(url, payload)
+    for url, payload, secret in webhooks:
+        await _delegate.send_webhook(url, payload, secret)
     return {"handled": handled, "resumed": len(to_enqueue), "notified": len(webhooks)}
 
 
