@@ -93,8 +93,16 @@ jobs:
 
             8. APPROVE + MERGE. If the review is clean:
                  - `gh pr review <n> --approve` with a one-line rationale,
-                 - merge directly with the configured method + delete the branch,
-                   e.g. `gh pr merge <n> --squash --delete-branch`.
+                 - merge directly with the configured method + delete the branch.
+                   Because this repo squash-merges, the squash commit is the ONLY
+                   thing that reaches main and YOU write its message — so it must
+                   be clean. Pass an explicit message: subject = the PR title with
+                   "(#<n>)", body = a concise summary you write. Do NOT let any
+                   Claude Code per-session trailer or session URL from the branch
+                   commits end up in it (the no-session-links check enforces this
+                   on main). Example:
+                     `gh pr merge <n> --squash --delete-branch \`
+                     `  --subject "<pr title> (#<n>)" --body "<clean summary>"`.
                (Merge directly, NOT `--auto`: GitHub's auto-merge needs required
                checks / protection to be meaningful, which this repo doesn't have —
                and you have already verified CI is green in steps 3–4.)

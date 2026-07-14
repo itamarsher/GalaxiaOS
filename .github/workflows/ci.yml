@@ -7,28 +7,28 @@ on:
 
 jobs:
   no-session-links:
-    # Verify no Claude Code per-session links are introduced — neither the
-    # commit-message trailer nor any such URL in tracked files. See
-    # scripts/check_no_session_links.sh for the exact pattern.
+    # Verify no Claude Code per-session links are introduced. On pull requests we
+    # enforce only that no such URL is committed into FILES: the pipeline's agent
+    # commits may carry the action's session trailer in their messages, but the
+    # pipeline squash-merges, so those branch messages never reach main. Commit-
+    # message enforcement runs on push to main (where the squash commit lands).
+    # See scripts/check_no_session_links.sh for the exact pattern.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - name: Determine commit range
-        id: range
+      - name: Check for Claude session links
         run: |
           if [ "${{ github.event_name }}" = "pull_request" ]; then
-            echo "range=${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}" >> "$GITHUB_OUTPUT"
+            scripts/check_no_session_links.sh --files-only
           else
             before="${{ github.event.before }}"
             if [ -z "$before" ] || [ "$before" = "0000000000000000000000000000000000000000" ]; then
               before="$(git rev-parse HEAD~1 2>/dev/null || git rev-parse HEAD)"
             fi
-            echo "range=$before..${{ github.sha }}" >> "$GITHUB_OUTPUT"
+            scripts/check_no_session_links.sh "$before..${{ github.sha }}"
           fi
-      - name: Check for Claude session links
-        run: scripts/check_no_session_links.sh "${{ steps.range.outputs.range }}"
 
   backend:
     runs-on: ubuntu-latest

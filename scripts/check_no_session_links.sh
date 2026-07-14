@@ -13,12 +13,16 @@
 # creep back in.
 #
 # Usage:
-#   scripts/check_no_session_links.sh [GIT_RANGE]
+#   scripts/check_no_session_links.sh [--files-only | GIT_RANGE]
 #
-#   GIT_RANGE  optional revision range (e.g. "$before..$after" or
-#              "origin/main..HEAD"). When given, every commit MESSAGE in the
-#              range is checked. When omitted, only HEAD's message is checked.
-#   Tracked file CONTENTS are always checked at the current tree.
+#   --files-only  scan tracked file contents only; skip the commit-message
+#                 check. Used on pull requests: the pipeline's agent commits may
+#                 carry the action's session trailer, but the pipeline SQUASH-
+#                 merges, so those branch messages never reach main — only the
+#                 squash commit does, which is enforced on push to main.
+#   GIT_RANGE     revision range (e.g. "$before..$after"). Every commit MESSAGE
+#                 in the range is checked, plus file contents.
+#   (no argument) check HEAD's message plus file contents.
 #
 # Exit status: 0 when clean, 1 when a link is found.
 
@@ -31,10 +35,11 @@ PATTERN="[Cc]laude-[Ss]ession:|claude\.ai/[A-Za-z0-9._/-]*""session"
 SELF="scripts/check_no_session_links.sh"
 fail=0
 
-# 1) Commit messages in the range (new commits only, when a range is supplied).
+# 1) Commit messages (skipped entirely in --files-only mode).
 range="${1:-}"
-commits=""
-if [ -n "$range" ]; then
+if [ "$range" = "--files-only" ]; then
+  commits=""
+elif [ -n "$range" ]; then
   commits="$(git rev-list "$range" 2>/dev/null || true)"
 else
   commits="$(git rev-parse HEAD 2>/dev/null || true)"
