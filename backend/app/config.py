@@ -486,6 +486,35 @@ class Settings(BaseSettings):
     platform_reconcile_batch: int = 25
     platform_reconcile_minute: int = 37  # once/hour at :37 (offset from the promoter)
 
+    # Skill optimizer (SkillOpt-style): a cron that learns which shared playbooks are
+    # underperforming from real skill-usage outcomes, then proposes validation-gated,
+    # bounded edits — filed as issues into the same triage→implement→CI→auto-merge
+    # pipeline a capability request uses, so a validated skill edit reviews-and-merges
+    # itself. Opt-in (defaults OFF) because it edits the skill library autonomously;
+    # runs on the platform company only, and no-ops without an LLM + tracker.
+    skill_optimize_enabled: bool = False
+    skill_optimize_minute: int = 47  # once/hour at :47 (offset from the other crons)
+    skill_optimize_batch: int = 3  # candidate skills examined per tick (budget cap)
+    skill_optimize_window_days: int = 14  # outcome window the signal aggregates over
+    skill_optimize_min_samples: int = 5  # don't rewrite off fewer than this many tasks
+    skill_optimize_success_ceiling: float = 0.8  # only consider skills at/under this success rate
+    skill_optimize_max_edits: int = 5  # learning-rate: max bounded changes per candidate
+    skill_optimize_gate_min_margin: int = 1  # candidate must beat current by ≥ this to propose
+    skill_optimize_gate_auto_margin: int = 3  # ≥ this gate margin → auto path; else flag for a human
+    skill_optimize_model: str = ""  # empty → the provider's planner-tier default
+    # Labels put on a high-confidence proposal so it enters the auto-merge pipeline.
+    # NoDecode + the validator below accept a plain comma-separated env string.
+    skill_optimize_labels: Annotated[list[str], NoDecode] = Field(
+        default_factory=lambda: ["skill-optimize"]
+    )
+
+    @field_validator("skill_optimize_labels", mode="before")
+    @classmethod
+    def _split_skill_labels(cls, v):
+        if isinstance(v, str):
+            return [o.strip() for o in v.split(",") if o.strip()]
+        return v
+
     # Which deployment this is. The CURRENT default deployment is the *dogfooding*
     # environment: GalaxiaOS runs here and is allowed to experiment, self-modify,
     # and deploy.

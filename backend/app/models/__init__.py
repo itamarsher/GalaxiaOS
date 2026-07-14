@@ -40,6 +40,7 @@ from app.models.metrics import MetricSignal
 from app.models.mission import KeyResult, Mission, Objective
 from app.models.run import AgentRun, Task
 from app.models.site import Site, SiteDomain, SiteLead
+from app.models.skill_usage import SkillUsage
 from app.models.user import Membership, User
 
 __all__ = [
@@ -83,6 +84,7 @@ __all__ = [
     "Site",
     "SiteDomain",
     "SiteLead",
+    "SkillUsage",
     "ExternalMessage",
     "ChatChannel",
     "ChatParticipant",

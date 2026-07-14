@@ -14,6 +14,7 @@ from app.jobs.scheduled import (
     generate_digests,
     monitor_failed_tasks,
     monitor_render_platform,
+    optimize_skills,
     promote_feature_backlog,
     recompute_runway,
     reconcile_delivered_requests,
@@ -105,6 +106,10 @@ class WorkerSettings:
         # (:52, offset from the others). No-op unless error monitoring + a Render
         # key are configured.
         cron(monitor_render_platform, minute=settings.render_monitor_minute),
+        # Skill optimizer: learn which shared playbooks underperform and propose
+        # validation-gated, bounded edits into the auto-merge pipeline (:47, offset
+        # from the others). Opt-in — no-ops unless ABOS_SKILL_OPTIMIZE_ENABLED.
+        cron(optimize_skills, minute=settings.skill_optimize_minute),
     ]
     on_startup = startup
     redis_settings = redis_settings()

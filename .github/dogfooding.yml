@@ -17,6 +17,10 @@ auto_merge:
   # auto-merged (a human PR is unaffected by this automation).
   eligible_labels:
     - claude-implement
+    # The skill-optimizer's label (see backend/app/runtime/skill_optimizer.py): a
+    # gated, bounded edit to a runtime/skills/library/*.md playbook — not an
+    # escalated path — so its PRs review-and-merge autonomously like a capability PR.
+    - skill-optimize
 
   # Runaway backstop: hard cap on autonomous merges in a rolling 24h. When the cap
   # is hit the workflow escalates instead of merging.

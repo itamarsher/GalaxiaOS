@@ -182,6 +182,29 @@ async def monitor_render_platform(ctx: dict) -> dict:
     return result
 
 
+async def optimize_skills(ctx: dict) -> dict:
+    """Improve the shared skill library from real outcomes (SkillOpt-style).
+
+    Runs on the platform company's behalf: it aggregates which playbooks are
+    underperforming, proposes validation-gated bounded edits, and files them into
+    the same triage→implement→auto-merge pipeline a capability request uses. Opt-in
+    and no-ops until a platform company is designated and an LLM + tracker exist.
+    """
+    if not settings.skill_optimize_enabled:
+        return {"skipped": True}
+    from app.runtime import skill_optimizer
+    from app.services import platform_company
+
+    async with SessionLocal() as db:
+        company_id = await platform_company.platform_company_id(db)
+        if company_id is None:
+            return {"skipped": "no_platform_company"}
+        await set_tenant(db, company_id)
+        result = await skill_optimizer.run(db, ctx["runtime"], company_id=company_id)
+        await db.commit()
+    return result
+
+
 async def run_business_cycle(ctx: dict) -> dict:
     """Kick off a recurring business-cycle run for each active company."""
     if not settings.business_cycle_enabled:
