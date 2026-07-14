@@ -219,7 +219,7 @@ function DelegateCard({ companyId }: { companyId: string }) {
     setSecret(cfg.data.signing_secret);
   }, [cfg.data]);
 
-  const save = async (patch: { autonomy_level: number; webhooks: DelegateWebhook[]; rotate_secret?: boolean }) => {
+  const save = async (patch: { autonomy_level: number; webhooks: DelegateWebhook[]; rotate_secret?: boolean; telegram_events?: WebhookEvents }) => {
     setBusy(true); setErr(null); setSaved(false);
     try {
       const next: DelegateSettings = await api.updateDelegate(companyId, patch);
@@ -307,6 +307,53 @@ function DelegateCard({ companyId }: { companyId: string }) {
           </span>
           <code style={{ wordBreak: "break-all" }}>{secret}</code>
         </div>
+      )}
+
+      {/* Telegram — shared platform bot; the founder just connects their chat. */}
+      {cfg.data?.telegram.enabled && (
+        <>
+          <div className="step" style={{ marginTop: 18 }}>Telegram</div>
+          {cfg.data.telegram.connected ? (
+            <div className="kv" style={{ marginTop: 8, alignItems: "center", gap: 6 }}>
+              <span className="status active">Connected</span>
+              <select
+                value={cfg.data.telegram.events}
+                disabled={busy}
+                onChange={async (e) => {
+                  await save({ autonomy_level: level, webhooks: validHooks, telegram_events: e.target.value as WebhookEvents });
+                  cfg.reload();
+                }}
+              >
+                {EVENT_LABELS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+              </select>
+              <button className="ghost danger" style={{ marginTop: 0 }} disabled={busy}
+                onClick={async () => { setBusy(true); try { await api.telegramDisconnect(companyId); cfg.reload(); } finally { setBusy(false); } }}>
+                Disconnect
+              </button>
+            </div>
+          ) : (
+            <>
+              <p className="muted" style={{ fontSize: 13, margin: "6px 0 0" }}>
+                Get pinged on Telegram — no bot setup needed. Tap Connect, press <strong>Start</strong> in the chat that opens, then refresh.
+              </p>
+              <div className="btnrow">
+                <button disabled={busy}
+                  onClick={async () => {
+                    setBusy(true); setErr(null);
+                    try {
+                      const { connect_url } = await api.telegramConnectLink(companyId);
+                      if (connect_url) window.open(connect_url, "_blank", "noopener");
+                      else setErr("Telegram isn't configured on this deployment yet.");
+                    } catch (e) { setErr(String(e instanceof Error ? e.message : e)); }
+                    finally { setBusy(false); }
+                  }}>
+                  Connect Telegram
+                </button>
+                <button className="ghost" disabled={busy} onClick={() => cfg.reload()}>Refresh</button>
+              </div>
+            </>
+          )}
+        </>
       )}
 
       <div className="btnrow">

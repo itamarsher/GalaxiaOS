@@ -35,6 +35,7 @@ from app.api import (
     onboarding,
     public,
     stripe_webhooks,
+    webhooks_telegram,
 )
 from app.config import settings
 from app.db import SessionLocal
@@ -57,6 +58,14 @@ async def _lifespan(app: FastAPI):
     # flagged as the platform company (services/platform_company.py), which is what
     # authorizes the Platform agent's promoter tools and drives the demand→issue
     # loop. The promoter/render/cron gates all key off that flag.
+    # Point the shared Telegram bot at our inbound webhook so founders' connect
+    # deep links resolve. Best-effort and idempotent; no-op without a bot token.
+    if settings.telegram_bot_token and settings.public_api_base_url:
+        from app.services import telegram as telegram_svc
+
+        with contextlib.suppress(Exception):
+            await telegram_svc.ensure_webhook(settings.public_api_base_url)
+
     worker = None
     task = None
     if settings.run_worker_in_process:
@@ -132,6 +141,7 @@ def create_app() -> FastAPI:
     app.include_router(metrics.router)
     app.include_router(decisions.router)
     app.include_router(delegate.router)
+    app.include_router(webhooks_telegram.router)
     app.include_router(comms.router)
     app.include_router(chat.router)
     app.include_router(copilot.router)
