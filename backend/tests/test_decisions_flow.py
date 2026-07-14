@@ -140,6 +140,179 @@ async def test_submit_plan_is_idempotent_on_rerun(session_factory, company_with_
         assert row.status is TaskStatus.waiting_approval
 
 
+def test_deterministic_verdict_settles_obvious_replies():
+    """A plain approval/rejection is resolved without the LLM — the live incident
+    was the classifier returning "unclear" for a bare "Approved"."""
+    from app.services.decisions import _deterministic_verdict
+
+    for approve in ["Approved", "approved.", "✅ Approved", "yes", "YES!", "go ahead",
+                    "lgtm", "ship it", "👍", "Approve"]:
+        assert _deterministic_verdict(approve) == "approve", approve
+    for reject in ["Rejected", "no", "No.", "nope", "decline", "cancel", "👎"]:
+        assert _deterministic_verdict(reject) == "reject", reject
+    # Anything with real content still defers to the model (returns None).
+    for unclear in ["no, raise the budget instead", "yes but soften the tone",
+                    "what's the timeline?", "hmm", "can you explain?", ""]:
+        assert _deterministic_verdict(unclear) is None, unclear
+
+
+@requires_db
+async def test_reply_resolve_settles_plain_approved_without_llm(
+    session_factory, company_with_budget, monkeypatch
+):
+    """A founder DM reply of "Approved" resolves the pending plan_approval and
+    resumes its task — deterministically, with no provider configured."""
+    from app.services import decisions as decisions_svc
+
+    # The founder-note path writes to memory_entries (omitted from the test schema).
+    async def _noop_write(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(decisions_svc.memory_svc, "write", _noop_write)
+
+    company_id = company_with_budget
+    agent, task = await _make_running_task(session_factory, company_id)
+    async with session_factory() as db:
+        row = await db.get(Task, task.id)
+        row.status = TaskStatus.waiting_approval
+        decision = DecisionRequest(
+            company_id=company_id,
+            agent_id=agent.id,
+            task_id=task.id,
+            kind=DecisionKind.plan_approval,
+            summary="Proposed execution plan:\n\n## Objective 1\n- read the codebase",
+            payload={"tool": "submit_plan", "plan": "x"},
+            status=DecisionStatus.pending,
+        )
+        db.add(decision)
+        await db.flush()
+        channel = await chat.attach_decision_dm(db, decision=decision)
+        await db.commit()
+        channel_id, decision_id = channel.id, decision.id
+
+    async with session_factory() as db:
+        resumed, verdict = await decisions_svc.try_resolve_from_reply(
+            db, company_id=company_id, channel_id=channel_id, reply="Approved", user_id=None
+        )
+        await db.commit()
+
+    assert verdict == "approve"
+    assert resumed == task.id
+    async with session_factory() as db:
+        d = await db.get(DecisionRequest, decision_id)
+        assert d.status is DecisionStatus.approved
+        row = await db.get(Task, task.id)
+        assert row.status is TaskStatus.queued
+
+
+@requires_db
+async def test_reply_resolve_unclear_leaves_decision_open_and_asks(
+    session_factory, company_with_budget, monkeypatch
+):
+    """An ambiguous reply keeps the decision pending, posts a clarification, and
+    reports "unclear" so the caller won't fork a duplicate re-planning task."""
+    from app.services import decisions as decisions_svc
+
+    # No provider -> the LLM classify path degrades to "unclear".
+    async def _no_provider(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(decisions_svc.apikeys, "resolve_active_provider", _no_provider)
+
+    company_id = company_with_budget
+    agent, task = await _make_running_task(session_factory, company_id)
+    async with session_factory() as db:
+        row = await db.get(Task, task.id)
+        row.status = TaskStatus.waiting_approval
+        decision = DecisionRequest(
+            company_id=company_id,
+            agent_id=agent.id,
+            task_id=task.id,
+            kind=DecisionKind.plan_approval,
+            summary="Proposed execution plan: ship the MVP",
+            payload={"tool": "submit_plan", "plan": "x"},
+            status=DecisionStatus.pending,
+        )
+        db.add(decision)
+        await db.flush()
+        channel = await chat.attach_decision_dm(db, decision=decision)
+        await db.commit()
+        channel_id, decision_id = channel.id, decision.id
+
+    async with session_factory() as db:
+        resumed, verdict = await decisions_svc.try_resolve_from_reply(
+            db,
+            company_id=company_id,
+            channel_id=channel_id,
+            reply="what's the rollout timeline?",
+            user_id=None,
+        )
+        await db.commit()
+
+    assert verdict == "unclear"
+    assert resumed is None
+    async with session_factory() as db:
+        d = await db.get(DecisionRequest, decision_id)
+        assert d.status is DecisionStatus.pending  # still open
+        msgs = await chat.messages(db, channel_id=channel_id)
+        # A clarification prompt was posted back into the DM.
+        assert any("Approve** or **Reject" in m.body for m in msgs)
+
+
+@requires_db
+async def test_submit_plan_coalesces_across_tasks(session_factory, company_with_budget):
+    """A second task for the same agent must not stack a duplicate pending plan —
+    it's told to wait on the open one instead of burying the founder in decisions."""
+    company_id = company_with_budget
+    agent, first_task = await _make_running_task(session_factory, company_id)
+
+    async with session_factory() as db:
+        outcome = await execute_tool(
+            db, object(), agent=agent, task=first_task,
+            name="submit_plan", args={"plan": "## Obj 1\n- do the thing"},
+        )
+        await db.commit()
+    assert outcome.park is True  # first plan parks awaiting approval
+
+    # A brand-new task for the SAME agent re-derives a plan (the bug's fork path).
+    async with session_factory() as db:
+        run = AgentRun(
+            company_id=company_id, trigger=RunTrigger.scheduled, status=RunStatus.running
+        )
+        db.add(run)
+        await db.flush()
+        run.root_run_id = run.id
+        second = Task(
+            company_id=company_id, run_id=run.id, root_run_id=run.id,
+            agent_id=agent.id, goal="business cycle", status=TaskStatus.running,
+        )
+        db.add(second)
+        await db.commit()
+        second_detached = await db.get(Task, second.id)
+
+    async with session_factory() as db:
+        outcome2 = await execute_tool(
+            db, object(), agent=agent, task=second_detached,
+            name="submit_plan", args={"plan": "## Obj 1\n- do the thing again"},
+        )
+        await db.commit()
+
+    # Second submission is refused (no park, flagged) and no duplicate decision made.
+    assert outcome2.park is not True
+    assert outcome2.is_error is True
+    async with session_factory() as db:
+        count = await db.scalar(
+            select(func.count())
+            .select_from(DecisionRequest)
+            .where(
+                DecisionRequest.agent_id == agent.id,
+                DecisionRequest.kind == DecisionKind.plan_approval,
+                DecisionRequest.status == DecisionStatus.pending,
+            )
+        )
+        assert count == 1
+
+
 @requires_db
 async def test_approval_grant_is_one_shot(session_factory, company_with_budget):
     """An approved decision lets the gated action proceed exactly once on resume."""
