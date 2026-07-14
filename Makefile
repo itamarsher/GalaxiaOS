@@ -1,4 +1,4 @@
-.PHONY: dev down migrate revision test fmt lint backend-install frontend-install gen-key check-providers
+.PHONY: dev down migrate revision test fmt lint backend-install frontend-install gen-key check-providers check-session-links
 
 dev:
 	docker compose up --build
@@ -40,3 +40,7 @@ check-providers:
 		| grep -v "backend/app/providers/" \
 		|| (echo "ERROR: openai SDK imported outside app/providers/" && exit 1)
 	@echo "provider-boundary OK"
+
+# Guardrail: no Claude session links in commit messages or tracked files
+check-session-links:
+	@scripts/check_no_session_links.sh

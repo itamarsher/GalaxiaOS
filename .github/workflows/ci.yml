@@ -6,6 +6,30 @@ on:
     branches: [main]
 
 jobs:
+  no-session-links:
+    # Verify no Claude Code per-session links are introduced — neither the
+    # commit-message trailer nor any such URL in tracked files. See
+    # scripts/check_no_session_links.sh for the exact pattern.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Determine commit range
+        id: range
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            echo "range=${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}" >> "$GITHUB_OUTPUT"
+          else
+            before="${{ github.event.before }}"
+            if [ -z "$before" ] || [ "$before" = "0000000000000000000000000000000000000000" ]; then
+              before="$(git rev-parse HEAD~1 2>/dev/null || git rev-parse HEAD)"
+            fi
+            echo "range=$before..${{ github.sha }}" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Check for Claude session links
+        run: scripts/check_no_session_links.sh "${{ steps.range.outputs.range }}"
+
   backend:
     runs-on: ubuntu-latest
     defaults:
