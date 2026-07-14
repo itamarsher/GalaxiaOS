@@ -545,6 +545,29 @@ async def _submit_plan(db, ctx, *, agent: Agent, task: Task, args: dict) -> Tool
             observation="Your plan is already awaiting the founder's approval.",
             park=True,
         )
+    # Cross-task coalesce: this agent may already have a plan awaiting approval on a
+    # DIFFERENT task — e.g. a new business cycle, or a fresh founder-DM task, that
+    # re-derived the same plan. Stacking a second pending plan is what buried the
+    # founder in duplicate "approve this plan" decisions. Don't create another; tell
+    # the agent to wait on the open one. This task keeps running (no park) so it can
+    # wrap up rather than deadlock on a decision it doesn't own.
+    agent_pending = await db.scalar(
+        select(DecisionRequest).where(
+            DecisionRequest.company_id == task.company_id,
+            DecisionRequest.agent_id == agent.id,
+            DecisionRequest.kind == DecisionKind.plan_approval,
+            DecisionRequest.status == DecisionStatus.pending,
+        )
+    )
+    if agent_pending is not None:
+        return ToolOutcome(
+            observation=(
+                "You already have a plan awaiting the founder's approval (from "
+                "another task) — don't submit a second one. Wait for that decision "
+                "to be resolved before planning again."
+            ),
+            is_error=True,
+        )
     decision = DecisionRequest(
         company_id=task.company_id,
         agent_id=agent.id,

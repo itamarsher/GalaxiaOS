@@ -17,6 +17,7 @@ identical: same memory write, same resume directive, same budget top-up.
 from __future__ import annotations
 
 import json
+import re
 import uuid
 from datetime import UTC, datetime
 
@@ -187,17 +188,76 @@ _CLASSIFY_SCHEMA = {
     "required": ["verdict"],
 }
 
+#: Unambiguous whole-message approvals/rejections resolved WITHOUT the LLM. A live
+#: incident showed the free-text classifier returning ``"unclear"`` for a plain
+#: "Approved" — which silently left the decision pending and spun up a duplicate
+#: re-planning task. These sets are matched only against the *entire* normalised
+#: reply, so anything with extra qualification ("no, change the budget", "yes but
+#: soften the tone") still falls through to the model for a nuanced read.
+_APPROVE_PHRASES = frozenset(
+    {
+        "approve", "approved", "approve it", "approve this", "approve that",
+        "i approve", "yes", "yes please", "yep", "yeah", "ya", "ok", "okay",
+        "sure", "go", "go ahead", "go for it", "proceed", "do it", "ship it",
+        "send it", "lgtm", "looks good", "sounds good", "confirm", "confirmed",
+        "accept", "accepted", "agree", "agreed", "green light", "greenlight",
+        "approved go ahead", "y",
+    }
+)
+_REJECT_PHRASES = frozenset(
+    {
+        "reject", "rejected", "reject it", "reject this", "i reject", "no",
+        "nope", "nah", "deny", "denied", "decline", "declined", "do not",
+        "dont", "don't", "stop", "cancel", "cancelled", "canceled", "hold",
+        "hold off", "not now", "no thanks", "no thank you", "disagree",
+        "disapprove", "veto", "n",
+    }
+)
+#: Emoji-only replies carry a clear verdict even after punctuation stripping.
+_APPROVE_EMOJI = frozenset({"👍", "✅", "👍👍", "🆗", "✔️", "✔", "💯"})
+_REJECT_EMOJI = frozenset({"👎", "❌", "🚫", "✖️", "✖", "🛑"})
+
+
+def _deterministic_verdict(reply: str) -> str | None:
+    """Resolve an unambiguous approval/rejection without an LLM, else ``None``.
+
+    Normalises the reply to lowercase alphanumerics and matches the WHOLE message
+    against the approve/reject phrase sets. Returns ``"approve"``/``"reject"`` for a
+    clear one-word/short-phrase verdict, or ``None`` when the reply carries extra
+    content (a question, a conditional, a note) that needs the model's judgement.
+    """
+    raw = (reply or "").strip()
+    if not raw:
+        return None
+    if raw in _APPROVE_EMOJI:
+        return "approve"
+    if raw in _REJECT_EMOJI:
+        return "reject"
+    # Lowercase, strip emoji/punctuation, collapse whitespace to a bare phrase.
+    norm = re.sub(r"[^a-z0-9' ]+", " ", raw.lower())
+    norm = re.sub(r"\s+", " ", norm).strip()
+    if norm in _APPROVE_PHRASES:
+        return "approve"
+    if norm in _REJECT_PHRASES:
+        return "reject"
+    return None
+
 
 async def _classify_reply(
     db: AsyncSession, *, company_id: uuid.UUID, summary: str, reply: str
 ) -> str:
     """Classify a founder's reply to a pending decision as approve/reject/unclear.
 
-    Uses the company's cheap model. Any failure (no provider, budget exhausted,
-    provider error, malformed output) degrades to ``"unclear"`` so a reply is never
-    mis-resolved — the decision simply stays pending and the reply is treated as an
-    ordinary message.
+    An unambiguous reply ("Approved", "no", "👍") is resolved deterministically —
+    no model call, so it can never misfire. Everything else uses the company's
+    cheap model. Any failure (no provider, budget exhausted, provider error,
+    malformed output) degrades to ``"unclear"`` so a reply is never mis-resolved —
+    the decision simply stays pending and the reply is surfaced for the founder to
+    settle explicitly.
     """
+    fast = _deterministic_verdict(reply)
+    if fast is not None:
+        return fast
     resolved = await apikeys.resolve_active_provider(db, company_id=company_id)
     if resolved is None:
         return "unclear"
@@ -228,6 +288,30 @@ async def _classify_reply(
     return verdict if verdict in ("approve", "reject") else "unclear"
 
 
+async def _post_clarification(db: AsyncSession, decision: DecisionRequest) -> None:
+    """Ask the founder to settle a decision when their reply was ambiguous.
+
+    Posted as the requesting agent into the same DM thread so the founder gets an
+    explicit prompt instead of silence — and, critically, so the caller can decline
+    to spin up a fresh re-planning task on a reply that never approved anything.
+    """
+    if decision.channel_id is None or decision.agent_id is None:
+        return
+    body = (
+        "I couldn't tell whether that approves or rejects my pending request — "
+        f'"{decision.summary[:160]}". Please reply **Approve** or **Reject** '
+        "(add a note if you'd like), or use the Approve/Reject buttons. It's still "
+        "waiting on you."
+    )
+    await chat_svc.post_message(
+        db,
+        company_id=decision.company_id,
+        channel_id=decision.channel_id,
+        sender_agent_id=decision.agent_id,
+        body=body,
+    )
+
+
 async def try_resolve_from_reply(
     db: AsyncSession,
     *,
@@ -235,14 +319,22 @@ async def try_resolve_from_reply(
     channel_id: uuid.UUID,
     reply: str,
     user_id: uuid.UUID | None,
-) -> uuid.UUID | None:
+) -> tuple[uuid.UUID | None, str]:
     """Resolve the newest pending decision on a channel from the founder's reply.
 
-    Returns the resumed task id to enqueue when the reply settled the decision, or
-    ``None`` — meaning either there was no pending decision, or the reply was a
-    question/aside (``"unclear"``) and the decision stays open for the founder to
-    answer again. Decisions live on the channel's main timeline, so only call this
-    for a main-timeline reply (``thread_id is None``).
+    Returns ``(resumed_task_id, verdict)``:
+
+    - ``("approve"/"reject", task_id)`` — the reply settled the decision; enqueue
+      the task id (may be ``None`` if there was nothing to resume).
+    - ``(None, "unclear")`` — there IS a pending decision but the reply didn't
+      clearly settle it. The decision stays open, a clarification is posted, and the
+      caller must NOT treat the reply as fresh steering (i.e. don't spawn a new
+      handler task) — otherwise an ambiguous reply forks duplicate work.
+    - ``(None, "none")`` — no pending decision on this channel; the reply is
+      ordinary DM steering and the caller handles it as such.
+
+    Decisions live on the channel's main timeline, so only call this for a
+    main-timeline reply (``thread_id is None``).
     """
     decision = await db.scalar(
         select(DecisionRequest)
@@ -254,12 +346,14 @@ async def try_resolve_from_reply(
         .limit(1)
     )
     if decision is None or decision.task_id is None:
-        return None
+        return None, "none"
     verdict = await _classify_reply(
         db, company_id=company_id, summary=decision.summary, reply=reply
     )
     if verdict == "unclear":
-        return None
-    return await resolve_decision(
+        await _post_clarification(db, decision)
+        return None, "unclear"
+    task_id = await resolve_decision(
         db, decision, approved=(verdict == "approve"), user_id=user_id, note=reply
     )
+    return task_id, verdict
