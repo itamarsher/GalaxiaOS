@@ -2,7 +2,17 @@
 
 import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
-import { api, fmtUsd, type ApiKey, type Company, type ManagedStatus, type McpServer } from "@/lib/api";
+import {
+  api,
+  fmtUsd,
+  type ApiKey,
+  type Company,
+  type DelegateSettings,
+  type DelegateWebhook,
+  type ManagedStatus,
+  type McpServer,
+  type WebhookEvents,
+} from "@/lib/api";
 import { usePoll } from "@/lib/useApi";
 import { CloudflareCard, GoogleDriveCard, UserGoogleDriveCard } from "@/lib/connectors";
 
@@ -66,6 +76,8 @@ export default function SettingsPage() {
       <p className="muted">Manage the API keys this company uses. Plaintext is never stored or shown — only a fingerprint.</p>
 
       <ManagedCard companyId={id} />
+
+      <DelegateCard companyId={id} />
 
       <FromAddress companyId={id} current={company.data ?? null} onChange={() => company.reload()} />
 
@@ -170,6 +182,143 @@ function ManagedCard({ companyId }: { companyId: string }) {
           </div>
         </>
       )}
+      {err && <div className="err">{err}</div>}
+    </div>
+  );
+}
+
+// The four-stop autonomy slider + notification webhooks. Slider and webhooks share
+// one config row, so every save PUTs the whole thing (autonomy level + webhooks).
+const AUTONOMY = [
+  { level: 1, name: "Manual", blurb: "Every decision comes to you. Nothing is auto-approved — the strictest setting." },
+  { level: 2, name: "Assisted", blurb: "Claude handles plan approvals and low-stakes confirmations for you. All spending, hires, and outbound messages still escalate." },
+  { level: 3, name: "Supervised", blurb: "Adds minor expenditures (up to $50 each) and more autonomy. Larger spend, hires, and external messages still come to you." },
+  { level: 4, name: "Autonomous", blurb: "Fully autonomous within budget — Claude resolves everything, escalating only extreme cases (very large spend).", warn: "Set a firm budget and load-balance your agents responsibly — at this level Claude can spend and act without asking." },
+] as const;
+
+const EVENT_LABELS: { value: WebhookEvents; label: string }[] = [
+  { value: "all", label: "Everything" },
+  { value: "escalations", label: "Only what needs me" },
+  { value: "auto_handled", label: "Only what Claude handled" },
+];
+
+function DelegateCard({ companyId }: { companyId: string }) {
+  const cfg = usePoll(() => api.delegate(companyId), 0, [companyId]);
+  const [level, setLevel] = useState(1);
+  const [hooks, setHooks] = useState<DelegateWebhook[]>([]);
+  const [secret, setSecret] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [saved, setSaved] = useState(false);
+
+  // Seed local state once the config loads.
+  useEffect(() => {
+    if (!cfg.data) return;
+    setLevel(cfg.data.autonomy_level);
+    setHooks(cfg.data.webhooks);
+    setSecret(cfg.data.signing_secret);
+  }, [cfg.data]);
+
+  const save = async (patch: { autonomy_level: number; webhooks: DelegateWebhook[]; rotate_secret?: boolean }) => {
+    setBusy(true); setErr(null); setSaved(false);
+    try {
+      const next: DelegateSettings = await api.updateDelegate(companyId, patch);
+      setLevel(next.autonomy_level);
+      setHooks(next.webhooks);
+      setSecret(next.signing_secret);
+      setSaved(true);
+    } catch (e) {
+      setErr(String(e instanceof Error ? e.message : e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const pick = AUTONOMY[level - 1];
+  const validHooks = hooks.filter((h) => /^https?:\/\//.test(h.url.trim()));
+
+  return (
+    <div className="card">
+      <div className="step">Autonomy &amp; notifications</div>
+      <p className="muted" style={{ fontSize: 13, margin: "6px 0 0" }}>
+        How much your Claude delegate resolves on your behalf, and where it pings you when something needs you.
+      </p>
+
+      {/* Four-stop slider */}
+      <label style={{ marginTop: 14 }}>Autonomy level</label>
+      <input
+        type="range" min={1} max={4} step={1} value={level}
+        disabled={busy}
+        onChange={(e) => { const v = Number(e.target.value); setLevel(v); save({ autonomy_level: v, webhooks: hooks }); }}
+        style={{ width: "100%" }}
+      />
+      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11 }} className="muted">
+        {AUTONOMY.map((a) => (
+          <span key={a.level} style={{ fontWeight: a.level === level ? 700 : 400, color: a.level === level ? "inherit" : undefined }}>
+            {a.name}
+          </span>
+        ))}
+      </div>
+      <p style={{ fontSize: 13, marginTop: 10 }}>
+        <strong>{pick.name}.</strong> {pick.blurb}
+      </p>
+      {"warn" in pick && pick.warn && (
+        <p className="err" style={{ fontSize: 13, marginTop: 6 }}>⚠️ {pick.warn}</p>
+      )}
+
+      {/* Notification webhooks (up to 3) */}
+      <div className="step" style={{ marginTop: 18 }}>Notification webhooks</div>
+      <p className="muted" style={{ fontSize: 13, margin: "6px 0 0" }}>
+        Up to 3 URLs (Slack/Telegram/your phone) to POST decisions to. Every request is HMAC-signed with your
+        signing secret so the receiver can verify it&apos;s really from us.
+      </p>
+
+      {hooks.map((h, i) => (
+        <div key={i} className="kv" style={{ marginTop: 10, alignItems: "center", gap: 6 }}>
+          <input
+            value={h.url}
+            placeholder="https://hooks.slack.com/…"
+            onChange={(e) => setHooks(hooks.map((x, j) => (j === i ? { ...x, url: e.target.value } : x)))}
+            style={{ flex: 1 }}
+          />
+          <select
+            value={h.events}
+            onChange={(e) => setHooks(hooks.map((x, j) => (j === i ? { ...x, events: e.target.value as WebhookEvents } : x)))}
+          >
+            {EVENT_LABELS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+          </select>
+          <button className="ghost danger" style={{ marginTop: 0 }} onClick={() => setHooks(hooks.filter((_, j) => j !== i))}>Remove</button>
+        </div>
+      ))}
+      {hooks.length < 3 && (
+        <button className="ghost" style={{ marginTop: 10 }}
+          onClick={() => setHooks([...hooks, { url: "", events: "all" }])}>
+          + Add webhook
+        </button>
+      )}
+
+      {secret && (
+        <div className="kv" style={{ marginTop: 12, alignItems: "flex-start" }}>
+          <span>
+            Signing secret
+            <span className="muted" style={{ fontSize: 12, display: "block" }}>
+              Verify <code>X-Abos-Signature: sha256=HMAC(secret, &quot;{"{timestamp}"}.{"{body}"}&quot;)</code> on your endpoint.
+            </span>
+          </span>
+          <code style={{ wordBreak: "break-all" }}>{secret}</code>
+        </div>
+      )}
+
+      <div className="btnrow">
+        <button disabled={busy} onClick={() => save({ autonomy_level: level, webhooks: validHooks })}>
+          {busy ? "Saving…" : "Save webhooks"}
+        </button>
+        <button className="ghost" disabled={busy}
+          onClick={() => save({ autonomy_level: level, webhooks: validHooks, rotate_secret: true })}>
+          {secret ? "Rotate secret" : "Generate secret"}
+        </button>
+      </div>
+      {saved && <div className="muted" style={{ fontSize: 13 }}>Saved.</div>}
       {err && <div className="err">{err}</div>}
     </div>
   );

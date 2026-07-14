@@ -336,3 +336,19 @@ class FileCategory(str, enum.Enum):
     inbox = "inbox"  # noteworthy files received via external channels
     communications = "communications"  # outbound comms log (e.g. emails sent)
     knowledge = "knowledge"  # other knowledge to retain in external storage
+
+
+class DelegateAutonomy(int, enum.Enum):
+    """Company-wide slider: how much the Claude *decision delegate* may resolve on
+    the founder's behalf. Distinct from :class:`AutonomyLevel`, which is per-agent.
+
+    A single four-stop slider in Settings sets this; :mod:`app.services.delegate`
+    maps each level to which decision kinds are auto-eligible and the spend gate.
+    Strictest (``manual``) escalates every decision to the founder; least strict
+    (``autonomous``) auto-resolves within budget, escalating only extreme cases.
+    """
+
+    manual = 1  # strictest — every decision goes to the founder
+    assisted = 2  # auto-handle plans + low-stakes confirmations; never spend
+    supervised = 3  # + minor expenditures (within a cap) and more autonomy
+    autonomous = 4  # fully autonomous within budget; escalate only extreme cases

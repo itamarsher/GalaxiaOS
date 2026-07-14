@@ -272,10 +272,17 @@ class Settings(BaseSettings):
     roi_pause_floor: float = 0.05  # reputation.roi below this is "low ROI"
     digest_hour_utc: int = 13  # daily digest cron hour
     runway_recompute_minute: int = 0  # hourly runway recompute
-    # Founder decision delegate (webhook notify + opt-in Claude auto-triage).
-    # Global kill switch for the per-minute triage cron; per-company config
-    # (webhook URL, auto-pilot, allowed kinds, spend cap) lives in the DB.
+    # Founder decision delegate (webhook notify + Claude auto-triage). Global kill
+    # switch for the per-minute triage cron; per-company config (autonomy level +
+    # notification webhooks) lives in the DB. The spend gates below define what the
+    # autonomy-level slider maps to (see app.services.delegate).
     delegate_enabled: bool = True
+    # Level 3 (supervised): auto-approve spend at or under this per-decision cap.
+    delegate_l3_spend_cap_cents: int = 5000  # $50
+    # Level 4 (autonomous): a single spend escalates to the founder only when it is
+    # "extreme" — the larger of this hard floor or `fraction` of remaining budget.
+    delegate_l4_extreme_cents: int = 100000  # $1000
+    delegate_l4_extreme_fraction: float = 0.5
 
     # Closed-loop runtime
     memory_recall_limit: int = 6  # prior learnings injected into an agent's context

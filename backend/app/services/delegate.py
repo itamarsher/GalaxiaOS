@@ -1,35 +1,47 @@
-"""Founder decision delegate: a webhook notifier + an opt-in Claude auto-triager.
+"""Founder decision delegate: notification webhooks + a Claude auto-triager whose
+reach is set by a single company-wide autonomy slider.
 
 Two jobs, both hanging off the founder's decision inbox:
 
-1. **Notify (always, when a webhook is set).** Every pending
-   :class:`DecisionRequest` is POSTed to the founder's configured ``webhook_url``
-   (Slack / Telegram / phone), so "something needs your approval" reaches them
-   even with the app closed. Best-effort — a bad webhook never breaks the fleet.
+1. **Notify.** Every pending :class:`DecisionRequest` is POSTed to the founder's
+   configured notification webhooks (Slack / Telegram / phone), so "something
+   needs your approval" reaches them even with the app closed. Each webhook picks
+   which dispositions it wants (all / escalations-only / auto-handled-only), and
+   every request is **HMAC-signed** with the company's signing secret so the
+   receiver can verify it genuinely came from ABOS (spoof protection). Best-effort
+   — a bad webhook never breaks the fleet.
 
-2. **Auto-triage (opt-in).** When ``auto_pilot_enabled`` is on, each new decision
-   is run past the company's model (Claude, via the standard provider seam) and
-   the *routine* ones are resolved automatically through the SAME
-   :func:`app.services.decisions.resolve_decision` path a human click uses — full
-   audit trail, task resume, DM note — while everything else is escalated to the
-   founder over the webhook.
+2. **Auto-triage.** The **autonomy level** (:class:`DelegateAutonomy`, 1–4) decides
+   how much the delegate resolves on the founder's behalf:
 
-The delegate can only ever be MORE conservative than the founder: hard, in-code
-gates (:func:`_auto_eligible`) decide what is even *eligible* for auto-resolution
-before the model is consulted, and the model may still choose to escalate. It can
-never approve a kind the founder didn't allow, spend over the cap, or an outbound
-external message.
+   - **1 manual** — nothing is auto-resolved; every decision escalates.
+   - **2 assisted** — auto-handle plans + low-stakes confirmations; never spend.
+   - **3 supervised** — + minor expenditures within a cap; more autonomy.
+   - **4 autonomous** — fully autonomous within budget; escalate only *extreme*
+     spend (large in absolute terms or relative to remaining budget).
 
-Config lives in a single named :class:`Policy` row with ``effect=allow`` (inert in
-the policy engine's ``evaluate`` — see :mod:`app.services.governance`), so it needs
-no schema migration and rides the existing tenant-scoped store.
+   Eligible decisions are run past the company's model and the routine ones are
+   resolved through the SAME :func:`app.services.decisions.resolve_decision` path a
+   human click uses (full audit trail, task resume, DM note); everything else is
+   escalated over the webhooks.
+
+The delegate can only ever be MORE conservative than the level: a hard, in-code
+gate (:func:`_auto_eligible`) decides eligibility BEFORE any model call, and the
+model may still choose to escalate. Config lives in one inert :class:`Policy` row
+(``effect=allow`` — ignored by ``governance.evaluate``), so it needs no schema
+migration and rides the existing tenant-scoped store. The separate governance
+policy engine (what *becomes* a decision) is unchanged and orthogonal to this.
 """
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
+import secrets
 import uuid
 from dataclasses import dataclass
+from datetime import UTC, datetime
 
 import httpx
 from sqlalchemy import select
@@ -38,7 +50,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.db import SessionLocal
 from app.models import Agent, Company, DecisionRequest, Mission, Policy
-from app.models.enums import DecisionKind, DecisionStatus, PolicyEffect, PolicyScope
+from app.models.enums import (
+    DecisionKind,
+    DecisionStatus,
+    DelegateAutonomy,
+    PolicyEffect,
+    PolicyScope,
+)
 from app.providers.base import Message
 from app.runtime.cost_meter import CostMeter
 from app.services import apikeys
@@ -48,40 +66,76 @@ from app.services import decisions as decisions_svc
 #: The named Policy row that carries the delegate config (see module docstring).
 DELEGATE_POLICY_NAME = "Founder decision delegate"
 
-#: Kinds a founder may authorise for auto-resolution via the API. ``external_comm``
-#: is deliberately absent — an outbound external message is irreversible and always
-#: goes to a human. ``strategy`` is open-ended and likewise never auto-resolved.
-ALLOWED_AUTO_KINDS: frozenset[str] = frozenset(
+#: Per-webhook event filter: which dispositions a notification URL wants.
+WEBHOOK_EVENTS: frozenset[str] = frozenset({"all", "escalations", "auto_handled"})
+
+#: The founder may configure at most this many notification webhooks.
+MAX_WEBHOOKS = 3
+
+# ── Autonomy levels → what the delegate is allowed to auto-resolve ────────────
+_LOW_STAKES = frozenset(
     {
         DecisionKind.plan_approval.value,
         DecisionKind.risky_action.value,
         DecisionKind.user_action.value,
-        DecisionKind.spend_approval.value,
-        DecisionKind.hire_approval.value,
     }
 )
+_WITH_SPEND = _LOW_STAKES | {DecisionKind.spend_approval.value}
+_EVERYTHING = _WITH_SPEND | {
+    DecisionKind.hire_approval.value,
+    DecisionKind.external_comm.value,
+}
 
-#: Kinds that are NEVER auto-resolved regardless of config — the last-line guard.
-_NEVER_AUTO: frozenset[str] = frozenset({DecisionKind.external_comm.value})
+
+@dataclass(frozen=True)
+class LevelPolicy:
+    """What one autonomy level lets the delegate do — the hard, in-code gate."""
+
+    enabled: bool  # False at level 1: nothing auto-resolves
+    auto_kinds: frozenset[str]  # decision kinds eligible for auto-resolution
+    spend_cap_cents: int | None  # per-decision spend ceiling; None = within-budget
+    extreme_cents: int  # level 4: escalate spend at/over this absolute floor…
+    extreme_fraction: float  # …or over this fraction of remaining budget
+
+
+def level_policy(level: int) -> LevelPolicy:
+    """Map an autonomy level (1–4) to its concrete permissions."""
+    if level <= DelegateAutonomy.manual.value:
+        return LevelPolicy(False, frozenset(), 0, 0, 0.0)
+    if level == DelegateAutonomy.assisted.value:
+        return LevelPolicy(True, _LOW_STAKES, 0, 0, 0.0)
+    if level == DelegateAutonomy.supervised.value:
+        return LevelPolicy(True, _WITH_SPEND, settings.delegate_l3_spend_cap_cents, 0, 0.0)
+    # autonomous: everything eligible, spend gated only by "extreme" thresholds.
+    return LevelPolicy(
+        True,
+        _EVERYTHING,
+        None,
+        settings.delegate_l4_extreme_cents,
+        settings.delegate_l4_extreme_fraction,
+    )
+
+
+@dataclass(frozen=True)
+class WebhookTarget:
+    url: str
+    events: str  # one of WEBHOOK_EVENTS
 
 
 @dataclass(frozen=True)
 class DelegateConfig:
-    webhook_url: str | None
-    auto_pilot_enabled: bool
-    auto_kinds: tuple[str, ...]
-    max_auto_spend_cents: int
+    autonomy_level: int
+    webhooks: tuple[WebhookTarget, ...]
+    signing_secret: str | None
 
     @property
     def active(self) -> bool:
-        """Whether there's anything to do for this company at all."""
-        return bool(self.webhook_url) or self.auto_pilot_enabled
+        """Whether there's anything for the triage cron to do."""
+        return self.autonomy_level >= DelegateAutonomy.assisted.value or bool(self.webhooks)
 
 
 @dataclass(frozen=True)
 class DelegateOutcome:
-    """What :func:`handle` did with one decision, for the job to act on."""
-
     disposition: str  # "auto_approved" | "auto_rejected" | "escalated"
     resumed_task_id: uuid.UUID | None
     webhook_payload: dict | None
@@ -100,12 +154,30 @@ def _parse(policy: Policy | None) -> DelegateConfig | None:
     if policy is None:
         return None
     rule = policy.rule or {}
-    kinds = tuple(k for k in (rule.get("auto_kinds") or []) if k in ALLOWED_AUTO_KINDS)
+
+    # Autonomy level, clamped to the valid range. Migrate pre-slider configs: an
+    # old auto-pilot-on row maps to "assisted", else "manual".
+    if "autonomy_level" in rule:
+        level = max(1, min(4, int(rule.get("autonomy_level") or 1)))
+    else:
+        level = DelegateAutonomy.assisted.value if rule.get("auto_pilot_enabled") else 1
+
+    # Webhooks. Migrate the old single `webhook_url` into the new list shape.
+    raw = rule.get("webhooks")
+    if raw is None and rule.get("webhook_url"):
+        raw = [{"url": rule["webhook_url"], "events": "all"}]
+    webhooks = tuple(
+        WebhookTarget(url=w["url"], events=(w.get("events") or "all"))
+        for w in (raw or [])
+        if isinstance(w, dict)
+        and w.get("url")
+        and (w.get("events") or "all") in WEBHOOK_EVENTS
+    )[:MAX_WEBHOOKS]
+
     return DelegateConfig(
-        webhook_url=(rule.get("webhook_url") or None),
-        auto_pilot_enabled=bool(rule.get("auto_pilot_enabled")),
-        auto_kinds=kinds,
-        max_auto_spend_cents=int(rule.get("max_auto_spend_cents") or 0),
+        autonomy_level=level,
+        webhooks=webhooks,
+        signing_secret=(rule.get("signing_secret") or None),
     )
 
 
@@ -117,22 +189,30 @@ async def set_config(
     db: AsyncSession,
     *,
     company_id: uuid.UUID,
-    webhook_url: str | None,
-    auto_pilot_enabled: bool,
-    auto_kinds: list[str],
-    max_auto_spend_cents: int,
+    autonomy_level: int,
+    webhooks: list[dict],
+    rotate_secret: bool = False,
 ) -> DelegateConfig:
-    """Upsert the delegate config. Unknown/forbidden kinds are dropped (never
-    silently honoured). Stored with ``effect=allow`` so the policy engine ignores
-    it — it's a config carrier, not an action rule."""
-    kinds = [k for k in auto_kinds if k in ALLOWED_AUTO_KINDS]
-    rule = {
-        "webhook_url": (webhook_url or None),
-        "auto_pilot_enabled": bool(auto_pilot_enabled),
-        "auto_kinds": kinds,
-        "max_auto_spend_cents": max(0, int(max_auto_spend_cents)),
-    }
+    """Upsert the delegate config. Invalid webhooks/levels are normalised, never
+    silently honoured. A signing secret is minted the first time a webhook is set
+    (so spoof protection is on by default) and can be rotated on demand. Stored
+    with ``effect=allow`` so the policy engine ignores the row."""
+    level = max(1, min(4, int(autonomy_level)))
+    targets = [
+        {"url": w["url"], "events": (w.get("events") or "all")}
+        for w in (webhooks or [])
+        if isinstance(w, dict)
+        and w.get("url")
+        and (w.get("events") or "all") in WEBHOOK_EVENTS
+    ][:MAX_WEBHOOKS]
+
     policy = await _config_policy(db, company_id)
+    existing_secret = (policy.rule or {}).get("signing_secret") if policy else None
+    secret = existing_secret
+    if rotate_secret or (targets and not existing_secret):
+        secret = secrets.token_hex(32)
+
+    rule = {"autonomy_level": level, "webhooks": targets, "signing_secret": secret}
     if policy is None:
         policy = Policy(
             company_id=company_id,
@@ -158,18 +238,33 @@ def _spend_cents(decision: DecisionRequest) -> int:
     return int(payload.get("amount_cents") or args.get("amount_cents") or 0)
 
 
-def _auto_eligible(cfg: DelegateConfig, decision: DecisionRequest) -> bool:
+def _extreme_spend_floor(policy: LevelPolicy, remaining_budget_cents: int | None) -> int:
+    """Above this, a level-4 spend is 'extreme' and escalates to the founder."""
+    by_fraction = int((remaining_budget_cents or 0) * policy.extreme_fraction)
+    return max(policy.extreme_cents, by_fraction)
+
+
+def _auto_eligible(
+    cfg: DelegateConfig,
+    decision: DecisionRequest,
+    remaining_budget_cents: int | None = None,
+) -> bool:
     """Whether a decision may even be *considered* for auto-resolution.
 
-    This is the guardrail the model cannot override: it runs before any LLM call.
-    """
-    kind = decision.kind.value if hasattr(decision.kind, "value") else str(decision.kind)
-    if kind in _NEVER_AUTO:
+    Runs before any LLM call — the model cannot widen this. Spend is gated by the
+    level: a fixed cap below level 4, and an "extreme" threshold at level 4 (the
+    actual budget ceiling is separately enforced downstream by ``CostMeter``)."""
+    policy = level_policy(cfg.autonomy_level)
+    if not policy.enabled:
         return False
-    if kind not in cfg.auto_kinds:
+    kind = decision.kind.value if hasattr(decision.kind, "value") else str(decision.kind)
+    if kind not in policy.auto_kinds:
         return False
     if kind == DecisionKind.spend_approval.value:
-        return _spend_cents(decision) <= cfg.max_auto_spend_cents
+        amount = _spend_cents(decision)
+        if policy.spend_cap_cents is not None:
+            return amount <= policy.spend_cap_cents
+        return amount < _extreme_spend_floor(policy, remaining_budget_cents)
     return True
 
 
@@ -287,7 +382,9 @@ async def _webhook_payload(
     agent = await db.get(Agent, decision.agent_id) if decision.agent_id else None
     web = settings.web_base_url.rstrip("/") if settings.web_base_url else ""
     api = settings.public_api_base_url.rstrip("/") if settings.public_api_base_url else ""
-    base = f"/companies/{company.id}/decisions/{decision.id}"
+    # Decision resolve endpoints are mounted at /decisions/{id}/{approve,reject}
+    # (no /companies prefix — see app.api.decisions).
+    base = f"/decisions/{decision.id}"
     return {
         "type": "founder_decision",
         "disposition": disposition,
@@ -307,17 +404,22 @@ async def _webhook_payload(
 
 
 async def handle(
-    db: AsyncSession, *, company: Company, decision: DecisionRequest, cfg: DelegateConfig
+    db: AsyncSession,
+    *,
+    company: Company,
+    decision: DecisionRequest,
+    cfg: DelegateConfig,
+    remaining_budget_cents: int | None = None,
 ) -> DelegateOutcome:
-    """Triage one pending decision. Resolves it in-session when auto-pilot clears
-    it, else marks it escalated; either way stamps a ``delegate`` marker so it's
-    handled exactly once. Returns the resumed task id (to enqueue) and the webhook
-    payload (to POST) for the caller to fire AFTER commit."""
+    """Triage one pending decision. Resolves it in-session when the autonomy level
+    clears it, else marks it escalated; either way stamps a ``delegate`` marker so
+    it's handled exactly once. Returns the resumed task id (to enqueue) and the
+    base webhook payload (to sign + POST) for the caller to fire AFTER commit."""
     disposition = "escalated"
     rationale: str | None = None
     resumed: uuid.UUID | None = None
 
-    if cfg.auto_pilot_enabled and _auto_eligible(cfg, decision):
+    if _auto_eligible(cfg, decision, remaining_budget_cents):
         verdict, rationale = await _triage(db, company_id=company.id, decision=decision)
         if verdict in ("approve", "reject"):
             approved = verdict == "approve"
@@ -339,19 +441,45 @@ async def handle(
     await db.flush()
 
     payload = None
-    if cfg.webhook_url:
+    if cfg.webhooks:
         payload = await _webhook_payload(
             db, company=company, decision=decision, disposition=disposition, rationale=rationale
         )
     return DelegateOutcome(disposition=disposition, resumed_task_id=resumed, webhook_payload=payload)
 
 
-async def send_webhook(url: str, payload: dict) -> bool:
-    """POST a payload to the founder's webhook. Best-effort: any failure is
-    swallowed (a broken webhook must never disrupt the fleet). Returns success."""
+# ── Webhook delivery (signed) ─────────────────────────────────────────────────
+def webhook_wants(events: str, disposition: str) -> bool:
+    """Whether a webhook configured for ``events`` should receive this disposition."""
+    if events == "all":
+        return True
+    if events == "escalations":
+        return disposition == "escalated"
+    if events == "auto_handled":
+        return disposition in ("auto_approved", "auto_rejected")
+    return False
+
+
+def sign_payload(secret: str, timestamp: str, body: str) -> str:
+    """HMAC-SHA256 over ``"{timestamp}.{body}"`` — the receiver recomputes this to
+    prove the request came from ABOS (and isn't replayed via the timestamp)."""
+    mac = hmac.new(secret.encode(), f"{timestamp}.{body}".encode(), hashlib.sha256)
+    return f"sha256={mac.hexdigest()}"
+
+
+async def send_webhook(url: str, payload: dict, secret: str | None = None) -> bool:
+    """POST a payload to a founder webhook, HMAC-signed when a secret is set.
+    Best-effort: any failure is swallowed (a broken webhook must never disrupt the
+    fleet). Returns success."""
+    body = json.dumps(payload, separators=(",", ":"))
+    headers = {"Content-Type": "application/json"}
+    if secret:
+        ts = str(int(datetime.now(UTC).timestamp()))
+        headers["X-Abos-Timestamp"] = ts
+        headers["X-Abos-Signature"] = sign_payload(secret, ts, body)
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
-            resp = await client.post(url, json=payload)
+            resp = await client.post(url, content=body, headers=headers)
         return resp.status_code < 400
     except Exception:
         return False

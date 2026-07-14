@@ -229,6 +229,19 @@ export interface ArtifactSummary {
 }
 export interface Artifact extends ArtifactSummary { body_md: string }
 
+export type WebhookEvents = "all" | "escalations" | "auto_handled";
+export interface DelegateWebhook { url: string; events: WebhookEvents }
+export interface DelegateSettings {
+  autonomy_level: number; // 1..4
+  webhooks: DelegateWebhook[];
+  signing_secret: string | null;
+}
+export interface DelegateUpdate {
+  autonomy_level: number;
+  webhooks: DelegateWebhook[];
+  rotate_secret?: boolean;
+}
+
 // ── API ──────────────────────────────────────────────────────────────────────
 export const api = {
   setToken(t: string) { window.localStorage.setItem("abos_token", t); },
@@ -516,6 +529,14 @@ export const api = {
     req<McpServer>(`/companies/${companyId}/mcp/servers/${serverId}/refresh`, { method: "POST" }),
   deleteMcpServer: (companyId: string, serverId: string) =>
     req<void>(`/companies/${companyId}/mcp/servers/${serverId}`, { method: "DELETE" }),
+
+  // Decision delegate — autonomy slider + notification webhooks.
+  delegate: (companyId: string) => req<DelegateSettings>(`/companies/${companyId}/delegate`),
+  updateDelegate: (companyId: string, patch: DelegateUpdate) =>
+    req<DelegateSettings>(`/companies/${companyId}/delegate`, {
+      method: "PUT",
+      body: JSON.stringify(patch),
+    }),
 
   // Founder-facing reports (artifacts).
   reports: (companyId: string) => req<ArtifactSummary[]>(`/companies/${companyId}/reports`),
