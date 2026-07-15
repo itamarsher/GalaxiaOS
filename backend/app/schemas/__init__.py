@@ -113,6 +113,7 @@ class ObjectiveOut(ORMModel):
     rationale: str | None
     priority: int
     status: str
+    key_results: list[KeyResultOut] = []
 
 
 class AgentOut(ORMModel):

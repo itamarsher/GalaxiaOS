@@ -27,6 +27,7 @@ from app.runtime.prompts import operating_language_directive
 from app.services import apikeys, platform_requests
 from app.services import budget as budget_svc
 from app.services import memory as memory_svc
+from app.services import objectives as objectives_svc
 from app.services import runway as runway_svc
 
 _COMMAND_VERBS = (
@@ -88,13 +89,23 @@ async def _company_state(db: AsyncSession, company_id: uuid.UUID, extra_memory=N
     memories = extra_memory if extra_memory is not None else await memory_svc.query(
         db, company_id=company_id, text=None, limit=8
     )
+    objectives = await objectives_svc.ordered_objectives(db, company_id)
     lines = [
         f"Budget: limit={budget.limit_cents if budget else 0}c "
         f"spent={budget.spent_cents if budget else 0}c reserved={budget.reserved_cents if budget else 0}c",
         f"Spend by category (cents): {by_cat}",
         f"Task counts: {counts}",
-        "Relevant memory:",
     ]
+    if objectives:
+        lines.append("Objectives:")
+        for o in objectives:
+            krs = ", ".join(
+                f"{kr.metric}"
+                + (f" {kr.current_value:g}/{kr.target_value:g}{kr.unit or ''}" if kr.target_value is not None else "")
+                for kr in o.key_results
+            )
+            lines.append(f"- [{o.status}] {o.title}" + (f" (KRs: {krs})" if krs else ""))
+    lines.append("Relevant memory:")
     lines += [f"- [{m.type.value}] {m.title}: {m.content[:160]}" for m in memories]
     return "\n".join(lines)
 

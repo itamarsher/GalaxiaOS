@@ -247,7 +247,19 @@ export default function Home() {
         // deleted out from under this call — stay on the main page instead of
         // bouncing back to the key step for a company that no longer exists.
         if (discardingRef.current) return;
-        setStep("key"); // let them retry
+        // The POST can exceed a gateway timeout on a slow model even though
+        // generation actually finished server-side. Before treating it as a
+        // failure, check the progress: if it's done, recover the plan via the
+        // preview endpoint instead of bouncing the founder back to retry.
+        try {
+          const st = await api.generateStatus(companyId);
+          if (st.status === "done") {
+            setPreview(await api.preview(companyId));
+            setStep("review");
+            return;
+          }
+        } catch { /* fall through to the retry path below */ }
+        setStep("key"); // genuine failure — let them retry
         throw e;
       } finally {
         clearInterval(poll);

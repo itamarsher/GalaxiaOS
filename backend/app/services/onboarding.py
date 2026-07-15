@@ -433,9 +433,33 @@ async def _reallocate_agent_budgets(
         if agent.role == AgentRole.ceo:
             agent.monthly_budget_cents = None
     weights = [_ROLE_BUDGET_WEIGHTS.get(a.role, _DEFAULT_BUDGET_WEIGHT) for a in capped]
-    for agent, cents in zip(capped, _weighted_split(weights, allocatable), strict=True):
+    shares = _weighted_split(weights, allocatable)
+    shares = _apply_min_floor(shares, total_cents)
+    for agent, cents in zip(capped, shares, strict=True):
         agent.monthly_budget_cents = cents
     await db.flush()
+
+
+def _apply_min_floor(
+    shares: list[int | None], total_cents: int | None
+) -> list[int | None]:
+    """Raise each agent slice to at least ``launch_agent_min_budget_cents``.
+
+    The lean weighted split can leave an agent with only a few cents — too little
+    to take one metered step — which makes routine work trip BudgetExceeded. Lift
+    every slice to the floor (drawing the extra from the CEO reserve pool), but if
+    the fleet's combined floors wouldn't fit the whole company budget, scale the
+    slices down proportionally so the caps never over-commit the ceiling.
+    """
+    floor = max(0, settings.launch_agent_min_budget_cents)
+    if not total_cents or total_cents <= 0 or floor == 0 or not shares:
+        return shares
+    floored = [c if c is None else max(c, floor) for c in shares]
+    committed = sum(c for c in floored if c)
+    if committed > total_cents:
+        scale = total_cents / committed
+        floored = [c if c is None else max(1, int(c * scale)) for c in floored]
+    return floored
 
 
 async def provision_fleet(
