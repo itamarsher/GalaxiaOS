@@ -7,7 +7,7 @@ import uuid
 from sqlalchemy import Float, ForeignKey, Integer, String, Text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base, PKMixin, TenantMixin, TimestampMixin
 
@@ -39,6 +39,16 @@ class Objective(Base, PKMixin, TenantMixin, TimestampMixin):
     rationale: Mapped[str | None] = mapped_column(Text, nullable=True)
     priority: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     status: Mapped[str] = mapped_column(String(30), default="active", nullable=False)
+
+    # Eager-loaded so every ``select(Objective)`` surfaces its key results without a
+    # lazy access on the async session (which would raise). This is what makes KRs
+    # visible in the objectives API and the onboarding preview.
+    key_results: Mapped[list["KeyResult"]] = relationship(
+        "KeyResult",
+        lazy="selectin",
+        order_by="KeyResult.id",
+        cascade="all, delete-orphan",
+    )
 
 
 class KeyResult(Base, PKMixin, TenantMixin, TimestampMixin):

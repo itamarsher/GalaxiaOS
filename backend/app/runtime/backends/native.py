@@ -46,6 +46,7 @@ from app.runtime.tools.base import consume_approval_grant as _consume_approval_g
 from app.runtime.tools.base import consume_rejection_grant as _consume_rejection_grant
 from app.runtime.transcript import dump_messages, load_messages, sanitize_messages, transcript_lines
 from app.services import apikeys, chat, event_counters, memory, metrics, mission_log, reputation
+from app.services import budget as budget_svc
 from app.services import external_messages as ext
 from app.services import governance as gov
 from app.services import integrations as integrations_svc
@@ -287,19 +288,33 @@ class NativeBackend:
             # Only the currently-loaded tools are offered this step; the list grows as
             # the agent discovers and hot-loads more (see `_absorb_use_tool` below).
             tools = specs_for(active_tools) + mcp_specs
-            resp = await ctx.cost_meter.run_llm(
-                provider,
-                api_key=api_key,
-                company_id=task.company_id,
-                agent_id=agent.id,
-                task_id=task.id,
-                model=model,
-                system=system,
-                messages=messages,
-                tools=tools,
-                max_tokens=max_tokens,
-                funding_user_id=funding_user_id,
-            )
+            resp = None
+            while resp is None:
+                try:
+                    resp = await ctx.cost_meter.run_llm(
+                        provider,
+                        api_key=api_key,
+                        company_id=task.company_id,
+                        agent_id=agent.id,
+                        task_id=task.id,
+                        model=model,
+                        system=system,
+                        messages=messages,
+                        tools=tools,
+                        max_tokens=max_tokens,
+                        funding_user_id=funding_user_id,
+                    )
+                except BudgetExceeded as exc:
+                    # The agent ran out of budget mid-think. Don't fail the task and
+                    # lose the work (the old behaviour): if it's only the agent's soft
+                    # slice and the company still has budget, quietly top the slice up
+                    # from the company pool and retry. Only when the COMPANY budget is
+                    # truly exhausted do we park and ask the founder — mirroring how a
+                    # tool spend escalates (see ``_handle_call``).
+                    if await self._extend_agent_budget(ctx, agent, task, exc):
+                        continue
+                    await self._park_for_budget(ctx, agent, task, exc)
+                    return {"status": TaskStatus.waiting_approval.value}
 
             if not resp.tool_calls:
                 return await self._finish_or_audit(
@@ -447,24 +462,30 @@ class NativeBackend:
         blob = "\n".join(transcript_lines(dump_messages(head), limit=0))
         if not blob.strip():
             return messages
-        resp = await ctx.cost_meter.run_llm(
-            provider,
-            api_key=api_key,
-            company_id=task.company_id,
-            agent_id=task.agent_id,
-            task_id=task.id,
-            model=provider.default_models.get("cheap", model),
-            funding_user_id=funding_user_id,
-            system=(
-                "You compact an AI agent's working log. Summarize the earlier part of "
-                "this task session into a dense recap the agent can rely on to continue: "
-                "preserve decisions made, tools used and their key results, facts learned, "
-                "open threads, and anything still in progress. Be specific and terse; omit "
-                "chit-chat. Output plain text, no preamble."
-            ),
-            messages=[Message(role="user", content=blob)],
-            max_tokens=700,
-        )
+        try:
+            resp = await ctx.cost_meter.run_llm(
+                provider,
+                api_key=api_key,
+                company_id=task.company_id,
+                agent_id=task.agent_id,
+                task_id=task.id,
+                model=provider.default_models.get("cheap", model),
+                funding_user_id=funding_user_id,
+                system=(
+                    "You compact an AI agent's working log. Summarize the earlier part of "
+                    "this task session into a dense recap the agent can rely on to continue: "
+                    "preserve decisions made, tools used and their key results, facts learned, "
+                    "open threads, and anything still in progress. Be specific and terse; omit "
+                    "chit-chat. Output plain text, no preamble."
+                ),
+                messages=[Message(role="user", content=blob)],
+                max_tokens=700,
+            )
+        except BudgetExceeded:
+            # Compaction is an optimisation, not the task's work — if the budget is
+            # too tight to summarise, skip it and let the main loop handle the spend
+            # escalation on the actual step rather than failing here.
+            return messages
         recap = Message(
             role="user",
             content=(
@@ -541,6 +562,81 @@ class NativeBackend:
             if row is not None:
                 row.transcript = dump_messages(messages)
                 await db.commit()
+
+    async def _extend_agent_budget(
+        self, ctx: RuntimeContext, agent: Agent, task: Task, exc: BudgetExceeded
+    ) -> bool:
+        """Top an agent's exhausted soft slice up from the company pool, in place.
+
+        The per-agent ``monthly_budget_cents`` is a soft slice of an already-approved
+        company budget, not a separate authorisation — so when only the slice is spent
+        and the company still has headroom, extend the slice rather than bothering the
+        founder. Returns ``True`` (agent slice raised, caller should retry) only when
+        the company can actually cover the request; otherwise ``False`` so the caller
+        escalates instead. A company-scope overrun never extends here.
+        """
+        if exc.scope != "agent":
+            return False
+        async with ctx.session_factory() as db:
+            await set_tenant(db, task.company_id)
+            budget = await budget_svc.get_active_budget(db, task.company_id)
+            if budget is None:
+                return False
+            company_left = budget.limit_cents - budget.spent_cents - budget.reserved_cents
+            if company_left < exc.requested_cents:
+                return False  # the company itself is out — must ask the founder
+            row = await db.get(Agent, agent.id)
+            if row is None or row.monthly_budget_cents is None:
+                return False
+            shortfall = max(1, exc.requested_cents - max(0, exc.available_cents))
+            bump = min(company_left, max(shortfall, settings.launch_agent_min_budget_cents))
+            row.monthly_budget_cents += bump
+            agent.monthly_budget_cents = row.monthly_budget_cents  # keep in-memory copy
+            await db.commit()
+        return True
+
+    async def _park_for_budget(
+        self, ctx: RuntimeContext, agent: Agent, task: Task, exc: BudgetExceeded
+    ) -> None:
+        """Park a task on a founder spend-approval when the COMPANY budget is out.
+
+        Mirrors the tool-spend escalation in ``_handle_call`` but for the think step:
+        approving lifts the company ceiling by the shortfall and re-queues the task,
+        which resumes from its persisted transcript instead of failing and losing work.
+        """
+        shortfall = max(0, exc.requested_cents - max(0, exc.available_cents))
+        async with ctx.session_factory() as db:
+            await set_tenant(db, task.company_id)
+            decision = DecisionRequest(
+                company_id=task.company_id,
+                agent_id=agent.id,
+                task_id=task.id,
+                kind=DecisionKind.spend_approval,
+                summary=(
+                    f"**Over budget — approval needed**\n\n"
+                    f"{agent.name} needs **${exc.requested_cents / 100:.2f}** to keep working "
+                    f"on this task, but only **${max(0, exc.available_cents) / 100:.2f}** is "
+                    f"left in the {exc.scope} budget.\n\n"
+                    f"Approve to add **${shortfall / 100:.2f}** of headroom and continue."
+                ),
+                payload={
+                    "reason": "continue_task",
+                    "requested_cents": exc.requested_cents,
+                    "available_cents": exc.available_cents,
+                    "budget_increase_cents": shortfall,
+                },
+                status=DecisionStatus.pending,
+            )
+            db.add(decision)
+            await db.flush()
+            await chat.attach_decision_dm(db, decision=decision)
+            row = await db.get(Task, task.id)
+            if row is not None:
+                row.status = TaskStatus.waiting_approval
+            await event_counters.record(
+                db, company_id=task.company_id, event_type=EventType.decision_requested
+            )
+            await db.commit()
 
     async def _handle_call(
         self, ctx: RuntimeContext, agent: Agent, task: Task, call, mcp_routing: dict | None = None

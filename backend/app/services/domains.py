@@ -71,7 +71,10 @@ async def search(db: AsyncSession, *, company_id: uuid.UUID, query: str) -> list
     """Availability + price for ``query`` (or a few TLD variants of a bare name)."""
     registrar = get_registrar()
     if registrar is None:
-        raise DomainsError("No domain registrar is configured (set ABOS_DOMAIN_REGISTRAR).")
+        # No registrar wired: searching isn't an error, there's just nothing to
+        # offer. Return an empty result (HTTP 200) and let the UI learn buying is
+        # unavailable from `capabilities.can_buy` instead of surfacing a 400.
+        return []
     q = query.strip().lower()
     if not q:
         return []

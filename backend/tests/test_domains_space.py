@@ -30,10 +30,11 @@ class _StubRegistrar:
 # ── search (pure) ─────────────────────────────────────────────────────────────
 
 
-async def test_search_requires_a_registrar(monkeypatch):
+async def test_search_degrades_gracefully_without_a_registrar(monkeypatch):
+    # No registrar wired: searching isn't an error — it returns an empty list
+    # (HTTP 200) so the UI degrades via capabilities.can_buy, not a 400.
     monkeypatch.setattr(domains_svc, "get_registrar", lambda: None)
-    with pytest.raises(domains_svc.DomainsError):
-        await domains_svc.search(None, company_id=None, query="acme")
+    assert await domains_svc.search(None, company_id=None, query="acme") == []
 
 
 async def test_search_expands_bare_name_across_tlds(monkeypatch):
