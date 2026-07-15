@@ -400,6 +400,7 @@ with `schedule_followup` / `crm_log_activity`; pull a full relationship view wit
 
 {file_store}
 
+{connected_capabilities}
 Tools that reach the outside world (e.g. send_email, web_search, register_domain,
 publish_content, schedule_social_post, run_ad_campaign, send_notification,
 create_calendar_event, generate_invoice) work
@@ -509,6 +510,27 @@ def file_store_block(connected: bool) -> str:
     return _FILE_STORE_CONNECTED if connected else _FILE_STORE_DISCONNECTED
 
 
+def connected_capabilities_block(capabilities: list[str] | tuple[str, ...]) -> str:
+    """Advertise the integrations the founder has ACTUALLY connected, whose tools the
+    loop has already pre-loaded for this task.
+
+    Without this, capabilities like publishing (Cloudflare) and saving files (Drive)
+    are only reachable through the `discover_tools`/`use_tool` dance, and a weaker
+    model kept marking a "publish the page"/"save the report" objective *done* without
+    ever calling the tool. Listing the ready-to-use tools up front — and telling the
+    agent to actually run them — closes that competence gap."""
+    if not capabilities:
+        return ""
+    lines = "\n".join(f"- {c}" for c in capabilities)
+    return (
+        "CONNECTED CAPABILITIES — wired and READY RIGHT NOW. These tools are already "
+        "loaded (no `discover_tools` needed). When your task calls for one, CALL IT and "
+        "act — don't merely plan or describe it, and never mark a task done claiming you "
+        "published/saved/sent something unless you actually invoked the tool and it "
+        f"succeeded:\n{lines}\n"
+    )
+
+
 def render_agent_system(
     *,
     role_desc: str,
@@ -521,6 +543,7 @@ def render_agent_system(
     skills: str = "",
     objectives: str = "",
     file_store_connected: bool = False,
+    connected_capabilities: list[str] | tuple[str, ...] = (),
     language: str | None = None,
 ) -> str:
     """Compose an agent's full launch system prompt for one task.
@@ -547,6 +570,7 @@ def render_agent_system(
         metrics=metrics,
         skills=skills,
         file_store=file_store_block(file_store_connected),
+        connected_capabilities=connected_capabilities_block(connected_capabilities),
         language=operating_language_directive(language),
     )
 
