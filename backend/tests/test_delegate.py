@@ -317,6 +317,81 @@ async def test_autonomous_escalates_only_extreme_spend(session_factory, company_
 
 
 @requires_db
+async def test_telegram_link_survives_settings_save(session_factory, company_with_budget):
+    """Linking Telegram is preserved across a Settings PUT (which only sends level +
+    webhooks), and unlinking clears it."""
+    company_id = company_with_budget
+    async with session_factory() as db:
+        await dlg.link_telegram(db, company_id=company_id, chat_id="12345")
+        await db.commit()
+    async with session_factory() as db:
+        cfg = await dlg.get_config(db, company_id)
+        assert cfg.telegram_chat_id == "12345" and cfg.active is True
+
+    async with session_factory() as db:
+        cfg = await dlg.set_config(
+            db, company_id=company_id, autonomy_level=2, webhooks=[], telegram_events="escalations"
+        )
+        await db.commit()
+    assert cfg.telegram_chat_id == "12345"
+    assert cfg.telegram_events == "escalations"
+
+    async with session_factory() as db:
+        await dlg.unlink_telegram(db, company_id=company_id)
+        await db.commit()
+        cfg = await dlg.get_config(db, company_id)
+    assert cfg.telegram_chat_id is None
+
+
+def test_telegram_format_decision():
+    from app.services import telegram
+
+    needs = telegram.format_decision(
+        {"needs_you": True, "company_name": "Acme", "kind": "spend_approval",
+         "agent": "CEO", "summary": "Buy a domain", "inbox_url": "https://x/c/1"}
+    )
+    assert "Needs your approval" in needs and "Acme" in needs and "https://x/c/1" in needs
+    handled = telegram.format_decision(
+        {"needs_you": False, "company_name": "Acme", "kind": "plan_approval",
+         "agent": "CEO", "summary": "ok", "delegate_rationale": "routine"}
+    )
+    assert "Handled" in handled and "routine" in handled
+
+
+@requires_db
+async def test_telegram_webhook_links_chat_from_start_token(session_factory, company_with_budget, monkeypatch):
+    """POST /webhooks/telegram with a valid /start <token> links the sender's chat."""
+    import app.api.webhooks_telegram as tg_api
+    from app.security import create_telegram_connect_token
+
+    sent: list = []
+
+    async def _fake_send(chat_id, text):
+        sent.append((chat_id, text))
+        return True
+
+    monkeypatch.setattr(tg_api.telegram_svc, "send_message", _fake_send)
+    monkeypatch.setattr(tg_api.settings, "telegram_webhook_secret", "")
+
+    company_id = company_with_budget
+    token = create_telegram_connect_token(company_id)
+
+    class _Req:
+        headers: dict = {}
+
+        async def json(self):
+            return {"message": {"chat": {"id": 999}, "text": f"/start {token}"}}
+
+    async with session_factory() as db:
+        result = await tg_api.telegram_update(_Req(), db)
+    assert result == {"ok": True}
+    async with session_factory() as db:
+        cfg = await dlg.get_config(db, company_id)
+    assert cfg.telegram_chat_id == "999"
+    assert any("Connected" in t for _, t in sent)
+
+
+@requires_db
 async def test_untriaged_pending_excludes_already_handled(session_factory, company_with_budget):
     company_id = company_with_budget
     _t, decision_id = await _pending_decision(

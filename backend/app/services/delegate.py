@@ -127,11 +127,18 @@ class DelegateConfig:
     autonomy_level: int
     webhooks: tuple[WebhookTarget, ...]
     signing_secret: str | None
+    #: The founder's linked Telegram chat (shared platform bot), if connected.
+    telegram_chat_id: str | None = None
+    telegram_events: str = "all"  # one of WEBHOOK_EVENTS
 
     @property
     def active(self) -> bool:
         """Whether there's anything for the triage cron to do."""
-        return self.autonomy_level >= DelegateAutonomy.assisted.value or bool(self.webhooks)
+        return (
+            self.autonomy_level >= DelegateAutonomy.assisted.value
+            or bool(self.webhooks)
+            or bool(self.telegram_chat_id)
+        )
 
 
 @dataclass(frozen=True)
@@ -174,10 +181,13 @@ def _parse(policy: Policy | None) -> DelegateConfig | None:
         and (w.get("events") or "all") in WEBHOOK_EVENTS
     )[:MAX_WEBHOOKS]
 
+    tg_events = rule.get("telegram_events") or "all"
     return DelegateConfig(
         autonomy_level=level,
         webhooks=webhooks,
         signing_secret=(rule.get("signing_secret") or None),
+        telegram_chat_id=(rule.get("telegram_chat_id") or None),
+        telegram_events=(tg_events if tg_events in WEBHOOK_EVENTS else "all"),
     )
 
 
@@ -192,11 +202,14 @@ async def set_config(
     autonomy_level: int,
     webhooks: list[dict],
     rotate_secret: bool = False,
+    telegram_events: str | None = None,
 ) -> DelegateConfig:
     """Upsert the delegate config. Invalid webhooks/levels are normalised, never
     silently honoured. A signing secret is minted the first time a webhook is set
-    (so spoof protection is on by default) and can be rotated on demand. Stored
-    with ``effect=allow`` so the policy engine ignores the row."""
+    (so spoof protection is on by default) and can be rotated on demand. The
+    Telegram *connection* (chat id) is preserved across saves — it's linked from
+    Telegram, not from this form. Stored with ``effect=allow`` so the policy engine
+    ignores the row."""
     level = max(1, min(4, int(autonomy_level)))
     targets = [
         {"url": w["url"], "events": (w.get("events") or "all")}
@@ -207,12 +220,22 @@ async def set_config(
     ][:MAX_WEBHOOKS]
 
     policy = await _config_policy(db, company_id)
-    existing_secret = (policy.rule or {}).get("signing_secret") if policy else None
+    prev = (policy.rule or {}) if policy else {}
+    existing_secret = prev.get("signing_secret")
     secret = existing_secret
     if rotate_secret or (targets and not existing_secret):
         secret = secrets.token_hex(32)
+    tg_events = telegram_events if telegram_events in WEBHOOK_EVENTS else (
+        prev.get("telegram_events") or "all"
+    )
 
-    rule = {"autonomy_level": level, "webhooks": targets, "signing_secret": secret}
+    rule = {
+        "autonomy_level": level,
+        "webhooks": targets,
+        "signing_secret": secret,
+        "telegram_chat_id": prev.get("telegram_chat_id") or None,
+        "telegram_events": tg_events,
+    }
     if policy is None:
         policy = Policy(
             company_id=company_id,
@@ -229,6 +252,36 @@ async def set_config(
         policy.effect = PolicyEffect.allow
     await db.flush()
     return _parse(policy)
+
+
+async def _upsert_rule(db: AsyncSession, company_id: uuid.UUID, patch: dict) -> None:
+    """Merge ``patch`` into the delegate policy row (creating it if needed)."""
+    policy = await _config_policy(db, company_id)
+    if policy is None:
+        policy = Policy(
+            company_id=company_id,
+            name=DELEGATE_POLICY_NAME,
+            scope=PolicyScope.global_,
+            rule={"autonomy_level": 1, "webhooks": [], **patch},
+            effect=PolicyEffect.allow,
+            priority=1000,
+            enabled=True,
+        )
+        db.add(policy)
+    else:
+        policy.rule = {**(policy.rule or {}), **patch}
+    await db.flush()
+
+
+async def link_telegram(
+    db: AsyncSession, *, company_id: uuid.UUID, chat_id: str
+) -> None:
+    """Attach a founder's Telegram chat to a company (from the /start deep link)."""
+    await _upsert_rule(db, company_id, {"telegram_chat_id": str(chat_id)})
+
+
+async def unlink_telegram(db: AsyncSession, *, company_id: uuid.UUID) -> None:
+    await _upsert_rule(db, company_id, {"telegram_chat_id": None})
 
 
 # ── Eligibility (the hard, in-code guard) ─────────────────────────────────────
@@ -441,7 +494,7 @@ async def handle(
     await db.flush()
 
     payload = None
-    if cfg.webhooks:
+    if cfg.webhooks or cfg.telegram_chat_id:
         payload = await _webhook_payload(
             db, company=company, decision=decision, disposition=disposition, rationale=rationale
         )

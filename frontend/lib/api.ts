@@ -231,15 +231,23 @@ export interface Artifact extends ArtifactSummary { body_md: string }
 
 export type WebhookEvents = "all" | "escalations" | "auto_handled";
 export interface DelegateWebhook { url: string; events: WebhookEvents }
+export interface TelegramStatus {
+  enabled: boolean; // platform bot configured on this deployment
+  connected: boolean;
+  chat_id: string | null;
+  events: WebhookEvents;
+}
 export interface DelegateSettings {
   autonomy_level: number; // 1..4
   webhooks: DelegateWebhook[];
   signing_secret: string | null;
+  telegram: TelegramStatus;
 }
 export interface DelegateUpdate {
   autonomy_level: number;
   webhooks: DelegateWebhook[];
   rotate_secret?: boolean;
+  telegram_events?: WebhookEvents;
 }
 
 // ── API ──────────────────────────────────────────────────────────────────────
@@ -537,6 +545,10 @@ export const api = {
       method: "PUT",
       body: JSON.stringify(patch),
     }),
+  telegramConnectLink: (companyId: string) =>
+    req<{ connect_url: string | null }>(`/companies/${companyId}/delegate/telegram/connect`),
+  telegramDisconnect: (companyId: string) =>
+    req<void>(`/companies/${companyId}/delegate/telegram`, { method: "DELETE" }),
 
   // Founder-facing reports (artifacts).
   reports: (companyId: string) => req<ArtifactSummary[]>(`/companies/${companyId}/reports`),

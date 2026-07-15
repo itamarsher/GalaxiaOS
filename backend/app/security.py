@@ -58,6 +58,34 @@ def decode_access_token(token: str) -> uuid.UUID | None:
 _OAUTH_STATE_AUDIENCE = "gdrive-oauth"
 
 
+# ── Telegram connect token ────────────────────────────────────────────────────
+# Carried in the ``/start <token>`` deep-link a founder taps to link their Telegram
+# chat to a company. A dedicated ``aud`` keeps it from being replayed as anything
+# else; short-lived because it only has to survive the tap-to-Telegram round trip.
+_TELEGRAM_CONNECT_AUDIENCE = "telegram-connect"
+
+
+def create_telegram_connect_token(company_id: uuid.UUID, *, minutes: int = 15) -> str:
+    expire = datetime.now(UTC) + timedelta(minutes=minutes)
+    payload = {"sub": str(company_id), "exp": expire, "aud": _TELEGRAM_CONNECT_AUDIENCE}
+    return jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)
+
+
+def decode_telegram_connect_token(token: str) -> uuid.UUID | None:
+    try:
+        payload = jwt.decode(
+            token,
+            settings.jwt_secret,
+            algorithms=[settings.jwt_algorithm],
+            audience=_TELEGRAM_CONNECT_AUDIENCE,
+            options={"require_aud": True},
+        )
+        sub = payload.get("sub")
+        return uuid.UUID(sub) if sub else None
+    except (JWTError, ValueError):
+        return None
+
+
 def create_oauth_state(company_id: uuid.UUID, *, minutes: int = 10) -> str:
     expire = datetime.now(UTC) + timedelta(minutes=minutes)
     payload = {"sub": str(company_id), "exp": expire, "aud": _OAUTH_STATE_AUDIENCE}

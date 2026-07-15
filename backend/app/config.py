@@ -283,6 +283,14 @@ class Settings(BaseSettings):
     # "extreme" — the larger of this hard floor or `fraction` of remaining budget.
     delegate_l4_extreme_cents: int = 100000  # $1000
     delegate_l4_extreme_fraction: float = 0.5
+    # Shared platform Telegram bot for founder notifications (@GalaxiaOSBot). The
+    # token is a platform secret (one bot serves every founder); per-company we
+    # only store the founder's linked chat id. Empty ⇒ Telegram delivery is off.
+    telegram_bot_token: str = ""
+    # Verifies inbound updates from Telegram (X-Telegram-Bot-Api-Secret-Token);
+    # registered with the bot's webhook at startup. Empty ⇒ inbound is unverified
+    # (fine for a throwaway/test bot, but set one in production).
+    telegram_webhook_secret: str = ""
 
     # Closed-loop runtime
     memory_recall_limit: int = 6  # prior learnings injected into an agent's context

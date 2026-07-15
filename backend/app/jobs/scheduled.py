@@ -146,9 +146,11 @@ async def triage_founder_decisions(ctx: dict) -> dict:
     from app.runtime.queue import enqueue_task
     from app.services import budget as budget_svc
     from app.services import delegate
+    from app.services import telegram as telegram_svc
 
     to_enqueue: list = []
     webhooks: list[tuple[str, dict, str | None]] = []  # (url, payload, secret)
+    telegrams: list[tuple[str, str]] = []  # (chat_id, text)
     handled = 0
 
     for company_id in await _active_company_ids():
@@ -183,6 +185,14 @@ async def triage_founder_decisions(ctx: dict) -> dict:
                             webhooks.append(
                                 (target.url, outcome.webhook_payload, cfg.signing_secret)
                             )
+                    if (
+                        cfg.telegram_chat_id
+                        and telegram_svc.enabled()
+                        and delegate.webhook_wants(cfg.telegram_events, outcome.disposition)
+                    ):
+                        telegrams.append(
+                            (cfg.telegram_chat_id, telegram_svc.format_decision(outcome.webhook_payload))
+                        )
             await db.commit()
 
     # Fire side effects only after the DB is durably committed.
@@ -192,7 +202,13 @@ async def triage_founder_decisions(ctx: dict) -> dict:
         await enqueue_task(task_id)
     for url, payload, secret in webhooks:
         await _delegate.send_webhook(url, payload, secret)
-    return {"handled": handled, "resumed": len(to_enqueue), "notified": len(webhooks)}
+    for chat_id, text in telegrams:
+        await telegram_svc.send_message(chat_id, text)
+    return {
+        "handled": handled,
+        "resumed": len(to_enqueue),
+        "notified": len(webhooks) + len(telegrams),
+    }
 
 
 async def monitor_failed_tasks(ctx: dict) -> dict:
