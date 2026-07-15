@@ -486,6 +486,96 @@ async def test_telegram_webhook_links_chat_from_start_token(session_factory, com
 
 
 @requires_db
+async def test_telegram_reply_resolves_decision_and_acks(
+    session_factory, company_with_budget, monkeypatch
+):
+    """A founder's plain reply in the connected chat resolves their one pending
+    decision (same path as an in-app reply) and the bot reacts 👍 to acknowledge."""
+    import app.api.webhooks_telegram as tg_api
+    from app.services import decisions as decisions_svc
+
+    sent: list = []
+    reactions: list = []
+    enqueued: list = []
+
+    async def _fake_send(chat_id, text):
+        sent.append((chat_id, text))
+        return True
+
+    async def _fake_react(chat_id, message_id, emoji="👍"):
+        reactions.append((chat_id, message_id, emoji))
+        return True
+
+    async def _fake_enqueue(task_id, **kw):
+        enqueued.append(task_id)
+
+    async def _noop_write(*a, **k):
+        return None
+
+    monkeypatch.setattr(tg_api.telegram_svc, "send_message", _fake_send)
+    monkeypatch.setattr(tg_api.telegram_svc, "set_reaction", _fake_react)
+    monkeypatch.setattr(tg_api, "enqueue_task", _fake_enqueue)
+    monkeypatch.setattr(tg_api.settings, "telegram_webhook_secret", "")
+    # The founder-note path writes to memory_entries (omitted from the test schema).
+    monkeypatch.setattr(decisions_svc.memory_svc, "write", _noop_write)
+
+    company_id = company_with_budget
+    async with session_factory() as db:
+        await dlg.link_telegram(db, company_id=company_id, chat_id="555")
+        await db.commit()
+    task_id, decision_id = await _pending_decision(
+        session_factory, company_id, kind=DecisionKind.plan_approval, payload={}
+    )
+
+    class _Req:
+        headers: dict = {}
+
+        async def json(self):
+            return {"message": {"chat": {"id": 555}, "message_id": 42, "text": "Approved"}}
+
+    async with session_factory() as db:
+        result = await tg_api.telegram_update(_Req(), db)
+    assert result == {"ok": True}
+
+    # The decision was approved and its task resumed (enqueued), and 👍 was set on
+    # the founder's message.
+    async with session_factory() as db:
+        d = await db.get(DecisionRequest, decision_id)
+        assert d.status is DecisionStatus.approved
+    assert enqueued == [task_id]
+    assert reactions == [("555", 42, "👍")]
+
+
+@requires_db
+async def test_telegram_reply_from_unlinked_chat_is_guided(
+    session_factory, company_with_budget, monkeypatch
+):
+    """A reply from a chat that isn't linked to any company gets a connect nudge,
+    not a resolution."""
+    import app.api.webhooks_telegram as tg_api
+
+    sent: list = []
+
+    async def _fake_send(chat_id, text):
+        sent.append((chat_id, text))
+        return True
+
+    monkeypatch.setattr(tg_api.telegram_svc, "send_message", _fake_send)
+    monkeypatch.setattr(tg_api.settings, "telegram_webhook_secret", "")
+
+    class _Req:
+        headers: dict = {}
+
+        async def json(self):
+            return {"message": {"chat": {"id": 777}, "message_id": 1, "text": "yes"}}
+
+    async with session_factory() as db:
+        result = await tg_api.telegram_update(_Req(), db)
+    assert result == {"ok": True}
+    assert any("Connect Telegram" in t for _, t in sent)
+
+
+@requires_db
 async def test_untriaged_pending_excludes_already_handled(session_factory, company_with_budget):
     company_id = company_with_budget
     _t, decision_id = await _pending_decision(

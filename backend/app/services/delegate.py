@@ -293,6 +293,23 @@ async def unlink_telegram(db: AsyncSession, *, company_id: uuid.UUID) -> None:
     await _upsert_rule(db, company_id, {"telegram_chat_id": None})
 
 
+async def company_for_telegram_chat(
+    db: AsyncSession, chat_id: str
+) -> uuid.UUID | None:
+    """The company whose delegate config is linked to this Telegram chat, if any.
+
+    Reverse of :func:`link_telegram` — lets the inbound webhook route a founder's
+    reply back to their company. Must be called on a session with NO tenant set
+    (the sender's company is unknown until this resolves), so it sees across
+    tenants; the caller then scopes to the returned company."""
+    return await db.scalar(
+        select(Policy.company_id).where(
+            Policy.name == DELEGATE_POLICY_NAME,
+            Policy.rule["telegram_chat_id"].astext == str(chat_id),
+        )
+    )
+
+
 # ── Eligibility (the hard, in-code guard) ─────────────────────────────────────
 def _spend_cents(decision: DecisionRequest) -> int:
     payload = decision.payload or {}
