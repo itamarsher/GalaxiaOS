@@ -6,11 +6,43 @@ import base64
 
 import pytest
 
+import httpx
+
 from app.integrations.mediagen import GeneratedMedia, MediaGenError, get_media_gen
-from app.integrations.nano_banana import NanoBananaMediaGen
+from app.integrations.nano_banana import NanoBananaMediaGen, _explain_http_error
 
 _PNG = b"\x89PNG\r\n\x1a\nfake-bytes"
 _B64 = base64.b64encode(_PNG).decode()
+
+
+def _http_status_error(status: int, body: dict) -> httpx.HTTPStatusError:
+    req = httpx.Request("POST", "https://example.test")
+    resp = httpx.Response(status, json=body, request=req)
+    return httpx.HTTPStatusError("err", request=req, response=resp)
+
+
+def test_explain_http_error_429_points_at_billing_not_a_retry():
+    exc = _http_status_error(
+        429,
+        {"error": {"message": "Quota exceeded ... free_tier_requests, limit: 0"}},
+    )
+    out = _explain_http_error(exc, what="Nano Banana image generation")
+    assert isinstance(out, MediaGenError)
+    msg = str(out)
+    assert "429" in msg and "free tier" in msg and "billing" in msg
+    assert "limit: 0" in msg  # the concrete Google detail is carried through
+
+
+def test_explain_http_error_403_flags_bad_key():
+    exc = _http_status_error(403, {"error": {"message": "permission denied"}})
+    msg = str(_explain_http_error(exc, what="Veo video generation"))
+    assert "403" in msg and "invalid or lacks access" in msg
+
+
+def test_explain_http_error_falls_back_for_other_errors():
+    exc = httpx.ConnectError("boom")
+    msg = str(_explain_http_error(exc, what="Nano Banana image generation"))
+    assert "failed:" in msg
 
 
 def test_parse_image_extracts_inline_data_and_note():
