@@ -122,18 +122,27 @@ async def resolve_decision(
     approved: bool,
     user_id: uuid.UUID | None,
     note: str | None,
+    echo_note_in_dm: bool = True,
 ) -> uuid.UUID | None:
     """Apply a founder approve/reject to a pending decision and resume its task.
 
     Mutates ``decision`` (and its task) in place; the caller commits and enqueues
     the returned task id (``None`` when there was nothing to resume). Shared by the
     HTTP endpoints and the chat reply path so both resolve identically.
+
+    ``echo_note_in_dm`` controls whether ``note`` is appended to the closing
+    "✅ Approved / ❌ Rejected" DM. The button path passes a note that lives nowhere
+    else, so it echoes (default). The chat-reply path passes the founder's reply,
+    which is ALREADY posted as its own visible message — echoing it there would
+    render the same text two extra times — so it opts out.
     """
     decision.status = DecisionStatus.approved if approved else DecisionStatus.rejected
     decision.resolved_by_user_id = user_id
     decision.resolved_at = datetime.now(UTC)
     await _apply_note(db, decision, note)
-    await _post_resolution_dm(db, decision, approved=approved, note=note)
+    await _post_resolution_dm(
+        db, decision, approved=approved, note=note if echo_note_in_dm else None
+    )
 
     if approved:
         # Over-budget approvals carry the shortfall: authorising the spend lifts the
@@ -353,7 +362,16 @@ async def try_resolve_from_reply(
     if verdict == "unclear":
         await _post_clarification(db, decision)
         return None, "unclear"
+    # The founder's reply is already posted as its own visible message in the DM,
+    # so keep it out of the closing "✅ Approved / ❌ Rejected" note to avoid echoing
+    # the same text again. It's still applied to the record and folded into the
+    # agent's resume acknowledgment.
     task_id = await resolve_decision(
-        db, decision, approved=(verdict == "approve"), user_id=user_id, note=reply
+        db,
+        decision,
+        approved=(verdict == "approve"),
+        user_id=user_id,
+        note=reply,
+        echo_note_in_dm=False,
     )
     return task_id, verdict

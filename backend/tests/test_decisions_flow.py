@@ -204,6 +204,14 @@ async def test_reply_resolve_settles_plain_approved_without_llm(
         row = await db.get(Task, task.id)
         assert row.status is TaskStatus.queued
 
+        # The closing resolution DM confirms the verdict ("✅ Approved.") but must
+        # NOT echo the founder's reply back — that text is already its own visible
+        # message, so re-appending it rendered "Approved" three times in the thread.
+        msgs = await chat.messages(db, channel_id=channel_id, limit=50)
+        resolution = [m for m in msgs if m.sender_agent_id is None and "✅" in m.body]
+        assert resolution, "expected a resolution DM"
+        assert resolution[-1].body == "✅ Approved."
+
 
 @requires_db
 async def test_reply_resolve_unclear_leaves_decision_open_and_asks(
