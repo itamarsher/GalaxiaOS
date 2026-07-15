@@ -60,6 +60,42 @@ def test_render_page_html_escapes_and_structures():
     assert "<strong>launch</strong>" in html
 
 
+def test_render_page_html_renders_markdown_lists():
+    html = sites_svc.render_page_html("t", "Why us:\n\n- Fast\n- **Cheap**\n- Simple")
+    assert "<ul>" in html and html.count("<li>") == 3
+    assert "<li>Fast</li>" in html
+    assert "<li><strong>Cheap</strong></li>" in html
+
+
+def test_render_page_html_degrades_authored_html_instead_of_leaking_css():
+    # A model that supplies a full HTML landing page (its own <style>, hero markup)
+    # must not have its CSS/markup dumped as visible page text — the scaffold is
+    # stripped to readable prose first.
+    body = (
+        "<!doctype html><html><head><style>.hero{background:linear-gradient(#000,#fff);"
+        "padding:80px}</style></head><body>"
+        "<h1>Run a business in one session</h1>"
+        "<p>GalaxiaOS launches your <b>autonomous</b> company.</p>"
+        "<ul><li>Zero code</li><li>Real agents</li></ul>"
+        "</body></html>"
+    )
+    html = sites_svc.render_page_html("Launch", body)
+    # None of the CSS/scaffold survives as visible text.
+    assert "linear-gradient" not in html
+    assert "&lt;style&gt;" not in html and "<style>.hero" not in html
+    assert ".hero{" not in html
+    # The real copy does survive, as clean structure.
+    assert "Run a business in one session" in html
+    assert "<strong>autonomous</strong>" in html  # <b> normalized to markdown bold
+    assert "<li>Zero code</li>" in html and "<li>Real agents</li>" in html
+
+
+def test_render_page_html_leaves_ordinary_prose_with_angle_brackets_untouched():
+    # A '<' in plain copy must not trigger HTML-scaffold stripping.
+    html = sites_svc.render_page_html("t", "Latency is < 100ms and cost is low.")
+    assert "Latency is &lt; 100ms and cost is low." in html
+
+
 def test_render_page_html_renders_safe_links_only():
     html = sites_svc.render_page_html("t", "Sign up at [our form](https://tally.so/r/x).")
     assert '<a href="https://tally.so/r/x" target="_blank" rel="noopener noreferrer">our form</a>' in html

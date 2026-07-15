@@ -83,6 +83,47 @@ def _page(title: str, body_html: str) -> str:
     )
 
 
+# A body that looks like a hand-authored HTML document rather than markdown. A
+# capable model, told to build a "landing page", often writes a full page with its
+# own <style>/<div>/hero markup — which, escaped verbatim, would dump raw CSS/HTML
+# as visible text on the page (that's the failure this guards against).
+_HTML_DOC_RE = re.compile(r"<!doctype|<html[\s>]|<head[\s>]|<style[\s>]|<body[\s>]", re.I)
+# Blocks whose *contents* must be dropped entirely (not just untagged) — showing
+# CSS or JS source as page copy is the exact bug we're fixing.
+_DROP_BLOCK_RE = re.compile(r"<(script|style|head)\b[^>]*>.*?</\1>", re.I | re.S)
+
+
+def _strip_html_scaffold(body: str) -> str:
+    """Reduce an HTML-authored body to clean text the markdown renderer can handle.
+
+    The renderer intentionally emits only tags it controls, so raw HTML is escaped
+    to text. When a model supplies a whole HTML document, that escaping turns its
+    ``<style>`` and markup into visible source on the page. Rather than leak that,
+    drop ``<script>/<style>/<head>`` blocks outright and unwrap the remaining tags
+    to their text — degrading a full page to readable prose instead of CSS soup.
+    Only applied when the body actually looks like HTML, so genuine markdown (and
+    the ``<`` characters that appear in ordinary prose) is left untouched.
+    """
+    if not _HTML_DOC_RE.search(body):
+        return body
+    text = _DROP_BLOCK_RE.sub("\n", body)
+    # Container closings → blank line, so each becomes its own markdown block.
+    text = re.sub(r"</(p|div|section|header|footer|article|h[1-6]|ul|ol)\s*>", "\n\n", text, flags=re.I)
+    text = re.sub(r"<br\s*/?>", "\n", text, flags=re.I)
+    # Headings open a new block with the matching markdown prefix.
+    text = re.sub(r"<h[1-2]\b[^>]*>", "\n\n## ", text, flags=re.I)
+    text = re.sub(r"<h[3-6]\b[^>]*>", "\n\n### ", text, flags=re.I)
+    # List items become consecutive "- " lines (single newline keeps them one list).
+    text = re.sub(r"</li\s*>", "", text, flags=re.I)
+    text = re.sub(r"<li\b[^>]*>", "\n- ", text, flags=re.I)
+    text = re.sub(r"</?(strong|b|em|i)\b[^>]*>", "**", text, flags=re.I)  # keep emphasis
+    text = re.sub(r"<[^>]+>", "", text)  # drop any remaining tags
+    text = _html.unescape(text)  # &amp; → & etc., so re-escaping later is clean
+    # Collapse the runs of blank lines the stripping leaves behind.
+    text = re.sub(r"[ \t]+\n", "\n", text)
+    return re.sub(r"\n{3,}", "\n\n", text).strip()
+
+
 def render_page_html(
     title: str,
     body: str,
@@ -93,26 +134,47 @@ def render_page_html(
 ) -> str:
     """Render a title + markdown-ish body into a single, self-contained HTML page.
 
-    A minimal, dependency-free converter (headings, paragraphs, bold, and links) —
-    enough for a real landing page while keeping the only tags we emit ones we
-    control. The body is HTML-escaped first, so nothing the model wrote reaches the
-    DOM as markup; links are only emitted for ``http(s)`` URLs.
+    A minimal, dependency-free converter (headings, lists, paragraphs, bold, and
+    links) — enough for a real landing page while keeping the only tags we emit ones
+    we control. The body is HTML-escaped first, so nothing the model wrote reaches
+    the DOM as markup; links are only emitted for ``http(s)`` URLs. A body that is
+    itself an HTML document is first reduced to text (see ``_strip_html_scaffold``)
+    so its CSS/markup can't leak onto the page as visible source.
 
     When ``form_action`` is given, an email/waitlist capture form that POSTs there
     is appended — turning the page into an early-signal capture page with no domain
     or third-party tool required.
     """
+    body = _strip_html_scaffold((body or "").strip())
     blocks: list[str] = []
-    for raw in re.split(r"\n\s*\n", (body or "").strip()):
+    list_items: list[str] = []
+
+    def _flush_list() -> None:
+        if list_items:
+            blocks.append("<ul>\n      " + "\n      ".join(list_items) + "\n    </ul>")
+            list_items.clear()
+
+    for raw in re.split(r"\n\s*\n", body):
         chunk = raw.strip()
         if not chunk:
             continue
         heading = re.match(r"^(#{1,3})\s+(.*)$", chunk)
         if heading:
+            _flush_list()
             level = len(heading.group(1)) + 1  # h2..h4
             blocks.append(f"<h{level}>{_inline(heading.group(2))}</h{level}>")
+            continue
+        # A block of consecutive "- "/"* " lines becomes a single list.
+        lines = chunk.splitlines()
+        if lines and all(re.match(r"^\s*[-*]\s+\S", ln) for ln in lines):
+            for ln in lines:
+                item = re.sub(r"^\s*[-*]\s+", "", ln)
+                list_items.append(f"<li>{_inline(item)}</li>")
+            _flush_list()
         else:
+            _flush_list()
             blocks.append(f"<p>{_inline(chunk)}</p>")
+    _flush_list()
     if form_action:
         blocks.append(
             _capture_form_html(

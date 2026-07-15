@@ -50,7 +50,18 @@ SPECS: list[ToolSpec] = [
                     "enum": ["blog", "landing_page", "social", "email"],
                 },
                 "title": {"type": "string"},
-                "body": {"type": "string"},
+                "body": {
+                    "type": "string",
+                    "description": (
+                        "The content, as MARKDOWN — headings (#, ##), '- ' bullet "
+                        "lists, **bold**, and [text](https://…) links. The platform "
+                        "styles and wraps it into a finished page. Do NOT paste raw "
+                        "HTML/CSS (a <style> block, <div>s, a hero) — it is not "
+                        "rendered as markup and would be reduced to plain text. For a "
+                        "signup/waitlist form, set lead_capture=true rather than "
+                        "writing form HTML."
+                    ),
+                },
                 "lead_capture": {
                     "type": "boolean",
                     "description": (
