@@ -314,6 +314,116 @@ async def test_submit_plan_coalesces_across_tasks(session_factory, company_with_
 
 
 @requires_db
+async def test_submit_plan_refused_when_ancestor_plan_approved(
+    session_factory, company_with_budget
+):
+    """An execution sub-task whose ANCESTOR plan the founder already approved must
+    not re-submit a plan. This is the "repeated decisions" incident: a leaf task
+    (e.g. 'set up the Discord community') that hit a missing tool re-proposed its
+    parent's whole objective as a fresh plan_approval, re-asking for work already
+    signed off. It should be told to execute instead — no new decision."""
+    company_id = company_with_budget
+    agent, parent_task = await _make_running_task(session_factory, company_id)
+
+    # The founder already approved the parent task's plan.
+    async with session_factory() as db:
+        db.add(
+            DecisionRequest(
+                company_id=company_id,
+                agent_id=agent.id,
+                task_id=parent_task.id,
+                kind=DecisionKind.plan_approval,
+                summary="Proposed execution plan:\n\n## Objective 3\n- build community",
+                payload={"tool": "submit_plan", "plan": "x"},
+                status=DecisionStatus.approved,
+            )
+        )
+        # A dispatched execution sub-task under that approved plan.
+        child = Task(
+            company_id=company_id,
+            run_id=parent_task.run_id,
+            root_run_id=parent_task.root_run_id,
+            agent_id=agent.id,
+            parent_task_id=parent_task.id,
+            goal="Set up and seed a Discord community for early adopters",
+            status=TaskStatus.running,
+        )
+        db.add(child)
+        await db.commit()
+        child_detached = await db.get(Task, child.id)
+
+    async with session_factory() as db:
+        outcome = await execute_tool(
+            db, object(), agent=agent, task=child_detached,
+            name="submit_plan", args={"plan": "## Objective 3\n- build community (again)"},
+        )
+        await db.commit()
+
+    # Refused (no park, flagged) with guidance to execute — and NO new decision.
+    assert outcome.park is not True
+    assert outcome.is_error is True
+    async with session_factory() as db:
+        count = await db.scalar(
+            select(func.count())
+            .select_from(DecisionRequest)
+            .where(
+                DecisionRequest.task_id == child_detached.id,
+                DecisionRequest.kind == DecisionKind.plan_approval,
+            )
+        )
+        assert count == 0
+        # The child keeps running (not parked) so it can get on with the work.
+        row = await db.get(Task, child_detached.id)
+        assert row.status is TaskStatus.running
+
+
+@requires_db
+async def test_submit_plan_allowed_when_no_ancestor_plan(
+    session_factory, company_with_budget
+):
+    """A first-level functional task (parent is a business cycle with NO approved
+    plan) must still be able to submit its plan — the guard only blocks descendants
+    of an already-approved plan, not legitimate first-time planning."""
+    company_id = company_with_budget
+    agent, parent_task = await _make_running_task(session_factory, company_id)
+
+    # Parent exists but has NO approved plan_approval (e.g. a business-cycle task).
+    async with session_factory() as db:
+        child = Task(
+            company_id=company_id,
+            run_id=parent_task.run_id,
+            root_run_id=parent_task.root_run_id,
+            agent_id=agent.id,
+            parent_task_id=parent_task.id,
+            goal="Develop a distribution and demand generation strategy",
+            status=TaskStatus.running,
+        )
+        db.add(child)
+        await db.commit()
+        child_detached = await db.get(Task, child.id)
+
+    async with session_factory() as db:
+        outcome = await execute_tool(
+            db, object(), agent=agent, task=child_detached,
+            name="submit_plan", args={"plan": "## Objective 3\n- build community"},
+        )
+        await db.commit()
+
+    assert outcome.park is True  # plan parks awaiting the founder's approval
+    async with session_factory() as db:
+        count = await db.scalar(
+            select(func.count())
+            .select_from(DecisionRequest)
+            .where(
+                DecisionRequest.task_id == child_detached.id,
+                DecisionRequest.kind == DecisionKind.plan_approval,
+                DecisionRequest.status == DecisionStatus.pending,
+            )
+        )
+        assert count == 1
+
+
+@requires_db
 async def test_approval_grant_is_one_shot(session_factory, company_with_budget):
     """An approved decision lets the gated action proceed exactly once on resume."""
     company_id = company_with_budget

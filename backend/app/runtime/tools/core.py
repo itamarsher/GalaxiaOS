@@ -444,6 +444,24 @@ async def _plan_is_approved(db, task_id) -> bool:
     ) is not None
 
 
+async def _ancestor_has_approved_plan(db, task: Task) -> bool:
+    """Whether an ANCESTOR of ``task`` already has a founder-approved plan.
+
+    A task that descends from an approved plan exists *because* the founder signed
+    off on the plan that dispatched it — it's an initiative to execute, not a plan
+    to re-propose. Walks up ``parent_task_id`` (bounded; task trees are shallow).
+    """
+    parent_id = task.parent_task_id
+    seen = 0
+    while parent_id is not None and seen < 20:
+        seen += 1
+        if await _plan_is_approved(db, parent_id):
+            return True
+        parent = await db.get(Task, parent_id)
+        parent_id = parent.parent_task_id if parent is not None else None
+    return False
+
+
 async def _dispatch_task(db, ctx, *, agent: Agent, task: Task, args: dict) -> ToolOutcome:
     # Plan-approval gate: on a launch run the CEO must get the founder's sign-off
     # on the plan before any functional work is dispatched. Other runs (scheduled
@@ -523,6 +541,23 @@ async def _submit_plan(db, ctx, *, agent: Agent, task: Task, args: dict) -> Tool
                 "The founder approved your plan. Proceed now: dispatch the "
                 "initiatives to the functional agents."
             )
+        )
+    # Don't re-plan an already-approved plan. If an ANCESTOR task already has the
+    # founder's plan sign-off, this task is one of that plan's initiatives — it
+    # should EXECUTE, not propose a new plan. Without this guard an execution
+    # sub-task that hits a wall (e.g. a missing tool) re-submits its parent's whole
+    # objective as a fresh plan_approval, burying the founder in redundant decisions
+    # for work they already approved (the "repeated decisions" incident).
+    if task.parent_task_id is not None and await _ancestor_has_approved_plan(db, task):
+        return ToolOutcome(
+            observation=(
+                "The plan that created this task was already approved by the founder "
+                "— you're executing one of its initiatives, not proposing a new plan. "
+                "Don't submit a plan for approval. Get the work done: use your tools "
+                "or dispatch sub-tasks, and if you're missing a capability, call "
+                "`request_capability` and finish what you can without it."
+            ),
+            is_error=True,
         )
     # Idempotency: a plan may already be awaiting approval — e.g. after a restart
     # re-runs this still-``running`` task (see app.jobs.recovery). Don't create a
