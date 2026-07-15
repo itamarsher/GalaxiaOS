@@ -114,6 +114,55 @@ async def test_set_config_mints_and_rotates_secret(session_factory, company_with
 
 
 @requires_db
+async def test_set_config_partial_updates_are_independent(session_factory, company_with_budget):
+    """Autonomy and notifications save from separate cards. A partial update must
+    touch only what it passes: setting the level leaves webhooks/secret/Telegram
+    alone, and setting webhooks leaves the level alone."""
+    company_id = company_with_budget
+    # Seed both slices at once.
+    async with session_factory() as db:
+        await dlg.set_config(
+            db,
+            company_id=company_id,
+            autonomy_level=2,
+            webhooks=[{"url": "https://hooks.example.com/a", "events": "all"}],
+        )
+        await db.commit()
+    async with session_factory() as db:
+        seeded = await dlg.get_config(db, company_id)
+    secret = seeded.signing_secret
+    assert seeded.autonomy_level == 2 and len(seeded.webhooks) == 1 and secret
+
+    # Bump only the autonomy level — webhooks and secret must survive untouched.
+    async with session_factory() as db:
+        after_level = await dlg.set_config(db, company_id=company_id, autonomy_level=4)
+        await db.commit()
+    assert after_level.autonomy_level == 4
+    assert [w.url for w in after_level.webhooks] == ["https://hooks.example.com/a"]
+    assert after_level.signing_secret == secret
+
+    # Change only the webhooks — the level (4) must survive untouched.
+    async with session_factory() as db:
+        after_hooks = await dlg.set_config(
+            db,
+            company_id=company_id,
+            webhooks=[{"url": "https://hooks.example.com/b", "events": "escalations"}],
+        )
+        await db.commit()
+    assert after_hooks.autonomy_level == 4
+    assert [(w.url, w.events) for w in after_hooks.webhooks] == [
+        ("https://hooks.example.com/b", "escalations")
+    ]
+    assert after_hooks.signing_secret == secret
+
+    # Passing an empty list explicitly clears the webhooks (distinct from None).
+    async with session_factory() as db:
+        cleared = await dlg.set_config(db, company_id=company_id, webhooks=[])
+        await db.commit()
+    assert cleared.autonomy_level == 4 and cleared.webhooks == ()
+
+
+@requires_db
 async def test_parse_migrates_legacy_config(session_factory, company_with_budget):
     """An old pre-slider row (auto_pilot + single webhook_url) reads as level 2 with
     the URL migrated into the webhook list."""

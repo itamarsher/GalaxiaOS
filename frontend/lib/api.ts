@@ -243,9 +243,11 @@ export interface DelegateSettings {
   signing_secret: string | null;
   telegram: TelegramStatus;
 }
+// A partial update: autonomy and notifications are edited from separate cards, so
+// each field is optional and omitting one leaves it untouched on the server.
 export interface DelegateUpdate {
-  autonomy_level: number;
-  webhooks: DelegateWebhook[];
+  autonomy_level?: number;
+  webhooks?: DelegateWebhook[];
   rotate_secret?: boolean;
   telegram_events?: WebhookEvents;
 }

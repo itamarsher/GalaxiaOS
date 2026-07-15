@@ -199,28 +199,37 @@ async def set_config(
     db: AsyncSession,
     *,
     company_id: uuid.UUID,
-    autonomy_level: int,
-    webhooks: list[dict],
+    autonomy_level: int | None = None,
+    webhooks: list[dict] | None = None,
     rotate_secret: bool = False,
     telegram_events: str | None = None,
 ) -> DelegateConfig:
-    """Upsert the delegate config. Invalid webhooks/levels are normalised, never
-    silently honoured. A signing secret is minted the first time a webhook is set
-    (so spoof protection is on by default) and can be rotated on demand. The
-    Telegram *connection* (chat id) is preserved across saves — it's linked from
-    Telegram, not from this form. Stored with ``effect=allow`` so the policy engine
-    ignores the row."""
-    level = max(1, min(4, int(autonomy_level)))
-    targets = [
-        {"url": w["url"], "events": (w.get("events") or "all")}
-        for w in (webhooks or [])
-        if isinstance(w, dict)
-        and w.get("url")
-        and (w.get("events") or "all") in WEBHOOK_EVENTS
-    ][:MAX_WEBHOOKS]
-
+    """Partial-update the delegate config: only the fields you pass change, the rest
+    are preserved. This is what lets the *autonomy* control and the *notification*
+    controls live in separate places and save independently without clobbering each
+    other. Invalid webhooks/levels are normalised. A signing secret is minted the
+    first time a webhook is set (spoof protection on by default) and rotatable on
+    demand. The Telegram connection (chat id) is linked from Telegram, never here.
+    Stored with ``effect=allow`` so the policy engine ignores the row."""
     policy = await _config_policy(db, company_id)
     prev = (policy.rule or {}) if policy else {}
+
+    if autonomy_level is None:
+        level = max(1, min(4, int(prev.get("autonomy_level") or 1)))
+    else:
+        level = max(1, min(4, int(autonomy_level)))
+
+    if webhooks is None:
+        targets = prev.get("webhooks") or []
+    else:
+        targets = [
+            {"url": w["url"], "events": (w.get("events") or "all")}
+            for w in webhooks
+            if isinstance(w, dict)
+            and w.get("url")
+            and (w.get("events") or "all") in WEBHOOK_EVENTS
+        ][:MAX_WEBHOOKS]
+
     existing_secret = prev.get("signing_secret")
     secret = existing_secret
     if rotate_secret or (targets and not existing_secret):
