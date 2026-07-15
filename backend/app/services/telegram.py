@@ -62,6 +62,29 @@ async def send_message(chat_id: str, text: str) -> bool:
         return False
 
 
+async def set_reaction(chat_id: str, message_id: int, emoji: str = "👍") -> bool:
+    """React to a message (acknowledge a founder's reply). Best-effort.
+
+    Telegram only allows a fixed allowlist of reaction emoji — ``✅``/``✔️`` are
+    *not* on it (they return ``REACTION_INVALID``), so ``👍`` is the acknowledgement
+    the founder sees. A failed reaction never blocks the reply from being routed."""
+    if not enabled() or not chat_id or not message_id:
+        return False
+    try:
+        async with httpx.AsyncClient(timeout=8.0) as client:
+            resp = await client.post(
+                _url("setMessageReaction"),
+                json={
+                    "chat_id": chat_id,
+                    "message_id": message_id,
+                    "reaction": [{"type": "emoji", "emoji": emoji}],
+                },
+            )
+        return resp.status_code < 400
+    except Exception:
+        return False
+
+
 async def bot_username() -> str | None:
     """The bot's ``@username`` (for building connect deep links), cached."""
     global _bot_username
