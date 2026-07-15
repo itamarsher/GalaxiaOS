@@ -98,7 +98,9 @@ jobs:
                    file(s), and/or the diff size vs. the limit),
                  - do NOT approve, do NOT merge. Stop.
 
-            6. RUNAWAY CAP. Count PRs merged in the last 24h
+            6. RUNAWAY CAP. If `auto_merge.max_merges_per_day` is null or absent,
+               there is no daily cap — skip this step entirely. Otherwise count PRs
+               merged in the last 24h
                (`gh pr list --state merged --search "merged:>=<24h-ago>"`). If that
                is >= `auto_merge.max_merges_per_day`, post ONE comment that the
                daily cap was hit and a founder should merge manually. Stop.
