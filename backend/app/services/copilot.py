@@ -39,6 +39,23 @@ _ALLOWED_ACTIONS = {
     "request_capability", "report_bug", "none",
 }
 
+# The copilot is an INTERACTIVE chat with the founder, so — unlike the agent loop
+# and the one-way digest, which are pinned to the persisted mission.language for
+# deterministic deliverables — it must reply in whatever language the founder is
+# writing in right now. A founder who onboarded in one language (mission.language)
+# but asks in another was getting answers that flip-flopped: a full sentence
+# anchored their language, but a terse "yes"/"ok" let the mission-language
+# directive (and the possibly-other-language company state/memory in the prompt)
+# take over and switch the reply. Mirror the conversation instead.
+COPILOT_REPLY_LANGUAGE_DIRECTIVE = (
+    "Language: reply in the SAME language the founder is writing in. Mirror the "
+    "language of their latest message; when it is too short to tell (e.g. \"yes\", "
+    "\"ok\", \"go ahead\"), match the language of the earlier conversation. The "
+    "company state and memory below are internal data and may be in a different "
+    "language — do NOT let their language change the language you reply in. Never "
+    "switch languages on your own."
+)
+
 COMMAND_PARSE_SYSTEM = """Translate the founder's command into ONE structured action.
 Respond ONLY with minified JSON:
 {"action": "pause_agents|resume_agents|pause_low_roi_agents|set_budget|request_capability|report_bug|none",
@@ -166,7 +183,6 @@ async def answer(
         db, company_id=company_id, text=_retrieval_text(prior, question), limit=8
     )
     state = await _company_state(db, company_id, extra_memory=relevant)
-    language = await _company_language(db, company_id)
     meter = CostMeter(SessionLocal)
     resp = await meter.run_llm(
         provider,
@@ -180,7 +196,7 @@ async def answer(
             "grounded in the company state provided and the conversation so far — a short "
             "reply like \"sounds good\" refers to what was just discussed, not a new topic. "
             "If the data does not support an answer, say so rather than inventing one.\n\n"
-            + operating_language_directive(language)
+            + COPILOT_REPLY_LANGUAGE_DIRECTIVE
         ),
         messages=[
             *prior,
