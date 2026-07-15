@@ -649,8 +649,17 @@ class MemoryOut(ORMModel):
     created_at: datetime
 
 
+class CopilotTurn(BaseModel):
+    role: str  # "user" | "assistant"
+    content: str
+
+
 class CopilotAskRequest(BaseModel):
     question: str
+    # Prior conversation (oldest first), excluding this question. Threaded into
+    # the query path so conversational follow-ups ("sounds good") resolve in
+    # context instead of being answered statelessly.
+    history: list[CopilotTurn] = []
 
 
 class CopilotAskResponse(BaseModel):

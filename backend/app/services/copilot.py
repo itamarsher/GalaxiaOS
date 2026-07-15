@@ -82,17 +82,65 @@ async def _company_state(db: AsyncSession, company_id: uuid.UUID, extra_memory=N
     return "\n".join(lines)
 
 
+# How many prior turns of the conversation to carry into a query. Bounds the
+# token cost of grounding a follow-up while keeping enough context that a terse
+# reply ("sounds good", "do it") still resolves against what was just discussed.
+_HISTORY_TURNS = 10
+# Cap each carried turn so a single long answer can't blow the context budget.
+_HISTORY_CHAR_CAP = 1200
+
+
+def _recent_history(history) -> list[Message]:
+    """Sanitize caller-supplied prior turns into provider ``Message``s.
+
+    Keeps only the last :data:`_HISTORY_TURNS`, coerces the role to the two the
+    providers accept, drops empties, and truncates each turn. History is the
+    fix for the copilot answering follow-ups (e.g. "sounds good") out of
+    context: without it, each ask is stateless and the model confabulates.
+    """
+    messages: list[Message] = []
+    for turn in (history or [])[-_HISTORY_TURNS:]:
+        if isinstance(turn, Message):
+            role, content = turn.role, turn.content
+        else:
+            role, content = turn.get("role"), turn.get("content")
+        if not isinstance(content, str) or not content.strip():
+            continue
+        role = "assistant" if role == "assistant" else "user"
+        messages.append(Message(role=role, content=content.strip()[:_HISTORY_CHAR_CAP]))
+    return messages
+
+
+def _retrieval_text(history_messages: list[Message], question: str) -> str:
+    """Query text for memory retrieval that survives terse follow-ups.
+
+    A bare "sounds good" retrieves nothing useful on its own, so fold in the
+    most recent user turn to inherit the topic ("buy the domain", "referral
+    program") the founder is actually responding to.
+    """
+    prior_user = next(
+        (m.content for m in reversed(history_messages) if m.role == "user"), ""
+    )
+    return f"{prior_user}\n{question}".strip() if prior_user else question
+
+
 async def answer(
     db: AsyncSession,
     *,
     company_id: uuid.UUID,
     question: str,
     user_id: uuid.UUID | None = None,
+    history=None,
 ) -> tuple[str, str]:
     """Return (answer_text, kind) where kind is 'query' or 'command'.
 
     ``user_id`` is the founder asking; it is attributed to any capability/bug
     request this command files, so the backlog tracks who asked.
+
+    ``history`` is the prior conversation (a list of ``{"role","content"}`` dicts
+    or :class:`Message`), oldest first, excluding the current ``question``. It
+    grounds conversational follow-ups on the query path so the copilot answers
+    in context instead of confabulating from an unrelated memory hit.
     """
     resolved = await apikeys.resolve_active_provider(db, company_id=company_id)
     if resolved is None:
@@ -113,7 +161,10 @@ async def answer(
         )
         return (text, "command")
 
-    relevant = await memory_svc.query(db, company_id=company_id, text=question, limit=8)
+    prior = _recent_history(history)
+    relevant = await memory_svc.query(
+        db, company_id=company_id, text=_retrieval_text(prior, question), limit=8
+    )
     state = await _company_state(db, company_id, extra_memory=relevant)
     language = await _company_language(db, company_id)
     meter = CostMeter(SessionLocal)
@@ -125,11 +176,16 @@ async def answer(
         task_id=None,
         model=provider.default_models["cheap"],
         system=(
-            "You are the founder's copilot. Answer concisely and only from the company "
-            "state provided. If the data does not support an answer, say so.\n\n"
+            "You are the founder's copilot in an ongoing conversation. Answer concisely, "
+            "grounded in the company state provided and the conversation so far — a short "
+            "reply like \"sounds good\" refers to what was just discussed, not a new topic. "
+            "If the data does not support an answer, say so rather than inventing one.\n\n"
             + operating_language_directive(language)
         ),
-        messages=[Message(role="user", content=f"Company state:\n{state}\n\nQuestion: {question}")],
+        messages=[
+            *prior,
+            Message(role="user", content=f"Company state:\n{state}\n\nQuestion: {question}"),
+        ],
         max_tokens=600,
         funding_user_id=funding_user_id,
     )
