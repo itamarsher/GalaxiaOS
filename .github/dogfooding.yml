@@ -22,9 +22,11 @@ auto_merge:
     # escalated path — so its PRs review-and-merge autonomously like a capability PR.
     - skill-optimize
 
-  # Runaway backstop: hard cap on autonomous merges in a rolling 24h. When the cap
-  # is hit the workflow escalates instead of merging.
-  max_merges_per_day: 10
+  # Runaway backstop: optional hard cap on autonomous merges in a rolling 24h.
+  # When set to an integer and the cap is hit, the workflow escalates instead of
+  # merging. `null` (or omitting the key) disables the backstop entirely — there
+  # is no 24h limit on autonomous merges. Set an integer to re-enable it.
+  max_merges_per_day: null
 
   # Minutes to wait after CI goes green before merging, so a founder has a chance
   # to veto. 0 = merge as soon as CI is green and the review is clean.
