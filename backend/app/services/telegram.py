@@ -12,6 +12,8 @@ the fleet (the in-app inbox is always the source of truth).
 
 from __future__ import annotations
 
+import html
+
 import httpx
 
 from app.config import settings
@@ -33,7 +35,15 @@ def _url(method: str) -> str:
 
 
 async def send_message(chat_id: str, text: str) -> bool:
-    """Send Markdown text to a chat. Best-effort; returns success."""
+    """Send an HTML-formatted message to a chat. Best-effort; returns success.
+
+    Uses ``parse_mode=HTML`` (not legacy ``Markdown``): the messages embed
+    agent-authored text that routinely contains ``*``, ``_`` and ``[`` — invalid
+    Markdown entities that make Telegram reject the whole message with a 400 that
+    this best-effort path then swallows, so the founder is never notified. HTML
+    mode only reserves ``< > &``, and :func:`format_decision` escapes every dynamic
+    field, so the message can't fail to parse. Callers building HTML must escape
+    any dynamic text themselves (see :func:`format_decision`)."""
     if not enabled() or not chat_id:
         return False
     try:
@@ -43,7 +53,7 @@ async def send_message(chat_id: str, text: str) -> bool:
                 json={
                     "chat_id": chat_id,
                     "text": text[:4000],
-                    "parse_mode": "Markdown",
+                    "parse_mode": "HTML",
                     "disable_web_page_preview": True,
                 },
             )
@@ -84,16 +94,25 @@ async def ensure_webhook(public_api_base_url: str) -> None:
 
 
 def format_decision(payload: dict) -> str:
-    """Render a delegate decision payload as a Telegram message."""
+    """Render a delegate decision payload as an HTML Telegram message.
+
+    Every interpolated value is HTML-escaped: the summary/rationale is
+    agent-authored and the company/agent names are user data, so unescaped ``< > &``
+    (or stray Markdown, under the old ``Markdown`` mode) would break parsing and the
+    message would silently never send. Only the fixed scaffolding uses tags."""
+    esc = html.escape
     needs_you = payload.get("needs_you")
-    head = "🔸 *Needs your approval*" if needs_you else "✅ *Handled by your delegate*"
+    head = (
+        "🔸 <b>Needs your approval</b>" if needs_you else "✅ <b>Handled by your delegate</b>"
+    )
     lines = [
-        f"{head} — {payload.get('company_name', 'your company')}",
-        f"_{payload.get('kind')}_ from {payload.get('agent') or 'an agent'}",
-        payload.get("summary") or "",
+        f"{head} — {esc(str(payload.get('company_name') or 'your company'))}",
+        f"<i>{esc(str(payload.get('kind') or 'decision'))}</i> from "
+        f"{esc(str(payload.get('agent') or 'an agent'))}",
+        esc(str(payload.get("summary") or "")),
     ]
     if not needs_you and payload.get("delegate_rationale"):
-        lines.append(f"↳ {payload['delegate_rationale']}")
+        lines.append(f"↳ {esc(str(payload['delegate_rationale']))}")
     if needs_you and payload.get("inbox_url"):
-        lines.append(f"[Open the decision inbox]({payload['inbox_url']})")
+        lines.append(f'<a href="{esc(str(payload["inbox_url"]))}">Open the decision inbox</a>')
     return "\n".join(line for line in lines if line)

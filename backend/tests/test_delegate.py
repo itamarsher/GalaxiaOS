@@ -424,6 +424,34 @@ def test_telegram_format_decision():
     assert "Handled" in handled and "routine" in handled
 
 
+def test_telegram_format_decision_escapes_agent_markdown():
+    """Regression: a plan summary full of Markdown (**bold**, _underscores_) and
+    HTML metacharacters must be HTML-escaped, not passed through. Under the old
+    parse_mode=Markdown this text 400'd on Telegram and the notification silently
+    never sent — the exact reason a founder's plan_approval never reached them."""
+    from app.services import telegram
+
+    out = telegram.format_decision(
+        {
+            "needs_you": True,
+            "company_name": "A & B <Co>",
+            "kind": "plan_approval",
+            "agent": "Growth Lead",
+            "summary": "## Objective 3\n- **Initiative 1** (Owner: growth) <x> & more",
+            "inbox_url": "https://x/c/1?a=1&b=2",
+        }
+    )
+    # Dynamic text is escaped: no raw metacharacters from the agent/company data.
+    assert "<x>" not in out and "&lt;x&gt;" in out
+    assert "A &amp; B &lt;Co&gt;" in out
+    assert "&amp; more" in out
+    # The literal Markdown stars survive as inert text (they no longer break parsing).
+    assert "**Initiative 1**" in out
+    # Only our own scaffolding uses real tags.
+    assert "<b>Needs your approval</b>" in out
+    assert '<a href="https://x/c/1?a=1&amp;b=2">Open the decision inbox</a>' in out
+
+
 @requires_db
 async def test_telegram_webhook_links_chat_from_start_token(session_factory, company_with_budget, monkeypatch):
     """POST /webhooks/telegram with a valid /start <token> links the sender's chat."""
