@@ -62,6 +62,47 @@ def test_apply_min_floor_noop_without_budget():
     assert _apply_min_floor([None, None], total_cents=None) == [None, None]
 
 
+# ── Agent competence: surface + pre-load connected-integration tools ──────────
+def test_connected_capabilities_block_advertises_ready_tools():
+    from app.runtime.prompts import connected_capabilities_block
+
+    assert connected_capabilities_block([]) == ""
+    block = connected_capabilities_block(["`save_file` — save to Drive"])
+    assert "CONNECTED CAPABILITIES" in block
+    assert "save_file" in block
+    assert "CALL IT" in block  # tells a weak model to actually execute, not just plan
+
+
+def test_render_agent_system_includes_connected_capabilities():
+    from app.runtime.prompts import render_agent_system
+
+    s = render_agent_system(
+        role_desc="growth", agent_directive=None, playbook=None, mission="m", goal="g",
+        memory="", metrics="", file_store_connected=True,
+        connected_capabilities=["`publish_content` — publish live (Cloudflare connected)"],
+    )
+    assert "publish_content" in s and "CONNECTED CAPABILITIES" in s
+    # Absent when nothing is connected — no stray placeholder, no false advertising.
+    s2 = render_agent_system(
+        role_desc="growth", agent_directive=None, playbook=None, mission="m", goal="g",
+        memory="", metrics="",
+    )
+    assert "CONNECTED CAPABILITIES" not in s2 and "{connected_capabilities}" not in s2
+
+
+def test_preloaded_capability_tool_names_are_real():
+    # The names the loop pre-loads for connected integrations must resolve to actual
+    # tool specs, or the pre-load would silently load nothing.
+    from app.runtime.tools import specs_for
+
+    names = {
+        "save_file", "list_company_files", "read_company_file",
+        "publish_content", "connect_domain", "web_search", "web_fetch",
+    }
+    loaded = {s.name for s in specs_for(names)}
+    assert names <= loaded
+
+
 # ── F5: domains search degrades gracefully ────────────────────────────────────
 async def test_domains_search_returns_empty_without_registrar():
     # Default test config has no registrar → search must return [] (HTTP 200),

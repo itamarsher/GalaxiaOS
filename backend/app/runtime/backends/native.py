@@ -222,6 +222,35 @@ class NativeBackend:
             file_store_connected = (
                 await integrations_svc.resolve_file_provider(db, company_id=task.company_id)
             ) is not None
+
+            # Pre-load the tools for the integrations the founder has ACTUALLY
+            # connected, and advertise them in the prompt, so a weaker model doesn't
+            # have to run the discover_tools/use_tool dance to reach a capability that
+            # already works. (In QA, agents kept marking a "publish the page"/"save the
+            # report" objective done without ever calling the tool, because it wasn't
+            # in their loaded set.) We only ever surface what genuinely works.
+            ready_tools: set[str] = set()
+            ready_caps: list[str] = []
+            if file_store_connected:
+                ready_tools |= {"save_file", "list_company_files", "read_company_file"}
+                ready_caps.append(
+                    "`save_file` — save a real deliverable to the company file store "
+                    "(Google Drive is connected)"
+                )
+            if await integrations_svc.resolve_site_host(db, company_id=task.company_id):
+                ready_tools |= {"publish_content", "connect_domain"}
+                ready_caps.append(
+                    "`publish_content` — publish a live landing page/blog to a free "
+                    "*.pages.dev URL (Cloudflare is connected)"
+                )
+            if await apikeys.get_plaintext_key(
+                db, company_id=task.company_id, provider="tavily"
+            ):
+                ready_tools |= {"web_search", "web_fetch"}
+                ready_caps.append(
+                    "`web_search` / `web_fetch` — real web research (a search provider "
+                    "is connected)"
+                )
         if resolved is None:
             return await self._finish(
                 ctx,
@@ -246,6 +275,7 @@ class NativeBackend:
             skills=skills_lib.index_for_role(agent.role.value),
             objectives=objectives_block,
             file_store_connected=file_store_connected,
+            connected_capabilities=ready_caps,
             language=mission_language,
         )
         messages = self._resume_or_seed(task)
@@ -267,7 +297,10 @@ class NativeBackend:
         # agent hot-loads tools with `use_tool`. Seed the live set from the transcript
         # so a task resumed in a fresh process keeps the tools it already discovered.
         # MCP tools (per-company, few) stay always-on alongside the core set.
-        active_tools = _active_tools_from_messages(messages)
+        # Seed with the core set, whatever the agent already discovered (on resume),
+        # and the pre-loaded tools for connected integrations (so they're callable
+        # from step one without a discovery round-trip).
+        active_tools = _active_tools_from_messages(messages) | ready_tools
         # Watermark for the "catch up on new chat" nudge, carried across steps so
         # each new batch of channel activity is surfaced once (on resume and while
         # running). Seeded from the persisted value and advanced as we nudge.
