@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import base64
+import hashlib
+import hmac
+import struct
 import uuid
 from datetime import UTC, datetime, timedelta
 
@@ -60,29 +64,39 @@ _OAUTH_STATE_AUDIENCE = "gdrive-oauth"
 
 # ── Telegram connect token ────────────────────────────────────────────────────
 # Carried in the ``/start <token>`` deep-link a founder taps to link their Telegram
-# chat to a company. A dedicated ``aud`` keeps it from being replayed as anything
-# else; short-lived because it only has to survive the tap-to-Telegram round trip.
-_TELEGRAM_CONNECT_AUDIENCE = "telegram-connect"
+# chat to a company. A JWT can't be used here: Telegram's deep-link ``start``
+# payload allows only ``[A-Za-z0-9_-]`` and at most 64 chars, while a JWT contains
+# dots and is far longer (Telegram silently drops the invalid payload, so the bot
+# only sees a bare ``/start``). So this is a compact, url-safe, HMAC-signed token:
+# 16-byte company uuid + 4-byte expiry + 10-byte MAC → ~40 base64url chars.
+_TELEGRAM_CONNECT_DOMAIN = b"telegram-connect"  # domain-separates the MAC
+
+
+def _telegram_mac(payload: bytes) -> bytes:
+    key = hashlib.sha256(settings.jwt_secret.encode() + _TELEGRAM_CONNECT_DOMAIN).digest()
+    return hmac.new(key, payload, hashlib.sha256).digest()[:10]
 
 
 def create_telegram_connect_token(company_id: uuid.UUID, *, minutes: int = 15) -> str:
-    expire = datetime.now(UTC) + timedelta(minutes=minutes)
-    payload = {"sub": str(company_id), "exp": expire, "aud": _TELEGRAM_CONNECT_AUDIENCE}
-    return jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)
+    exp = int(datetime.now(UTC).timestamp()) + minutes * 60
+    payload = company_id.bytes + struct.pack(">I", exp)  # 20 bytes
+    raw = payload + _telegram_mac(payload)  # + 10-byte MAC = 30 bytes
+    return base64.urlsafe_b64encode(raw).decode().rstrip("=")
 
 
 def decode_telegram_connect_token(token: str) -> uuid.UUID | None:
     try:
-        payload = jwt.decode(
-            token,
-            settings.jwt_secret,
-            algorithms=[settings.jwt_algorithm],
-            audience=_TELEGRAM_CONNECT_AUDIENCE,
-            options={"require_aud": True},
-        )
-        sub = payload.get("sub")
-        return uuid.UUID(sub) if sub else None
-    except (JWTError, ValueError):
+        raw = base64.urlsafe_b64decode(token + "=" * (-len(token) % 4))
+        if len(raw) != 30:
+            return None
+        payload, mac = raw[:20], raw[20:]
+        if not hmac.compare_digest(mac, _telegram_mac(payload)):
+            return None
+        exp = struct.unpack(">I", payload[16:20])[0]
+        if exp < int(datetime.now(UTC).timestamp()):
+            return None
+        return uuid.UUID(bytes=payload[:16])
+    except Exception:
         return None
 
 

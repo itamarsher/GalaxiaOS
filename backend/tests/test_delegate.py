@@ -343,6 +343,23 @@ async def test_telegram_link_survives_settings_save(session_factory, company_wit
     assert cfg.telegram_chat_id is None
 
 
+def test_telegram_connect_token_is_deeplink_safe():
+    """Telegram's ?start= payload allows only [A-Za-z0-9_-] up to 64 chars — a JWT
+    (dots, long) silently fails. Guard the compact token stays within those limits."""
+    import re
+    import uuid
+
+    from app.security import create_telegram_connect_token, decode_telegram_connect_token
+
+    cid = uuid.uuid4()
+    tok = create_telegram_connect_token(cid)
+    assert len(tok) <= 64
+    assert re.fullmatch(r"[A-Za-z0-9_-]+", tok)  # no dots, url-safe
+    assert decode_telegram_connect_token(tok) == cid
+    assert decode_telegram_connect_token("garbage") is None
+    assert decode_telegram_connect_token(create_telegram_connect_token(cid, minutes=-1)) is None
+
+
 def test_telegram_format_decision():
     from app.services import telegram
 
