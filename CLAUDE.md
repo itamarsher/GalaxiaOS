@@ -8,6 +8,32 @@ Feature PRs labeled `claude-implement` self-review and **squash-merge** via
 money, migrations, the pipeline itself) or exceeds the `escalate_diff` size
 bound is routed to `founder-review` for a human instead — by design.
 
+### Opening a PR for auto-merge
+
+To have a PR merge itself, apply one of the `eligible_labels` from
+`.github/dogfooding.yml` when you open it:
+
+- `claude-implement` — the default for feature/bugfix PRs.
+- `skill-optimize` — reserved for the skill-optimizer's playbook edits.
+
+Steps:
+
+1. Push the branch, then create the PR against `main`.
+2. Add the `claude-implement` label (create it once with `gh label create
+   claude-implement` if the repo doesn't have it yet).
+3. Confirm the change is auto-merge-eligible so it doesn't silently divert to
+   `founder-review`:
+   - no changed file matches an `escalate_paths` glob, and
+   - the diff stays within `escalate_diff` (`max_files: 15`,
+     `max_total_lines: 400`).
+   If either bound trips, the PR needs a human — expect `founder-review`, not a
+   merge.
+
+Once labeled, the workflow (triggered on CI success) re-verifies CI, reviews the
+diff, and squash-merges + deletes the branch on a clean pass. It writes the
+squash commit message itself, so no per-session trailer reaches `main`. Nothing
+merges until CI is green — labeling only makes the PR *eligible*.
+
 ## Restart the branch from `main` after every merge
 
 Because the pipeline **squash-merges**, a merged branch's commit lands on `main`

@@ -22,10 +22,16 @@ export default function CopilotPage() {
     const q = text.trim();
     if (!q || busy) return;
     setInput("");
+    // Snapshot the prior turns before appending this question so the backend
+    // can ground a follow-up ("sounds good") in what was just discussed.
+    const history = turns.map((t) => ({
+      role: (t.who === "user" ? "user" : "assistant") as "user" | "assistant",
+      content: t.text,
+    }));
     setTurns((t) => [...t, { who: "user", text: q }]);
     setBusy(true);
     try {
-      const res = await api.copilotAsk(id, q);
+      const res = await api.copilotAsk(id, q, history);
       setTurns((t) => [...t, { who: "bot", text: res.answer, kind: res.kind }]);
     } catch (e) {
       setTurns((t) => [...t, { who: "bot", text: String(e instanceof Error ? e.message : e) }]);

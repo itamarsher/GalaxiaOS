@@ -30,7 +30,11 @@ async def latest_digest(company: CompanyDep, db: DbDep):
 @router.post("/copilot/ask", response_model=CopilotAskResponse)
 async def ask(company: CompanyDep, body: CopilotAskRequest, db: DbDep, user: CurrentUser):
     text, kind = await copilot.answer(
-        db, company_id=company.id, question=body.question, user_id=user.id
+        db,
+        company_id=company.id,
+        question=body.question,
+        user_id=user.id,
+        history=[{"role": t.role, "content": t.content} for t in body.history],
     )
     await db.commit()
     return CopilotAskResponse(answer=text, kind=kind)

@@ -504,10 +504,14 @@ export const api = {
   digestLatest: (companyId: string) => req<Digest>(`/companies/${companyId}/digest/latest`),
   generateDigest: (companyId: string) =>
     req<Digest>(`/companies/${companyId}/digest/generate`, { method: "POST" }),
-  copilotAsk: (companyId: string, question: string) =>
+  copilotAsk: (
+    companyId: string,
+    question: string,
+    history: { role: "user" | "assistant"; content: string }[] = [],
+  ) =>
     req<{ answer: string; kind: string }>(`/companies/${companyId}/copilot/ask`, {
       method: "POST",
-      body: JSON.stringify({ question }),
+      body: JSON.stringify({ question, history }),
     }),
 
   // SSE live stream. EventSource cannot set an Authorization header, so the JWT
