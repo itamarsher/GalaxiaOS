@@ -251,6 +251,19 @@ class NativeBackend:
                     "`web_search` / `web_fetch` — real web research (a search provider "
                     "is connected)"
                 )
+            # Media generation needs BOTH a media key and somewhere to file the asset,
+            # so only advertise it as ready when the file store is connected too — else
+            # a design agent would try `generate_image`, get "connect Drive", and stall.
+            if file_store_connected and await apikeys.get_plaintext_key(
+                db, company_id=task.company_id, provider="nano_banana"
+            ):
+                ready_tools |= {"generate_image", "generate_video"}
+                ready_caps.append(
+                    "`generate_image` — render a real on-brand image (subject, "
+                    "composition, mood) and file it to the store; use it to produce "
+                    "actual visuals, not descriptions of visuals (an image model is "
+                    "connected)"
+                )
         if resolved is None:
             return await self._finish(
                 ctx,

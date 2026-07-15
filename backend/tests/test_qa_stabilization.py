@@ -98,6 +98,8 @@ def test_preloaded_capability_tool_names_are_real():
     names = {
         "save_file", "list_company_files", "read_company_file",
         "publish_content", "connect_domain", "web_search", "web_fetch",
+        # Media tools pre-loaded when a media key + file store are connected.
+        "generate_image", "generate_video",
     }
     loaded = {s.name for s in specs_for(names)}
     assert names <= loaded
