@@ -55,9 +55,10 @@ def test_operating_directive_names_language_or_falls_back():
         assert operating_language_directive(empty) == OPERATING_LANGUAGE_DIRECTIVE
 
 
-def test_agent_loop_and_copilot_thread_the_persisted_language():
-    # The persisted mission.language must reach every agentic surface, not just
-    # onboarding: the live agent loop and the founder-facing copilot/digest.
+def test_agent_loop_and_digest_thread_the_persisted_language():
+    # The persisted mission.language must reach the DETERMINISTIC surfaces: the live
+    # agent loop (deliverables) and the one-way founder digest (a board update). Both
+    # stay pinned to the mission's language regardless of stray tokens.
     from app.runtime.backends import native
     from app.services import copilot
 
@@ -65,10 +66,25 @@ def test_agent_loop_and_copilot_thread_the_persisted_language():
     assert "mission.language" in native_src
     assert "language=mission_language" in native_src
 
-    answer_src = inspect.getsource(copilot.answer)
     digest_src = inspect.getsource(copilot.generate_digest)
-    assert "operating_language_directive(language)" in answer_src
     assert "operating_language_directive(language)" in digest_src
+
+
+def test_copilot_chat_mirrors_the_founder_not_the_mission_language():
+    # The copilot is an INTERACTIVE chat, not a one-way deliverable: it must reply in
+    # whatever language the founder is writing in right now, NOT be pinned to
+    # mission.language. Pinning made replies flip-flop — a full sentence answered in
+    # the founder's language, but a terse "yes" let the mission-language directive
+    # (and other-language company state/memory) switch the reply. Guard against a
+    # regression back to pinning the chat.
+    from app.services import copilot
+
+    answer_src = inspect.getsource(copilot.answer)
+    assert "COPILOT_REPLY_LANGUAGE_DIRECTIVE" in answer_src
+    assert "operating_language_directive(language)" not in answer_src
+    # The directive itself must tell the model to follow the founder's language and
+    # ignore the internal data's language.
+    assert "same language the founder is writing in" in copilot.COPILOT_REPLY_LANGUAGE_DIRECTIVE.lower()
 
 
 # ── stage 1 detects and reports the language ──────────────────────────────────
