@@ -77,7 +77,9 @@ export default function SettingsPage() {
 
       <ManagedCard companyId={id} />
 
-      <DelegateCard companyId={id} />
+      <AutonomyCard companyId={id} />
+
+      <NotificationsCard companyId={id} />
 
       <FromAddress companyId={id} current={company.data ?? null} onChange={() => company.reload()} />
 
@@ -187,8 +189,10 @@ function ManagedCard({ companyId }: { companyId: string }) {
   );
 }
 
-// The four-stop autonomy slider + notification webhooks. Slider and webhooks share
-// one config row, so every save PUTs the whole thing (autonomy level + webhooks).
+// Autonomy and notifications are two independent concerns that happen to share one
+// stored config row. The API does partial updates, so each card below PUTs only its
+// own slice — changing your autonomy level never touches your webhooks/Telegram, and
+// vice-versa.
 const AUTONOMY = [
   { level: 1, name: "Manual", blurb: "Every decision comes to you. Nothing is auto-approved — the strictest setting." },
   { level: 2, name: "Assisted", blurb: "Claude handles plan approvals and low-stakes confirmations for you. All spending, hires, and outbound messages still escalate." },
@@ -202,30 +206,25 @@ const EVENT_LABELS: { value: WebhookEvents; label: string }[] = [
   { value: "auto_handled", label: "Only what Claude handled" },
 ];
 
-function DelegateCard({ companyId }: { companyId: string }) {
+// The four-stop autonomy slider. Owns only the autonomy level — saving it PUTs
+// nothing but `autonomy_level`, so the founder's notification config is untouched.
+function AutonomyCard({ companyId }: { companyId: string }) {
   const cfg = usePoll(() => api.delegate(companyId), 0, [companyId]);
   const [level, setLevel] = useState(1);
-  const [hooks, setHooks] = useState<DelegateWebhook[]>([]);
-  const [secret, setSecret] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
 
-  // Seed local state once the config loads.
   useEffect(() => {
     if (!cfg.data) return;
     setLevel(cfg.data.autonomy_level);
-    setHooks(cfg.data.webhooks);
-    setSecret(cfg.data.signing_secret);
   }, [cfg.data]);
 
-  const save = async (patch: { autonomy_level: number; webhooks: DelegateWebhook[]; rotate_secret?: boolean; telegram_events?: WebhookEvents }) => {
+  const save = async (next: number) => {
     setBusy(true); setErr(null); setSaved(false);
     try {
-      const next: DelegateSettings = await api.updateDelegate(companyId, patch);
-      setLevel(next.autonomy_level);
-      setHooks(next.webhooks);
-      setSecret(next.signing_secret);
+      const res: DelegateSettings = await api.updateDelegate(companyId, { autonomy_level: next });
+      setLevel(res.autonomy_level);
       setSaved(true);
     } catch (e) {
       setErr(String(e instanceof Error ? e.message : e));
@@ -235,21 +234,19 @@ function DelegateCard({ companyId }: { companyId: string }) {
   };
 
   const pick = AUTONOMY[level - 1];
-  const validHooks = hooks.filter((h) => /^https?:\/\//.test(h.url.trim()));
 
   return (
     <div className="card">
-      <div className="step">Autonomy &amp; notifications</div>
+      <div className="step">Autonomy</div>
       <p className="muted" style={{ fontSize: 13, margin: "6px 0 0" }}>
-        How much your Claude delegate resolves on your behalf, and where it pings you when something needs you.
+        How much your Claude delegate resolves on your behalf before anything reaches you.
       </p>
 
-      {/* Four-stop slider */}
       <label style={{ marginTop: 14 }}>Autonomy level</label>
       <input
         type="range" min={1} max={4} step={1} value={level}
         disabled={busy}
-        onChange={(e) => { const v = Number(e.target.value); setLevel(v); save({ autonomy_level: v, webhooks: hooks }); }}
+        onChange={(e) => { const v = Number(e.target.value); setLevel(v); save(v); }}
         style={{ width: "100%" }}
       />
       <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11 }} className="muted">
@@ -265,9 +262,54 @@ function DelegateCard({ companyId }: { companyId: string }) {
       {"warn" in pick && pick.warn && (
         <p className="err" style={{ fontSize: 13, marginTop: 6 }}>⚠️ {pick.warn}</p>
       )}
+      {saved && <div className="muted" style={{ fontSize: 13, marginTop: 8 }}>Saved.</div>}
+      {err && <div className="err">{err}</div>}
+    </div>
+  );
+}
+
+// Where the delegate pings you: notification webhooks (HMAC-signed) + Telegram. Owns
+// only the notification config — saving it never sends `autonomy_level`, so the
+// autonomy slider is untouched.
+function NotificationsCard({ companyId }: { companyId: string }) {
+  const cfg = usePoll(() => api.delegate(companyId), 0, [companyId]);
+  const [hooks, setHooks] = useState<DelegateWebhook[]>([]);
+  const [secret, setSecret] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [saved, setSaved] = useState(false);
+
+  useEffect(() => {
+    if (!cfg.data) return;
+    setHooks(cfg.data.webhooks);
+    setSecret(cfg.data.signing_secret);
+  }, [cfg.data]);
+
+  const save = async (patch: { webhooks?: DelegateWebhook[]; rotate_secret?: boolean; telegram_events?: WebhookEvents }) => {
+    setBusy(true); setErr(null); setSaved(false);
+    try {
+      const next: DelegateSettings = await api.updateDelegate(companyId, patch);
+      setHooks(next.webhooks);
+      setSecret(next.signing_secret);
+      setSaved(true);
+    } catch (e) {
+      setErr(String(e instanceof Error ? e.message : e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const validHooks = hooks.filter((h) => /^https?:\/\//.test(h.url.trim()));
+
+  return (
+    <div className="card">
+      <div className="step">Notifications</div>
+      <p className="muted" style={{ fontSize: 13, margin: "6px 0 0" }}>
+        Where the delegate pings you when a decision is handled or needs you.
+      </p>
 
       {/* Notification webhooks (up to 3) */}
-      <div className="step" style={{ marginTop: 18 }}>Notification webhooks</div>
+      <div className="step" style={{ marginTop: 14 }}>Notification webhooks</div>
       <p className="muted" style={{ fontSize: 13, margin: "6px 0 0" }}>
         Up to 3 URLs (Slack/Telegram/your phone) to POST decisions to. Every request is HMAC-signed with your
         signing secret so the receiver can verify it&apos;s really from us.
@@ -320,7 +362,7 @@ function DelegateCard({ companyId }: { companyId: string }) {
                 value={cfg.data.telegram.events}
                 disabled={busy}
                 onChange={async (e) => {
-                  await save({ autonomy_level: level, webhooks: validHooks, telegram_events: e.target.value as WebhookEvents });
+                  await save({ telegram_events: e.target.value as WebhookEvents });
                   cfg.reload();
                 }}
               >
@@ -357,11 +399,11 @@ function DelegateCard({ companyId }: { companyId: string }) {
       )}
 
       <div className="btnrow">
-        <button disabled={busy} onClick={() => save({ autonomy_level: level, webhooks: validHooks })}>
+        <button disabled={busy} onClick={() => save({ webhooks: validHooks })}>
           {busy ? "Saving…" : "Save webhooks"}
         </button>
         <button className="ghost" disabled={busy}
-          onClick={() => save({ autonomy_level: level, webhooks: validHooks, rotate_secret: true })}>
+          onClick={() => save({ webhooks: validHooks, rotate_secret: true })}>
           {secret ? "Rotate secret" : "Generate secret"}
         </button>
       </div>

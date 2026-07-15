@@ -60,8 +60,16 @@ class WebhookUpdate(BaseModel):
 
 
 class DelegateUpdate(BaseModel):
-    autonomy_level: int = Field(ge=1, le=4)
-    webhooks: list[WebhookUpdate] = Field(default_factory=list, max_length=delegate_svc.MAX_WEBHOOKS)
+    """A partial update. The autonomy slider and the notification config are
+    edited from separate places, so each field is optional and ``None`` means
+    "leave it as-is" — saving one never clobbers the other."""
+
+    #: Company-wide autonomy level (1–4); ``None`` leaves it unchanged.
+    autonomy_level: int | None = Field(default=None, ge=1, le=4)
+    #: Notification webhooks; ``None`` leaves them unchanged (``[]`` clears them).
+    webhooks: list[WebhookUpdate] | None = Field(
+        default=None, max_length=delegate_svc.MAX_WEBHOOKS
+    )
     #: Mint a fresh signing secret (invalidates the old one on existing receivers).
     rotate_secret: bool = False
     #: Which decisions to send to the connected Telegram chat.
@@ -111,7 +119,11 @@ async def put_delegate(company: CompanyDep, body: DelegateUpdate, db: DbDep):
         db,
         company_id=company.id,
         autonomy_level=body.autonomy_level,
-        webhooks=[{"url": w.url, "events": w.events} for w in body.webhooks],
+        webhooks=(
+            None
+            if body.webhooks is None
+            else [{"url": w.url, "events": w.events} for w in body.webhooks]
+        ),
         rotate_secret=body.rotate_secret,
         telegram_events=body.telegram_events,
     )
