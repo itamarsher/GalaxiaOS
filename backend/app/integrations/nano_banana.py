@@ -29,6 +29,39 @@ from app.integrations.mediagen import GeneratedMedia, MediaGenError
 _API_ROOT = "https://generativelanguage.googleapis.com/v1beta"
 
 
+def _explain_http_error(exc: httpx.HTTPError, *, what: str) -> MediaGenError:
+    """Turn a raw Google API HTTP error into an actionable :class:`MediaGenError`.
+
+    The bare httpx message (e.g. "Client error '429 Too Many Requests'") hides the
+    reason, and 429 on the image model almost always means the key's project has no
+    image quota — the Gemini **free tier allows 0 image-generation requests**, so it
+    needs billing enabled rather than a retry. Surface that so the agent (and the
+    founder) know the concrete fix instead of silently treating it as transient.
+    """
+    resp = getattr(exc, "response", None)
+    status = getattr(resp, "status_code", None)
+    detail = ""
+    if resp is not None:
+        try:
+            detail = (resp.json().get("error", {}) or {}).get("message", "") or ""
+        except Exception:  # noqa: BLE001 - best-effort detail extraction
+            detail = (getattr(resp, "text", "") or "")[:300]
+    said = f" Google said: {detail[:220]}" if detail else ""
+    if status == 429:
+        return MediaGenError(
+            f"{what} was refused for lack of quota (HTTP 429). Image/video generation "
+            "is not available on the Gemini free tier — enable billing on the Google AI "
+            "(Gemini API) project behind this key, or use a key from a paid project."
+            + said
+        )
+    if status in (401, 403):
+        return MediaGenError(
+            f"{what} was rejected (HTTP {status}) — the media key is invalid or lacks "
+            "access to this model." + said
+        )
+    return MediaGenError(f"{what} failed: {exc}")
+
+
 class NanoBananaMediaGen:
     def __init__(
         self,
@@ -67,7 +100,7 @@ class NanoBananaMediaGen:
                 resp.raise_for_status()
                 data = resp.json()
         except httpx.HTTPError as exc:
-            raise MediaGenError(f"Nano Banana image request failed: {exc}") from exc
+            raise _explain_http_error(exc, what="Nano Banana image generation") from exc
         except ValueError as exc:  # non-JSON body
             raise MediaGenError(f"Nano Banana returned non-JSON: {exc}") from exc
         return self._parse_image(data)
@@ -113,7 +146,7 @@ class NanoBananaMediaGen:
                 mime = dl.headers.get("content-type", "video/mp4").split(";")[0].strip()
                 return GeneratedMedia(data=dl.content, mime_type=mime or "video/mp4")
         except httpx.HTTPError as exc:
-            raise MediaGenError(f"Veo video request failed: {exc}") from exc
+            raise _explain_http_error(exc, what="Veo video generation") from exc
         except ValueError as exc:  # non-JSON body
             raise MediaGenError(f"Veo returned non-JSON: {exc}") from exc
 
