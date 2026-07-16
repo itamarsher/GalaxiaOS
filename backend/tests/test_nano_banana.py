@@ -4,9 +4,8 @@ from __future__ import annotations
 
 import base64
 
-import pytest
-
 import httpx
+import pytest
 
 from app.integrations.mediagen import GeneratedMedia, MediaGenError, get_media_gen
 from app.integrations.nano_banana import NanoBananaMediaGen, _explain_http_error
