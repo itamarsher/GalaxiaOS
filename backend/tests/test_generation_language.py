@@ -60,10 +60,14 @@ def test_agent_loop_and_digest_thread_the_persisted_language():
     # agent loop (deliverables) and the one-way founder digest (a board update). Both
     # stay pinned to the mission's language regardless of stray tokens.
     from app.runtime.backends import native
-    from app.services import copilot
+    from app.services import business_function, copilot
 
+    # The live loop pulls language via the Business-Function mandate (RFC 0001,
+    # migration step 2); the persisted mission.language is read there and threaded
+    # into the agent prompt — still deterministic, just sourced through the contract.
+    assert "mission.language" in inspect.getsource(business_function.get_mandate)
     native_src = inspect.getsource(native)
-    assert "mission.language" in native_src
+    assert "mandate.language" in native_src
     assert "language=mission_language" in native_src
 
     digest_src = inspect.getsource(copilot.generate_digest)

@@ -81,6 +81,7 @@ class Mandate(BaseModel):
     function: str  # the agent's role, e.g. "growth"
     function_title: str  # the agent's display name, e.g. "Growth Lead"
     mission: str
+    language: str | None  # founder's language, detected at onboarding; pins outputs
     objectives: str  # numbered objectives + KRs block (stable handles)
     metrics: str  # recent real-world signals, summarised
     constraints: list[str]
@@ -152,6 +153,7 @@ async def get_mandate(
         function=agent.role.value,
         function_title=agent.name,
         mission=mission_text,
+        language=mission.language if mission else None,
         objectives=objectives,
         metrics=metrics_svc.summarize_for_prompt(signals),
         constraints=constraints,
