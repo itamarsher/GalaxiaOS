@@ -33,12 +33,13 @@ def test_backend_registry_resolves_types():
 
 
 def test_unknown_backend_type_raises():
+    # `external` now resolves (ConnectedBackend); an unregistered type still raises.
     try:
-        get_backend("external")
+        get_backend("nonexistent")
     except NotImplementedError:
         pass
     else:  # pragma: no cover - guard
-        raise AssertionError("expected NotImplementedError for a reserved backend")
+        raise AssertionError("expected NotImplementedError for an unknown backend")
 
 
 # ── DB-backed helpers ────────────────────────────────────────────────────────
