@@ -11,6 +11,7 @@ from __future__ import annotations
 from typing import Protocol, runtime_checkable
 
 from app.models import Agent, Task
+from app.runtime.backends.connected import ConnectedBackend
 from app.runtime.backends.marketplace import MarketplaceBackend
 from app.runtime.backends.native import NativeBackend
 from app.runtime.context import RuntimeContext
@@ -22,10 +23,13 @@ class AgentBackend(Protocol):
 
 
 # Backend registry keyed by Agent.backend_type. "marketplace" runs hired agents
-# (execution simulated, spend metered); "external" remains a reserved stub.
+# (execution simulated, spend metered); "external" delegates to a connected
+# external worker via the Business-Function surface (RFC 0001) — registered with
+# no worker bound yet, so an `external` agent fails clearly until one is wired.
 _BACKENDS: dict[str, AgentBackend] = {
     "native": NativeBackend(),
     "marketplace": MarketplaceBackend(),
+    "external": ConnectedBackend(),
 }
 
 
@@ -33,6 +37,6 @@ def get_backend(backend_type: str) -> AgentBackend:
     backend = _BACKENDS.get(backend_type)
     if backend is None:
         raise NotImplementedError(
-            f"Agent backend {backend_type!r} is not available yet (marketplace seam reserved)."
+            f"Agent backend {backend_type!r} is not available yet."
         )
     return backend
