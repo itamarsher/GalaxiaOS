@@ -295,6 +295,10 @@ class Settings(BaseSettings):
     # Closed-loop runtime
     memory_recall_limit: int = 6  # prior learnings injected into an agent's context
     metrics_recall_limit: int = 8  # recent outcome signals injected into context
+    # How long a pull worker's claim on an initiative holds before it can be
+    # reassigned (RFC 0001, step 3). Long enough for a human/scheduled worker to
+    # act; a dead worker's claim expires and the initiative is offered again.
+    initiative_lease_seconds: int = 900
 
     # Live mission log — an ephemeral, Redis-backed ring of the agents' latest
     # milestone updates, surfaced live on the game dashboard (never persisted).
