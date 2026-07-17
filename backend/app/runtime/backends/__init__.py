@@ -14,6 +14,7 @@ from app.models import Agent, Task
 from app.runtime.backends.connected import ConnectedBackend
 from app.runtime.backends.marketplace import MarketplaceBackend
 from app.runtime.backends.native import NativeBackend
+from app.runtime.backends.openclaw_worker import default_openclaw_worker
 from app.runtime.context import RuntimeContext
 
 
@@ -23,13 +24,15 @@ class AgentBackend(Protocol):
 
 
 # Backend registry keyed by Agent.backend_type. "marketplace" runs hired agents
-# (execution simulated, spend metered); "external" delegates to a connected
-# external worker via the Business-Function surface (RFC 0001) — registered with
-# no worker bound yet, so an `external` agent fails clearly until one is wired.
+# (execution simulated, spend metered); "external" delegates a function's
+# execution to a connected external worker via the Business-Function surface
+# (RFC 0001). Its worker is a managed OpenClaw Gateway when configured
+# (ABOS_OPENCLAW_BASE_URL); otherwise no worker is bound and an `external` agent
+# fails with a clear "no runtime connected" message.
 _BACKENDS: dict[str, AgentBackend] = {
     "native": NativeBackend(),
     "marketplace": MarketplaceBackend(),
-    "external": ConnectedBackend(),
+    "external": ConnectedBackend(default_openclaw_worker()),
 }
 
 

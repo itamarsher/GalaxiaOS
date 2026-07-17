@@ -596,6 +596,17 @@ class Settings(BaseSettings):
     # than one owner.
     render_owner_id: str = ""
 
+    # Connected external runtime (RFC 0001): a managed OpenClaw Gateway that the
+    # `external` backend delegates a function's execution to over OpenClaw's
+    # OpenAI-compatible HTTP API. Empty base URL => no worker is bound and an
+    # `external` agent fails with a clear "no runtime connected" message.
+    openclaw_base_url: str = ""
+    openclaw_api_key: str = ""
+    # Model/agent route. Empty => route by function ("openclaw/<function>"), so each
+    # business function maps to its own OpenClaw agent persona.
+    openclaw_model: str = ""
+    openclaw_timeout_seconds: float = 120.0
+
     # Reliability monitor: the platform company watches its OWN failed agent tasks,
     # wakes the Platform agent to investigate each (reading the code, and the Render
     # deploys when it looks infrastructure-related), and files a bug report — which
