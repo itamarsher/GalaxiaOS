@@ -243,13 +243,33 @@ own protocol. If it's awkward for us, it's awkward for every worker type.
 ## 6. Multi-tenancy
 
 OpenClaw isolates at the **persona/workspace** level within one Gateway — not a
-company boundary. Tenancy stays Galaxia's responsibility:
+company boundary. Tenancy stays Galaxia's responsibility.
 
-- The MCP server is **per-tenant scoped** by the connection token; every tool call
-  is authorized against `(company, function)` and RLS as today.
-- For the managed runtime, isolate at the **Gateway-per-tenant** (or
-  pool-per-tenant) level. External agents are inherently the founder's own
-  boundary.
+**Invariant: worker identity is `(company, function)`, never `function` alone.**
+Two businesses that both have a "Growth" function are **two distinct agents**, not
+one shared persona. "Growth" is a role *type*, not an identity. Concretely
+`agentId = <company_id>:growth`, with its own OpenClaw `agentDir`/workspace/session
+store (the OpenClaw docs explicitly warn never to reuse `agentDir`). Reusing one
+running agent across tenants would leak the first company's workspace, memory, and
+session history into the second — the classic multi-tenant failure. So the same
+*role* across N businesses is N isolated agents.
+
+Two isolation layers, both keyed on tenant:
+
+- **Business data (Galaxia side):** the MCP server is **per-tenant scoped** by the
+  connection token; every tool call is authorized against `(company, function)` +
+  RLS. Mandate/initiatives/institutional memory can't cross tenants *even if a
+  runtime were shared* — this layer holds regardless.
+- **Runtime state (worker side):** the agent's own workspace / how-to memory /
+  sessions are isolated by the distinct `agentId`/`agentDir` **and** by running
+  **Gateway-per-tenant** (or a pool with strict per-agent workspace isolation).
+  External agents are inherently the founder's own boundary.
+
+**Reusable persona = template, not instance.** A standard "Growth agent"
+definition (or a marketplace agent) reused across businesses is a **shared template
+instantiated per-company** — exactly the existing `MarketplaceBackend` "hired
+agent" pattern (one catalog definition, an isolated instance per company). The
+*definition* is reusable; the *running agent* is always per-`(company, function)`.
 
 ## 7. Reference runtime: OpenClaw
 
