@@ -20,7 +20,7 @@ from sqlalchemy import select
 
 from app.config import settings
 from app.db import set_tenant
-from app.models import Agent, Company, DecisionRequest, Mission, Task
+from app.models import Agent, Company, DecisionRequest, Task
 from app.models.enums import (
     AgentRole,
     DecisionKind,
@@ -45,13 +45,20 @@ from app.runtime.tools.base import DEFAULT_MAX_OBSERVATION_CHARS, ToolOutcome, c
 from app.runtime.tools.base import consume_approval_grant as _consume_approval_grant
 from app.runtime.tools.base import consume_rejection_grant as _consume_rejection_grant
 from app.runtime.transcript import dump_messages, load_messages, sanitize_messages, transcript_lines
-from app.services import apikeys, chat, event_counters, memory, metrics, mission_log, reputation
+from app.services import (
+    apikeys,
+    business_function,
+    chat,
+    event_counters,
+    memory,
+    mission_log,
+    reputation,
+)
 from app.services import budget as budget_svc
 from app.services import external_messages as ext
 from app.services import governance as gov
 from app.services import integrations as integrations_svc
 from app.services import mcp as mcp_svc
-from app.services import objectives as objectives_svc
 from app.services import tasks as task_svc
 from app.services.budget import BudgetExceeded
 
@@ -170,18 +177,21 @@ class NativeBackend:
 
         async with ctx.session_factory() as db:
             await set_tenant(db, task.company_id)
-            mission = await db.scalar(
-                select(Mission).where(Mission.company_id == task.company_id).limit(1)
+            # Pull the function's mandate — mission, language, objectives, metrics,
+            # budget — from the Business-Function surface, the same contract an
+            # external agent would fetch, instead of reading each service inline
+            # (RFC 0001, migration step 2). Behaviour is unchanged: the mandate
+            # assembles these from the very same services this block used to call.
+            mandate = await business_function.get_mandate(
+                db, company_id=task.company_id, agent_id=agent.id
             )
-            mission_text = mission.generated_summary or mission.raw_text if mission else ""
+            mission_text = mandate.mission
             # Founder's language, detected once at onboarding — pins every agentic
             # step to it deterministically instead of re-inferring from the mission.
-            mission_language = mission.language if mission else None
+            mission_language = mandate.language
             # The company's objectives, numbered, so the agent can tag a dispatched
             # initiative with the objective it advances (dispatch_task `objective`).
-            objectives_block = objectives_svc.objectives_prompt_block(
-                await objectives_svc.ordered_objectives(db, task.company_id)
-            )
+            objectives_block = mandate.objectives
             # The company's global operating playbook (best practices + emerging
             # directives) is injected into every agent's launch prompt, so editing it
             # updates the whole fleet on their next run.
@@ -199,10 +209,7 @@ class NativeBackend:
                 limit=settings.memory_recall_limit,
             )
             memory_summary = _summarize_memory(recalled)
-            signals = await metrics.latest_signals(
-                db, company_id=task.company_id, limit=settings.metrics_recall_limit
-            )
-            metrics_summary = metrics.summarize_for_prompt(signals)
+            metrics_summary = mandate.metrics
 
             # Reputation drives model selection (escalate a struggling agent).
             rep = await reputation.get_or_create(db, company_id=task.company_id, agent_id=agent.id)
