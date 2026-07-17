@@ -25,9 +25,10 @@ separate, follow-up change.
 from __future__ import annotations
 
 import uuid
+from datetime import datetime, timedelta, timezone
 
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -199,6 +200,80 @@ async def get_next_initiative(
     )
 
 
+async def claim_initiative(
+    db: AsyncSession,
+    *,
+    company_id: uuid.UUID,
+    agent_id: uuid.UUID,
+    task_id: uuid.UUID,
+    lease_seconds: int | None = None,
+) -> Initiative | None:
+    """Atomically claim an offered initiative for this worker (async-first lifecycle).
+
+    A single conditional UPDATE that only matches a still-``queued`` task belonging
+    to this function, so two pull workers can never both take the same initiative —
+    the loser gets ``None`` and asks for the next one. Sets a lease so a dead or slow
+    worker's claim can later be reclaimed (see :func:`release_expired_claims`).
+    Returns the claimed Initiative, or ``None`` if it was already taken or isn't this
+    function's to claim. The caller commits.
+    """
+    lease = settings.initiative_lease_seconds if lease_seconds is None else lease_seconds
+    expires = datetime.now(timezone.utc) + timedelta(seconds=lease)
+    result = await db.execute(
+        update(Task)
+        .where(
+            Task.id == task_id,
+            Task.company_id == company_id,
+            Task.agent_id == agent_id,
+            Task.status == TaskStatus.queued,
+        )
+        .values(status=TaskStatus.running, lease_expires_at=expires)
+    )
+    if result.rowcount != 1:
+        return None
+    task = await db.get(Task, task_id)
+    if task is None:  # pragma: no cover - just-updated row must exist
+        return None
+    agent = await db.get(Agent, agent_id)
+    envelope = (
+        await _budget_envelope(db, company_id=company_id, agent=agent)
+        if agent is not None
+        else BudgetEnvelope()
+    )
+    return Initiative(
+        id=task.id,
+        function=agent.role.value if agent is not None else "",
+        goal=task.goal,
+        status=TaskStatus.running.value,  # authoritative: the claim just set it
+        created_at=task.created_at.isoformat(),
+        budget=envelope,
+    )
+
+
+async def release_expired_claims(
+    db: AsyncSession, *, company_id: uuid.UUID, now: datetime | None = None
+) -> int:
+    """Return lease-expired initiatives to the offered pool for reassignment.
+
+    Only *leased* running tasks (claimed via :func:`claim_initiative`) whose lease
+    has passed are reset to ``queued`` and un-leased; push-run tasks (lease NULL) are
+    never touched, so the native loop is unaffected. Returns how many were
+    reassigned. The caller commits.
+    """
+    cutoff = now or datetime.now(timezone.utc)
+    result = await db.execute(
+        update(Task)
+        .where(
+            Task.company_id == company_id,
+            Task.status == TaskStatus.running,
+            Task.lease_expires_at.is_not(None),
+            Task.lease_expires_at < cutoff,
+        )
+        .values(status=TaskStatus.queued, lease_expires_at=None)
+    )
+    return result.rowcount or 0
+
+
 async def report_result(
     db: AsyncSession,
     *,
@@ -225,6 +300,10 @@ async def report_result(
     task = await db.get(Task, task_id)
     if task is None or task.company_id != company_id:
         raise ValueError(f"task {task_id} not found for company {company_id}")
+
+    # Reporting ends the claim: drop any lease so a reported/parked initiative is
+    # never reclaimed by release_expired_claims.
+    task.lease_expires_at = None
 
     if outcome == _NEEDS_DECISION:
         return await _park_for_decision(db, task=task, output=output)

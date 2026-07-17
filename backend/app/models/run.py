@@ -82,3 +82,10 @@ class Task(Base, PKMixin, TenantMixin, TimestampMixin):
     reliability_reviewed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # Claim lease for the async-first initiative lifecycle (RFC 0001, step 3): set
+    # when a *pull* worker claims this initiative (queued -> running) so a dead or
+    # slow worker's lease can expire and the initiative be reassigned. NULL for
+    # push-run (native) tasks, which are never lease-reclaimed.
+    lease_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )

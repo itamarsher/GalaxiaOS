@@ -177,6 +177,91 @@ async def test_get_next_initiative_none_when_idle(session_factory):
         assert await bf.get_next_initiative(db, company_id=company_id, agent_id=agent_id) is None
 
 
+# ── claim / lease (async-first lifecycle) ──────────────────────────────────────
+@requires_db
+async def test_claim_initiative_is_atomic_single_winner(session_factory):
+    company_id = await _company(session_factory)
+    async with session_factory() as db:
+        agent = await _agent(db, company_id)
+        run = await _run(db, company_id)
+        task = await _task(db, company_id, run, agent.id, status=TaskStatus.queued,
+                           goal="offered work", created_at=_T0)
+        await db.commit()
+        agent_id, task_id = agent.id, task.id
+
+    # First claim wins and flips the task to running with a lease.
+    async with session_factory() as db:
+        won = await bf.claim_initiative(db, company_id=company_id, agent_id=agent_id, task_id=task_id)
+        await db.commit()
+    assert won is not None and won.status == "running"
+    async with session_factory() as db:
+        row = await db.get(Task, task_id)
+        assert row.status is TaskStatus.running and row.lease_expires_at is not None
+
+    # A second claim on the now-running task finds nothing to take.
+    async with session_factory() as db:
+        again = await bf.claim_initiative(db, company_id=company_id, agent_id=agent_id, task_id=task_id)
+        await db.commit()
+    assert again is None
+
+
+@requires_db
+async def test_release_expired_claims_reassigns_only_leased_and_expired(session_factory):
+    from datetime import timedelta
+
+    company_id = await _company(session_factory)
+    async with session_factory() as db:
+        agent = await _agent(db, company_id)
+        run = await _run(db, company_id)
+        # A pull-claimed initiative with a short lease…
+        leased = await _task(db, company_id, run, agent.id, status=TaskStatus.queued,
+                             goal="leased", created_at=_T0)
+        # …and a push-run (native) task with NO lease — must never be reclaimed.
+        unleased = await _task(db, company_id, run, agent.id, status=TaskStatus.running,
+                               goal="native running", created_at=_T0)
+        await db.commit()
+        leased_id, unleased_id = leased.id, unleased.id
+        agent_id = agent.id
+
+    async with session_factory() as db:
+        await bf.claim_initiative(db, company_id=company_id, agent_id=agent_id,
+                                  task_id=leased_id, lease_seconds=60)
+        await db.commit()
+
+    # Reclaim as-of a moment past the lease: the leased one returns to queued; the
+    # unleased native task is untouched.
+    async with session_factory() as db:
+        n = await bf.release_expired_claims(
+            db, company_id=company_id, now=datetime.now(timezone.utc) + timedelta(hours=1)
+        )
+        await db.commit()
+    assert n == 1
+    async with session_factory() as db:
+        assert (await db.get(Task, leased_id)).status is TaskStatus.queued
+        assert (await db.get(Task, leased_id)).lease_expires_at is None
+        assert (await db.get(Task, unleased_id)).status is TaskStatus.running
+
+
+@requires_db
+async def test_report_result_clears_the_lease(session_factory):
+    company_id = await _company(session_factory)
+    async with session_factory() as db:
+        agent = await _agent(db, company_id)
+        run = await _run(db, company_id)
+        task = await _task(db, company_id, run, agent.id, status=TaskStatus.queued,
+                           goal="claim then finish", created_at=_T0)
+        await db.commit()
+        agent_id, task_id = agent.id, task.id
+    async with session_factory() as db:
+        await bf.claim_initiative(db, company_id=company_id, agent_id=agent_id, task_id=task_id)
+        await bf.report_result(db, company_id=company_id, task_id=task_id,
+                               outcome="done", output={"summary": "ok"})
+        await db.commit()
+    async with session_factory() as db:
+        row = await db.get(Task, task_id)
+        assert row.status is TaskStatus.done and row.lease_expires_at is None
+
+
 # ── report_result ──────────────────────────────────────────────────────────────
 @requires_db
 async def test_report_result_finalizes_and_maps_outcome(session_factory):
