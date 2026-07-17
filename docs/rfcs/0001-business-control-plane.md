@@ -1,8 +1,11 @@
-# RFC 0001 — Galaxia as the business control plane; agents connect in
+# RFC 0001 — Galaxia as the business control plane; a hybrid workforce connects in
 
-- **Status:** Draft (for discussion)
+- **Status:** Draft v2 (for discussion)
 - **Scope:** Architecture direction. No code changes in this PR.
 - **Supersedes:** nothing yet. Establishes the target for the runtime layer.
+- **v2 change:** generalized from "external agents connect in" to a **hybrid
+  workforce** — a *function slot* filled by an internal agent, an external agent,
+  **or a human**, interchangeably. See [§1a](#1a-worker-bindings--the-hybrid-workforce).
 
 ## Summary
 
@@ -18,13 +21,15 @@ differentiated:
   Claude Code, OpenClaw, Codex and others already do this well and improve weekly.
 
 This RFC proposes we **stop owning Job B** and reframe Galaxia as a **business
-control plane that external agent runtimes connect *into*** over MCP. An agent
-boots, connects to Galaxia to fetch its **mandate** (which function it is, the
+control plane that a hybrid workforce connects *into***. A **function** (Growth,
+Product, QA…) is a *slot* in the generated org; each slot is filled by a
+**worker** — an internal agent, an external agent, or a human — through one
+identical interface. The worker fetches its **mandate** (which function it is, the
 mission, its objectives, budget envelope, current state) and its **next
 initiative**, does the work with *its own* capabilities, and **reports results
 back**. Galaxia keeps what's hard and unique — the org design, governance, budget,
-coordination, and institutional memory — and delegates the runtime to
-best-in-class agent harnesses.
+coordination, and institutional memory — and delegates *execution* to whoever (or
+whatever) staffs the function.
 
 We evaluated **OpenClaw** (`openclaw/openclaw`, MIT) as the reference external
 runtime and found it a strong fit (see [§7](#7-reference-runtime-openclaw)).
@@ -76,24 +81,59 @@ runtime and found it a strong fit (see [§7](#7-reference-runtime-openclaw)).
 ## 1. The reframe
 
 ```
-            ┌──────────────────────── GALAXIA (control plane) ────────────────────────┐
-            │  mission→org generator · objectives/KRs · initiative queue · governance   │
-            │  budget envelopes · decisions/approvals · institutional memory · tenancy   │
-            │                                                                            │
-            │                    Business-Function MCP server  (remote, per-tenant)      │
-            └───────▲───────────────────────▲───────────────────────────▲──────────────┘
-                    │ MCP (streamable-HTTP)  │                           │
-        ┌───────────┴──────────┐  ┌──────────┴───────────┐   ┌───────────┴──────────┐
-        │ OpenClaw agent       │  │ Built-in runtime      │   │ Founder's own agent   │
-        │  = "Growth" function │  │  (managed OpenClaw or │   │  (Claude Code /       │
-        │  own tools+memory    │  │   NativeBackend)      │   │   OpenClaw / custom)  │
-        └──────────────────────┘  └──────────────────────┘   └──────────────────────┘
+        ┌──────────────────────── GALAXIA (control plane) ────────────────────────┐
+        │  mission→org generator · objectives/KRs · initiative queue · governance   │
+        │  budget envelopes · decisions/approvals · institutional memory · tenancy   │
+        │                Business-Function MCP server / API  (per-tenant)            │
+        └──────▲────────────────────────▲────────────────────────▲─────────────────┘
+               │ bind: internal          │ bind: external          │ bind: human
+    ┌──────────┴─────────┐   ┌───────────┴──────────┐   ┌──────────┴───────────┐
+    │ Internal agent      │   │ External agent        │   │ Human                 │
+    │ managed OpenClaw     │   │ founder's OpenClaw /  │   │ person in Slack /     │
+    │ Gateway / Native     │   │ Claude Code (MCP)     │   │ app; same loop        │
+    └─────────────────────┘   └───────────────────────┘   └───────────────────────┘
+                  one function slot · three interchangeable worker bindings
 ```
 
-Galaxia becomes an **MCP server** (the inverse of today, where it is an MCP
-*client*). Agents bring their own reasoning, tools, connectors, and how-to memory.
+Galaxia becomes an **MCP server / API** (the inverse of today, where it is an MCP
+*client*). Workers bring their own reasoning, tools, connectors, and how-to memory.
 Galaxia owns what to work on, who owns it, what it costs, what's allowed, what's
 true, and what the company has learned.
+
+## 1a. Worker bindings — the hybrid workforce
+
+The generated org is a set of **function slots**. Each slot is worker-agnostic and
+bound to one (or a mix) of three worker types. The binding can change over time —
+staff a function with a human today, an agent tomorrow — without touching the org
+design or the objectives.
+
+| Binding | Who/what | Transport + identity | Serves |
+|---|---|---|---|
+| **Internal agent** | Galaxia's managed runtime (managed OpenClaw Gateway persona; `NativeBackend` transitionally) | service call / MCP; service identity | zero-setup, same-day default |
+| **External agent** | the founder's own OpenClaw / Claude Code | MCP (streamable-HTTP) + per-function token | BYO-capabilities; import-existing-business |
+| **Human** | a person in the role | UI / channel (Slack/WhatsApp/app) + user account | mixed teams; human-run functions |
+
+All three hit the **identical Business-Function interface** ([§2](#2-the-business-function-mcp-surface)) —
+`get_mandate`, `get_next_initiative`, `report_result`, `request_decision`,
+`coordinate_with`. Only transport + identity differ. A slot may be **mixed** (a
+human lead with agent ICs) and workers **coordinate with each other through the
+same channels + mission log** regardless of type (OpenClaw's ~25 messaging
+channels make mixed human+agent threads native).
+
+Two consequences fall out of admitting humans and scheduled agents as workers:
+
+- **The lifecycle must be async-first.** A human or a scheduled agent can't be
+  `run()`-and-awaited synchronously. Initiatives move
+  `offered → claimed → in-progress → reported → audited`, with timeouts and
+  reassignment. Synchronous push (a backend that calls a worker and blocks) becomes
+  an *optimization for internal agents only* — so **pull/connected is the primary
+  posture**, push an internal fast-path. (See [§3](#3-the-agentbackend-seam-already-supports-this).)
+- **The human binding is the founder-in-the-loop machinery, generalized.** We
+  already model a human (the founder) participating via decisions/approvals; a
+  human *worker* is the same machinery promoted from "approver" to "does the
+  initiative." And the governance reputation signals (trust, accuracy, ROI,
+  reliability — already per-agent) become **staffing-agnostic**: they rate humans
+  and external agents too.
 
 ## 2. The Business-Function MCP surface
 
@@ -132,9 +172,30 @@ There are **already two implementations**: `NativeBackend` (in-process loop) and
 [happens elsewhere] while the org chart treats hired agents identically." So
 **"execution happens outside Galaxia" is already a supported shape.** This RFC
 adds a third backend — call it `ConnectedBackend` — whose `run()` doesn't execute
-a loop at all: it **offers the initiative** to a bound external runtime and awaits
-a `report_result`. The task lifecycle becomes *offered → claimed → in-progress →
-reported → audited* rather than an in-process think→act.
+a loop at all: it **offers the initiative** to the bound worker and awaits a
+`report_result`.
+
+**Two integration postures (they compose):**
+
+- **Push / orchestrated** — `ConnectedBackend.run()` invokes a worker for a task
+  and collects the result (e.g. `openclaw agent --agent <function> --json`). This
+  is *"just swap the backend implementation"* — the fastest on-ramp, and it already
+  deletes the native loop. Best for **internal agents**.
+- **Pull / connected** — the worker wakes on its own cadence (cron / a human
+  opening their app), **pulls** `get_next_initiative()` over MCP, and reports back.
+  Required for **humans and scheduled external agents**, and the thing that unlocks
+  BYO-agents + import-existing-business.
+
+Because a human or scheduled agent can't be awaited synchronously, the lifecycle is
+**async-first** — *offered → claimed → in-progress → reported → audited* with
+timeouts/reassignment — and **pull is the primary posture**; push is an internal
+fast-path over the same MCP surface.
+
+**Unit of deployment: a persona, not a process.** For internal agents on OpenClaw,
+"spin up OpenClaw per agent" means **one managed Gateway hosting one persistent
+persona per function** (each with its own workspace/memory/model), and a task is a
+*run* against that persona — not a fresh process per task. This is a step up from
+today's per-task native memory.
 
 ## 4. Capability brokering & the budget model (the load-bearing decision)
 
@@ -157,20 +218,27 @@ architecture and a coarser (envelope-level) budget guarantee. This also answers
 the earlier "capability brokering" question: *money-touching capabilities stay
 Galaxia-brokered; everything else is the agent's.*
 
-## 5. Runtime binding — preserving the "same-day" promise
+## 5. Worker binding — preserving the "same-day" promise
 
-Two user classes, one protocol:
+Three worker types ([§1a](#1a-worker-bindings--the-hybrid-workforce)), one
+protocol:
 
-- **Non-technical founder (zero setup):** Galaxia provides a **default hosted
-  runtime** that auto-binds to the function slots — a **managed OpenClaw Gateway**
-  (or, transitionally, today's `NativeBackend`). Batteries included; nothing to
-  configure.
-- **Power user / existing business:** point your own OpenClaw / Claude Code agent
-  at the same Galaxia MCP endpoint with a per-function token.
+- **Internal agent (zero setup):** Galaxia provides a **default hosted runtime**
+  that auto-binds to the function slots — a **managed OpenClaw Gateway** (or,
+  transitionally, today's `NativeBackend`). Batteries included; the non-technical
+  founder's same-day path.
+- **External agent (power user / existing business):** point your own OpenClaw /
+  Claude Code agent at the same Galaxia MCP endpoint with a per-function token.
+- **Human (mixed teams / human-run functions):** a person claims initiatives and
+  reports results through a UI or a messaging channel (Slack/WhatsApp/app) tied to
+  their user account — the same mandate/initiative/report loop, rendered for a
+  human. This is the **import-existing-business** on-ramp: existing people bind to
+  function slots and get the objectives/governance/coordination layer over how they
+  already work, then hand functions to agents as trust builds.
 
 The key move that protects the same-day promise: **the built-in runtime is just
-the first, most-tested client of the same Business-Function MCP API** — we dogfood
-our own protocol. If it's awkward for us, it's awkward for everyone.
+the first, most-tested client of the same Business-Function API** — we dogfood our
+own protocol. If it's awkward for us, it's awkward for every worker type.
 
 ## 6. Multi-tenancy
 
@@ -215,12 +283,19 @@ Gateway lifecycle + version churn of a large, fast-moving monorepo.
    as a first-class server over existing services. No user-visible change.
 2. **Re-point `NativeBackend` to consume that API** instead of reaching into
    services directly. Proves the protocol against our own runtime.
-3. **Add `ConnectedBackend`** + a "connect your own agent" flow (per-function
+3. **Make the initiative lifecycle async-first** (*offered → claimed →
+   in-progress → reported → audited* with timeouts/reassignment) so a slow worker
+   (human or scheduled agent) is a first-class case, not an exception.
+4. **Add `ConnectedBackend`** + a "connect your own agent" flow (per-function
    token + a template OpenClaw/Claude Code config). First external function goes
    live behind a flag.
-4. **Ship the managed OpenClaw Gateway** as the default hosted runtime; make it
-   the batteries-included binding.
-5. **Thin the core:** migrate capability tools out to agent-side; keep only
+5. **Ship the managed OpenClaw Gateway** as the default internal-agent runtime;
+   make it the batteries-included binding.
+6. **Add the human binding** — a UI/channel surface where a person claims and
+   reports initiatives for a function (reuses the async lifecycle from step 3 and
+   the existing membership/decision machinery). Unlocks mixed teams +
+   import-existing-business.
+7. **Thin the core:** migrate capability tools out to worker-side; keep only
    business-state tools in Galaxia. Retire the in-house discovery/compaction
    surface.
 
@@ -234,8 +309,12 @@ Each step is shippable and reversible; no big-bang cutover.
 - **The BYOK secret boundary is unchanged** for anything Galaxia still brokers
   (envelope encryption per `MISSION.md`). Agent-owned provider keys leave our
   custody entirely — a *reduction* in secrets we hold.
-- **Governance is enforced server-side**, never in the agent: an agent can
-  `request_decision`, but only Galaxia (and the founder) can resolve one.
+- **Governance is enforced server-side**, never in the worker: a worker can
+  `request_decision`, but only Galaxia (and the founder) can resolve one — true for
+  internal agents, external agents, and humans alike.
+- **Human workers authenticate as users** (account + company membership), not
+  per-function service tokens; their initiative claims and reports are attributed
+  and audited the same way, and count toward the same governance reputation.
 
 ## 10. Open questions / decisions needed
 
@@ -243,11 +322,14 @@ Each step is shippable and reversible; no big-bang cutover.
    in exchange for losing the token-level chokepoint? ([§4](#4-capability-brokering--the-budget-model-the-load-bearing-decision))
 2. **Protocol surface** — MCP-only, or also a plain REST/webhook API for runtimes
    that don't speak MCP? (MCP-first recommended; OpenClaw + Claude Code both speak
-   it.)
-3. **Default hosted runtime** — managed OpenClaw Gateway from the start, or keep
+   it.) The **human** binding needs a UI/channel surface regardless.
+3. **Default internal runtime** — managed OpenClaw Gateway from the start, or keep
    `NativeBackend` as the default until the OpenClaw path is proven?
 4. **Multi-tenant model for the managed runtime** — Gateway-per-tenant vs
    pool-with-workspace-isolation.
+5. **How much of the human binding ships in v1** — full parity (a human can staff
+   any function) vs. humans only as approvers/leads at first, with agent ICs doing
+   the execution.
 
 ## 11. Alternatives considered
 
