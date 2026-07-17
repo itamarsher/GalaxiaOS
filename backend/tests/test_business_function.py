@@ -203,6 +203,53 @@ async def test_report_result_finalizes_and_maps_outcome(session_factory):
 
 
 @requires_db
+async def test_report_result_needs_decision_parks_and_escalates(session_factory):
+    from app.models import ChatMessage
+
+    company_id = await _company(session_factory)
+    async with session_factory() as db:
+        agent = await _agent(db, company_id)
+        run = await _run(db, company_id)
+        task = await _task(db, company_id, run, agent.id, status=TaskStatus.running,
+                           goal="pick a pricing tier", created_at=_T0)
+        await db.commit()
+        task_id = task.id
+
+    async with session_factory() as db:
+        await bf.report_result(
+            db, company_id=company_id, task_id=task_id, outcome="needs_decision",
+            output={"summary": "Do we price the hosted tier at $29 or $49?"},
+        )
+        await db.commit()
+
+    async with session_factory() as db:
+        row = await db.get(Task, task_id)
+        # Parked, NOT finalized — so it can resume after the founder replies.
+        assert row.status is TaskStatus.waiting_approval
+        # The ask was escalated to the founder's DM.
+        msg = await db.scalar(
+            select(ChatMessage).where(ChatMessage.company_id == company_id)
+        )
+        assert msg is not None and "hosted tier" in msg.body
+
+
+@requires_db
+async def test_report_result_needs_decision_requires_a_summary(session_factory):
+    company_id = await _company(session_factory)
+    async with session_factory() as db:
+        agent = await _agent(db, company_id)
+        run = await _run(db, company_id)
+        task = await _task(db, company_id, run, agent.id, status=TaskStatus.running,
+                           goal="g", created_at=_T0)
+        await db.commit()
+        task_id = task.id
+    async with session_factory() as db:
+        with pytest.raises(ValueError):
+            await bf.report_result(db, company_id=company_id, task_id=task_id,
+                                   outcome="needs_decision", output={})
+
+
+@requires_db
 async def test_report_result_rejects_bad_outcome_and_foreign_task(session_factory):
     company_id = await _company(session_factory)
     other_company = await _company(session_factory)

@@ -34,6 +34,7 @@ from app.config import settings
 from app.models import Agent, Mission, Task
 from app.models.enums import TaskStatus
 from app.services import budget as budget_svc
+from app.services import chat as chat_svc
 from app.services import metrics as metrics_svc
 from app.services import objectives as objectives_svc
 from app.services import tasks as task_svc
@@ -42,12 +43,16 @@ from app.services import tasks as task_svc
 # initiative is the current one; otherwise the oldest queued piece is next.
 _ACTIVE_STATES = (TaskStatus.running, TaskStatus.queued)
 
-# The report outcomes a worker may return, mapped to the task's terminal status.
-_OUTCOME_STATUS = {
+# Terminal report outcomes, mapped to the task's final status (via tasks.finalize).
+_TERMINAL_STATUS = {
     "done": TaskStatus.done,
     "failed": TaskStatus.failed,
     "blocked": TaskStatus.blocked,
 }
+# A worker may also report that it cannot proceed without a founder decision. This
+# is NOT terminal — the initiative parks and escalates rather than finalizing.
+_NEEDS_DECISION = "needs_decision"
+_OUTCOMES = frozenset(_TERMINAL_STATUS) | {_NEEDS_DECISION}
 
 
 class BudgetEnvelope(BaseModel):
@@ -200,18 +205,55 @@ async def report_result(
     outcome: str,
     output: dict,
 ) -> int:
-    """Close an initiative with a terminal outcome; returns its realised cost.
+    """Report the outcome of an initiative; returns its realised cost (0 if parked).
 
-    A thin wrapper over ``tasks.finalize`` (which records the reputation outcome,
-    propagates the result to company memory, drops the transcript, and stamps the
-    cost) so every worker reports through one path. The caller commits.
+    ``done`` / ``failed`` / ``blocked`` are **terminal**: a thin wrapper over
+    ``tasks.finalize`` (which records the reputation outcome, propagates the result
+    to company memory, drops the transcript, and stamps the cost), so every worker
+    finishes through one path.
+
+    ``needs_decision`` is **not** terminal: the worker cannot proceed without a
+    founder decision. The initiative parks (``waiting_approval``) and the ask is
+    escalated to the founder's DM (the unified decision inbox) — the transcript is
+    kept so the worker can resume once the founder replies. ``output`` must carry a
+    ``summary`` describing what the founder must decide. The caller commits.
     """
-    status = _OUTCOME_STATUS.get(outcome)
-    if status is None:
-        raise ValueError(
-            f"unknown outcome {outcome!r}; expected one of {sorted(_OUTCOME_STATUS)}"
-        )
+    if outcome not in _OUTCOMES:
+        raise ValueError(f"unknown outcome {outcome!r}; expected one of {sorted(_OUTCOMES)}")
     task = await db.get(Task, task_id)
     if task is None or task.company_id != company_id:
         raise ValueError(f"task {task_id} not found for company {company_id}")
-    return await task_svc.finalize(db, task=task, status=status, output=output)
+
+    if outcome == _NEEDS_DECISION:
+        return await _park_for_decision(db, task=task, output=output)
+    return await task_svc.finalize(db, task=task, status=_TERMINAL_STATUS[outcome], output=output)
+
+
+async def _park_for_decision(db: AsyncSession, *, task: Task, output: dict) -> int:
+    """Park an initiative on a founder decision and escalate it to their DM.
+
+    Deliberately does NOT finalize: the task stays ``waiting_approval`` with its
+    transcript intact so it can resume when the founder replies. The escalation is a
+    message in the agent↔founder thread (the codebase's unified decision inbox),
+    posted through the chat service so it works for any worker binding.
+    """
+    summary = str(output.get("summary") or "").strip()
+    if not summary:
+        raise ValueError(
+            "a needs_decision result must include a 'summary' describing what the "
+            "founder must decide"
+        )
+    channel = await chat_svc.founder_dm(
+        db, company_id=task.company_id, agent_id=task.agent_id
+    )
+    await chat_svc.post_message(
+        db,
+        company_id=task.company_id,
+        channel_id=channel.id,
+        sender_agent_id=task.agent_id,
+        body=summary,
+    )
+    task.status = TaskStatus.waiting_approval
+    task.output = output
+    await db.flush()
+    return task.cost_cents or 0
