@@ -30,11 +30,30 @@ from app.models.enums import (
 from app.providers.base import ToolSpec
 from app.runtime.tools.base import ToolOutcome
 from app.services import crm as crm_svc
+from app.services import data_policy
 from app.services import metrics as metrics_svc
 
 CONTACT_STATUSES: tuple[str, ...] = tuple(s.value for s in CrmContactStatus)
 DEAL_STAGES: tuple[str, ...] = tuple(s.value for s in CrmDealStage)
 ACTIVITY_KINDS: tuple[str, ...] = tuple(k.value for k in CrmActivityKind)
+
+# The CRM is customer data. Reading it back is gated on the ``customers`` label
+# (data segmentation, RFC 0001); the CEO bypasses. Writing/logging is unaffected —
+# the policy governs what stored data is *provided to* an agent, not what it records.
+_CRM_LABELS = ["customers"]
+
+
+def _crm_read_denied(agent: Agent) -> ToolOutcome | None:
+    """A denial outcome when ``agent`` isn't cleared to read customer data, else None."""
+    if data_policy.agent_can_access(agent, _CRM_LABELS):
+        return None
+    return ToolOutcome(
+        observation=(
+            "You don't have access to customer data (the CRM). Ask the founder to "
+            "grant your agent the 'customers' data label if you need it."
+        ),
+        is_error=True,
+    )
 
 
 def _dollars(cents: int | None) -> str:
@@ -234,6 +253,8 @@ async def _crm_save_contact(db, ctx, *, agent: Agent, task: Task, args: dict) ->
 
 
 async def _crm_find_contacts(db, ctx, *, agent: Agent, task: Task, args: dict) -> ToolOutcome:
+    if (denied := _crm_read_denied(agent)) is not None:
+        return denied
     status = None
     if args.get("status"):
         try:
@@ -303,6 +324,8 @@ async def _crm_save_deal(db, ctx, *, agent: Agent, task: Task, args: dict) -> To
 
 
 async def _crm_list_deals(db, ctx, *, agent: Agent, task: Task, args: dict) -> ToolOutcome:
+    if (denied := _crm_read_denied(agent)) is not None:
+        return denied
     stage = None
     if args.get("stage"):
         try:
@@ -372,6 +395,8 @@ async def _crm_log_activity(db, ctx, *, agent: Agent, task: Task, args: dict) ->
 
 
 async def _crm_contact_timeline(db, ctx, *, agent: Agent, task: Task, args: dict) -> ToolOutcome:
+    if (denied := _crm_read_denied(agent)) is not None:
+        return denied
     contact = await crm_svc.resolve_contact(db, company_id=task.company_id, handle=args["contact"])
     if contact is None:
         return ToolOutcome(observation=f"no contact matches {args['contact']!r}.", is_error=True)
