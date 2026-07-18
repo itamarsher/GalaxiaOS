@@ -58,6 +58,35 @@ def default_labels_for_category(category: str) -> list[str]:
     return list(_CATEGORY_LABELS.get(category, []))
 
 
+# Default data-access an agent gets by ROLE when the founder hasn't hand-picked it.
+# Each role receives the labels its job needs; the two most sensitive labels
+# (``customers_private`` PII and ``people`` HR) are NEVER granted by default — the
+# founder grants those explicitly. The CEO bypasses segmentation entirely, so it
+# needs none; a ``custom`` role starts empty (the founder defined it, so they
+# configure its access). Keys must exist in DEFAULT_LABELS.
+_ROLE_ACCESS: dict[str, list[str]] = {
+    "growth": ["customers", "marketing", "strategy", "product"],
+    "research": ["customers", "strategy", "product", "marketing"],
+    "product": ["product", "strategy", "customers"],
+    "design": ["product", "marketing", "strategy"],
+    "finance": ["financial", "strategy"],
+    "governance": ["legal", "strategy"],
+    "auditor": ["financial", "legal", "strategy", "product", "customers"],
+    "data": ["customers", "product", "strategy"],
+    "platform": ["product", "strategy"],
+}
+
+
+def default_access_labels_for_role(role: str) -> list[str]:
+    """The default data-access labels a newly-created agent of ``role`` gets.
+
+    A sensible per-role starting policy the founder can widen or narrow afterwards
+    (via ``set_agent_access``). The CEO bypasses segmentation, so its access is
+    irrelevant; ``custom`` and any unknown role start with none.
+    """
+    return list(_ROLE_ACCESS.get(role, []))
+
+
 # ── taxonomy ───────────────────────────────────────────────────────────────────
 async def seed_default_labels(db: AsyncSession, company_id: uuid.UUID) -> None:
     """Insert the default taxonomy for a company that has none yet (idempotent)."""

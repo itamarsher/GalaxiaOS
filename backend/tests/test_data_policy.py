@@ -32,6 +32,22 @@ def test_permits_is_subset_and_unlabelled_is_general():
     assert data_policy.permits(None, None) is True
 
 
+def test_default_access_labels_by_role():
+    valid = {key for key, _, _ in data_policy.DEFAULT_LABELS}
+    growth = data_policy.default_access_labels_for_role("growth")
+    assert "customers" in growth and "marketing" in growth
+    assert "financial" in data_policy.default_access_labels_for_role("finance")
+    # CEO bypasses segmentation, so it needs no labels; custom/unknown start empty.
+    assert data_policy.default_access_labels_for_role("ceo") == []
+    assert data_policy.default_access_labels_for_role("custom") == []
+    assert data_policy.default_access_labels_for_role("does-not-exist") == []
+    # The two most sensitive labels are NEVER granted by default, for any role.
+    for role in data_policy._ROLE_ACCESS:
+        labels = data_policy.default_access_labels_for_role(role)
+        assert "customers_private" not in labels and "people" not in labels
+        assert set(labels) <= valid  # only real taxonomy keys
+
+
 def test_ceo_and_founder_bypass_segmentation():
     ceo = SimpleNamespace(role=AgentRole.ceo, access_labels=None)
     growth = SimpleNamespace(role=AgentRole.growth, access_labels=["marketing"])

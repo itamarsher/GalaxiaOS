@@ -44,7 +44,7 @@ from app.providers.base import ToolSpec
 from app.runtime.prompts import effective_playbook
 from app.runtime.tools.base import ToolOutcome, consume_approval_grant
 from app.services import budget as budget_svc
-from app.services import chat
+from app.services import chat, data_policy
 
 #: Cap on the global playbook so a runaway edit can't bloat every agent's prompt.
 _MAX_PLAYBOOK_CHARS = 8000
@@ -371,6 +371,8 @@ async def _hire_agent(db, ctx, *, agent: Agent, task: Task, args: dict) -> ToolO
         name=name,
         system_prompt=responsibility,
         autonomy_level=AutonomyLevel.approve_required,
+        # Sensible per-role data access; the founder can widen/narrow it afterwards.
+        access_labels=data_policy.default_access_labels_for_role(role.value),
         monthly_budget_cents=allocation,
         source=AgentSource.hired,
         backend_type=AgentBackendType.native,
