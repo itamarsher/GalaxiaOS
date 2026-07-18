@@ -1,11 +1,11 @@
-"""Founder decision delegate config: the autonomy slider + notification webhooks.
+"""Founder decision delegate config: notification webhooks + Telegram link.
 
-``GET``/``PUT .../delegate`` let the founder set a single company-wide autonomy
-level (1 manual … 4 autonomous — see :class:`app.models.enums.DelegateAutonomy`)
-and up to three notification webhooks (Slack/Telegram/phone), each choosing which
-events it wants. The autonomy level presets what the Claude delegate may resolve
-on the founder's behalf; the webhooks are HMAC-signed with a per-company secret
-the founder can read and rotate (see :mod:`app.services.delegate`).
+``GET``/``PUT .../delegate`` let the founder configure up to three notification
+webhooks (Slack/Telegram/phone), each choosing which events it wants. The webhooks
+are HMAC-signed with a per-company secret the founder can read and rotate (see
+:mod:`app.services.delegate`). How work is routed to humans is no longer a global
+slider — it's driven per-person by each member's involvement prose (see
+:mod:`app.services.involvement_router`).
 """
 
 from __future__ import annotations
@@ -34,7 +34,6 @@ class TelegramStatus(BaseModel):
 
 
 class DelegateSettings(BaseModel):
-    autonomy_level: int
     webhooks: list[WebhookSetting] = Field(default_factory=list)
     signing_secret: str | None = None
     telegram: TelegramStatus
@@ -60,12 +59,9 @@ class WebhookUpdate(BaseModel):
 
 
 class DelegateUpdate(BaseModel):
-    """A partial update. The autonomy slider and the notification config are
-    edited from separate places, so each field is optional and ``None`` means
-    "leave it as-is" — saving one never clobbers the other."""
+    """A partial update of the notification config: each field is optional and
+    ``None`` means "leave it as-is" — saving one never clobbers the other."""
 
-    #: Company-wide autonomy level (1–4); ``None`` leaves it unchanged.
-    autonomy_level: int | None = Field(default=None, ge=1, le=4)
     #: Notification webhooks; ``None`` leaves them unchanged (``[]`` clears them).
     webhooks: list[WebhookUpdate] | None = Field(
         default=None, max_length=delegate_svc.MAX_WEBHOOKS
@@ -99,9 +95,8 @@ def _telegram(cfg: delegate_svc.DelegateConfig | None) -> TelegramStatus:
 
 def _out(cfg: delegate_svc.DelegateConfig | None) -> DelegateSettings:
     if cfg is None:
-        return DelegateSettings(autonomy_level=1, telegram=_telegram(None))
+        return DelegateSettings(telegram=_telegram(None))
     return DelegateSettings(
-        autonomy_level=cfg.autonomy_level,
         webhooks=[WebhookSetting(url=w.url, events=w.events) for w in cfg.webhooks],
         signing_secret=cfg.signing_secret,
         telegram=_telegram(cfg),
@@ -118,7 +113,6 @@ async def put_delegate(company: CompanyDep, body: DelegateUpdate, db: DbDep):
     cfg = await delegate_svc.set_config(
         db,
         company_id=company.id,
-        autonomy_level=body.autonomy_level,
         webhooks=(
             None
             if body.webhooks is None

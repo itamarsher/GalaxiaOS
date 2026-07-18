@@ -77,8 +77,6 @@ export default function SettingsPage() {
 
       <ManagedCard companyId={id} />
 
-      <AutonomyCard companyId={id} />
-
       <NotificationsCard companyId={id} />
 
       <FromAddress companyId={id} current={company.data ?? null} onChange={() => company.reload()} />
@@ -189,88 +187,17 @@ function ManagedCard({ companyId }: { companyId: string }) {
   );
 }
 
-// Autonomy and notifications are two independent concerns that happen to share one
-// stored config row. The API does partial updates, so each card below PUTs only its
-// own slice — changing your autonomy level never touches your webhooks/Telegram, and
-// vice-versa.
-const AUTONOMY = [
-  { level: 1, name: "Manual", blurb: "Every decision comes to you. Nothing is auto-approved — the strictest setting." },
-  { level: 2, name: "Assisted", blurb: "Claude handles plan approvals and low-stakes confirmations for you. All spending, hires, and outbound messages still escalate." },
-  { level: 3, name: "Supervised", blurb: "Adds minor expenditures (up to $50 each) and more autonomy. Larger spend, hires, and external messages still come to you." },
-  { level: 4, name: "Autonomous", blurb: "Fully autonomous within budget — Claude resolves everything, escalating only extreme cases (very large spend).", warn: "Set a firm budget and load-balance your agents responsibly — at this level Claude can spend and act without asking." },
-] as const;
-
+// The founder's notification config (webhooks + Telegram) lives in one stored row.
+// The API does partial updates, so the card below PUTs only its own slice. How work
+// is routed to humans is no longer a slider — it's per-person involvement (set in
+// onboarding / team management), not a Settings control.
 const EVENT_LABELS: { value: WebhookEvents; label: string }[] = [
   { value: "all", label: "Everything" },
   { value: "escalations", label: "Only what needs me" },
   { value: "auto_handled", label: "Only what Claude handled" },
 ];
 
-// The four-stop autonomy slider. Owns only the autonomy level — saving it PUTs
-// nothing but `autonomy_level`, so the founder's notification config is untouched.
-function AutonomyCard({ companyId }: { companyId: string }) {
-  const cfg = usePoll(() => api.delegate(companyId), 0, [companyId]);
-  const [level, setLevel] = useState(1);
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
-  const [saved, setSaved] = useState(false);
-
-  useEffect(() => {
-    if (!cfg.data) return;
-    setLevel(cfg.data.autonomy_level);
-  }, [cfg.data]);
-
-  const save = async (next: number) => {
-    setBusy(true); setErr(null); setSaved(false);
-    try {
-      const res: DelegateSettings = await api.updateDelegate(companyId, { autonomy_level: next });
-      setLevel(res.autonomy_level);
-      setSaved(true);
-    } catch (e) {
-      setErr(String(e instanceof Error ? e.message : e));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const pick = AUTONOMY[level - 1];
-
-  return (
-    <div className="card">
-      <div className="step">Autonomy</div>
-      <p className="muted" style={{ fontSize: 13, margin: "6px 0 0" }}>
-        How much your Claude delegate resolves on your behalf before anything reaches you.
-      </p>
-
-      <label style={{ marginTop: 14 }}>Autonomy level</label>
-      <input
-        type="range" min={1} max={4} step={1} value={level}
-        disabled={busy}
-        onChange={(e) => { const v = Number(e.target.value); setLevel(v); save(v); }}
-        style={{ width: "100%" }}
-      />
-      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11 }} className="muted">
-        {AUTONOMY.map((a) => (
-          <span key={a.level} style={{ fontWeight: a.level === level ? 700 : 400, color: a.level === level ? "inherit" : undefined }}>
-            {a.name}
-          </span>
-        ))}
-      </div>
-      <p style={{ fontSize: 13, marginTop: 10 }}>
-        <strong>{pick.name}.</strong> {pick.blurb}
-      </p>
-      {"warn" in pick && pick.warn && (
-        <p className="err" style={{ fontSize: 13, marginTop: 6 }}>⚠️ {pick.warn}</p>
-      )}
-      {saved && <div className="muted" style={{ fontSize: 13, marginTop: 8 }}>Saved.</div>}
-      {err && <div className="err">{err}</div>}
-    </div>
-  );
-}
-
-// Where the delegate pings you: notification webhooks (HMAC-signed) + Telegram. Owns
-// only the notification config — saving it never sends `autonomy_level`, so the
-// autonomy slider is untouched.
+// Where the delegate pings you: notification webhooks (HMAC-signed) + Telegram.
 function NotificationsCard({ companyId }: { companyId: string }) {
   const cfg = usePoll(() => api.delegate(companyId), 0, [companyId]);
   const [hooks, setHooks] = useState<DelegateWebhook[]>([]);

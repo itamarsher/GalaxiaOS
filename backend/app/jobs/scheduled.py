@@ -132,19 +132,19 @@ async def reconcile_delivered_requests(ctx: dict) -> dict:
 
 
 async def triage_founder_decisions(ctx: dict) -> dict:
-    """Notify the founder's webhook of pending decisions, and auto-resolve the
-    routine ones when the Claude delegate is enabled (see app.services.delegate).
+    """Route each pending founder decision by human involvement, and notify the
+    founder's webhooks (see app.services.delegate + involvement_router).
 
-    Runs per active company that has a delegate configured; a company with no
-    config is skipped untouched. Heavy work (the LLM triage, the webhook POST) is
-    kept off the agent hot path — this cron is its own place. Auto-resolutions go
-    through the normal decision-resolution path, so their resumed tasks are
-    enqueued exactly like a founder's click.
+    Runs per active company. The involvement router decides whether a decision
+    goes to a human (escalate) or is auto-approved so agents proceed; the delegate
+    config, when present, only supplies the notification channels. Heavy work (the
+    routing LLM call, the webhook POST) is kept off the agent hot path — this cron
+    is its own place. Auto-resolutions go through the normal decision-resolution
+    path, so their resumed tasks are enqueued exactly like a founder's click.
     """
     if not settings.delegate_enabled:
         return {"skipped": True}
     from app.runtime.queue import enqueue_task
-    from app.services import budget as budget_svc
     from app.services import delegate
     from app.services import telegram as telegram_svc
 
@@ -156,30 +156,20 @@ async def triage_founder_decisions(ctx: dict) -> dict:
     for company_id in await _active_company_ids():
         async with SessionLocal() as db:
             await set_tenant(db, company_id)
-            cfg = await delegate.get_config(db, company_id)
-            if cfg is None or not cfg.active:
-                continue
             company = await db.get(Company, company_id)
             if company is None:
                 continue
-            budget = await budget_svc.get_active_budget(db, company_id)
-            remaining = (
-                budget.limit_cents - budget.spent_cents - budget.reserved_cents
-                if budget is not None
-                else None
-            )
+            # The delegate config is notification-only now (may be absent); routing
+            # runs for every active company off the members' involvement prose.
+            cfg = await delegate.get_config(db, company_id)
             for decision in await delegate.untriaged_pending(db, company_id):
                 outcome = await delegate.handle(
-                    db,
-                    company=company,
-                    decision=decision,
-                    cfg=cfg,
-                    remaining_budget_cents=remaining,
+                    db, company=company, decision=decision, cfg=cfg
                 )
                 handled += 1
                 if outcome.resumed_task_id is not None:
                     to_enqueue.append(outcome.resumed_task_id)
-                if outcome.webhook_payload is not None:
+                if outcome.webhook_payload is not None and cfg is not None:
                     for target in cfg.webhooks:
                         if delegate.webhook_wants(target.events, outcome.disposition):
                             webhooks.append(
