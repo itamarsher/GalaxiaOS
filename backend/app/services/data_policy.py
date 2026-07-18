@@ -43,6 +43,21 @@ class DataPolicyError(Exception):
     """An invalid taxonomy/policy operation (unknown label, duplicate key, …)."""
 
 
+# Default classification for a stored file, by its category. Conservative: only the
+# clearly-sensitive categories are labelled; the rest stay general (accessible).
+# Founder/agents can re-label a file afterwards. Keys must exist in DEFAULT_LABELS.
+_CATEGORY_LABELS: dict[str, list[str]] = {
+    "financial": ["financial"],
+    "data_room": ["legal"],
+    "brand": ["marketing"],
+}
+
+
+def default_labels_for_category(category: str) -> list[str]:
+    """The default data labels a newly-filed document in ``category`` carries."""
+    return list(_CATEGORY_LABELS.get(category, []))
+
+
 # ── taxonomy ───────────────────────────────────────────────────────────────────
 async def seed_default_labels(db: AsyncSession, company_id: uuid.UUID) -> None:
     """Insert the default taxonomy for a company that has none yet (idempotent)."""

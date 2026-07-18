@@ -26,6 +26,7 @@ from app.runtime.tools.base import (
     truncation_notice,
     unsupported_capability,
 )
+from app.services import data_policy
 from app.services import files as files_svc
 from app.services import memory as memory_svc
 from app.services.integrations import resolve_file_provider
@@ -165,6 +166,9 @@ async def _save_file(db, ctx, *, agent: Agent, task: Task, args: dict) -> ToolOu
 async def _list_company_files(db, ctx, *, agent: Agent, task: Task, args: dict) -> ToolOutcome:
     category = _parse_category(args.get("category")) if args.get("category") else None
     rows = await files_svc.list_files(db, company_id=task.company_id, category=category)
+    # Data segmentation: a non-privileged agent only sees files whose labels it may
+    # access (the CEO bypasses). Withheld files are simply not listed (RFC 0001).
+    rows = [r for r in rows if data_policy.agent_can_access(agent, r.labels)]
     if not rows:
         scope = f" in {category.value}" if category else ""
         return ToolOutcome(observation=f"No files filed yet{scope}.")
@@ -186,6 +190,10 @@ async def _read_company_file(db, ctx, *, agent: Agent, task: Task, args: dict) -
         return ToolOutcome(observation="A file name is required.", is_error=True)
     row = await files_svc.find_file(db, company_id=task.company_id, name=name)
     if row is None:
+        return ToolOutcome(observation=f"No filed document named {name!r}.", is_error=True)
+    # Data segmentation: refuse a file this agent isn't cleared for (the CEO
+    # bypasses). Same message as a missing file so labels aren't probeable.
+    if not data_policy.agent_can_access(agent, row.labels):
         return ToolOutcome(observation=f"No filed document named {name!r}.", is_error=True)
 
     provider = await resolve_file_provider(db, company_id=task.company_id)

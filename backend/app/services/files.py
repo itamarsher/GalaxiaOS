@@ -41,6 +41,7 @@ from app.config import settings
 from app.integrations.files import FileProvider
 from app.models import Company, CompanyFile
 from app.models.enums import FileCategory
+from app.services import data_policy
 from app.services.integrations import resolve_file_provider
 
 _log = logging.getLogger("app.files")
@@ -133,6 +134,7 @@ async def archive(
     mime_type: str | None = None,
     source_task_id: uuid.UUID | None = None,
     description: str | None = None,
+    labels: list[str] | None = None,
 ) -> CompanyFile:
     """File ``content`` into the company's ``category`` folder and index it.
 
@@ -152,6 +154,9 @@ async def archive(
     row = CompanyFile(
         company_id=company.id,
         category=category,
+        # Classify for data segmentation: explicit labels win, else a default from
+        # the category so every stored file is labelled (RFC 0001).
+        labels=labels if labels is not None else data_policy.default_labels_for_category(category.value),
         name=stored.name or filename,
         description=description,
         mime_type=stored.mime_type or mime,
