@@ -132,6 +132,7 @@ async def route(
                 ),
             )
         ],
+        funding_user_id=resolved.funding_user_id,
     )
     decision = parse_decision(resp.text, {m.user_id for m in members})
     # The model asked for a human but named none we can trust → founder fallback.
