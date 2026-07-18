@@ -1,5 +1,4 @@
-"""Founder decision delegate: notification webhooks + a Claude auto-triager whose
-reach is set by a single company-wide autonomy slider.
+"""Founder decision delegate: notification webhooks + involvement-based routing.
 
 Two jobs, both hanging off the founder's decision inbox:
 
@@ -11,26 +10,28 @@ Two jobs, both hanging off the founder's decision inbox:
    receiver can verify it genuinely came from ABOS (spoof protection). Best-effort
    — a bad webhook never breaks the fleet.
 
-2. **Auto-triage.** The **autonomy level** (:class:`DelegateAutonomy`, 1–4) decides
-   how much the delegate resolves on the founder's behalf:
+2. **Route.** Who (if anyone) should own a pending decision is decided by the
+   :mod:`app.services.involvement_router` — per-person, founder-sanctioned
+   involvement prose — NOT by an old company-wide autonomy slider (removed). For
+   each pending decision:
 
-   - **1 manual** — nothing is auto-resolved; every decision escalates.
-   - **2 assisted** — auto-handle plans + low-stakes confirmations; never spend.
-   - **3 supervised** — + minor expenditures within a cap; more autonomy.
-   - **4 autonomous** — fully autonomous within budget; escalate only *extreme*
-     spend (large in absolute terms or relative to remaining budget).
+   - the router names a **human** to involve → the decision is **escalated**
+     (left pending, the owner recorded), and the founder's webhooks fire;
+   - the router involves **no one** → the decision is **auto-approved** so the
+     agents proceed autonomously. The Budget hard-cap still bounds spend
+     downstream, and the external-communication approval guardrail (below) still
+     forces a human when it is on.
 
-   Eligible decisions are run past the company's model and the routine ones are
-   resolved through the SAME :func:`app.services.decisions.resolve_decision` path a
-   human click uses (full audit trail, task resume, DM note); everything else is
-   escalated over the webhooks.
+   The one hard override: an ``external_comm`` decision is **always escalated**
+   while the company's external-comms approval guardrail is enabled, regardless of
+   what the router says — an explicit founder guardrail is never auto-cleared.
 
-The delegate can only ever be MORE conservative than the level: a hard, in-code
-gate (:func:`_auto_eligible`) decides eligibility BEFORE any model call, and the
-model may still choose to escalate. Config lives in one inert :class:`Policy` row
-(``effect=allow`` — ignored by ``governance.evaluate``), so it needs no schema
-migration and rides the existing tenant-scoped store. The separate governance
-policy engine (what *becomes* a decision) is unchanged and orthogonal to this.
+Config lives in one inert :class:`Policy` row (``effect=allow`` — ignored by
+``governance.evaluate``), so it needs no schema migration and rides the existing
+tenant-scoped store. It now carries only the notification settings (webhooks,
+signing secret, Telegram link); involvement prose lives on the memberships. The
+separate governance policy engine (what *becomes* a decision) is unchanged and
+orthogonal to this.
 """
 
 from __future__ import annotations
@@ -48,20 +49,16 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.db import SessionLocal
-from app.models import Agent, Company, DecisionRequest, Mission, Policy
+from app.models import Agent, Company, DecisionRequest, Policy
 from app.models.enums import (
     DecisionKind,
     DecisionStatus,
-    DelegateAutonomy,
     PolicyEffect,
     PolicyScope,
 )
-from app.providers.base import Message
-from app.runtime.cost_meter import CostMeter
-from app.services import apikeys
-from app.services import budget as budget_svc
 from app.services import decisions as decisions_svc
+from app.services import governance as governance_svc
+from app.services import involvement_router
 
 #: The named Policy row that carries the delegate config (see module docstring).
 DELEGATE_POLICY_NAME = "Founder decision delegate"
@@ -72,49 +69,6 @@ WEBHOOK_EVENTS: frozenset[str] = frozenset({"all", "escalations", "auto_handled"
 #: The founder may configure at most this many notification webhooks.
 MAX_WEBHOOKS = 3
 
-# ── Autonomy levels → what the delegate is allowed to auto-resolve ────────────
-_LOW_STAKES = frozenset(
-    {
-        DecisionKind.plan_approval.value,
-        DecisionKind.risky_action.value,
-        DecisionKind.user_action.value,
-    }
-)
-_WITH_SPEND = _LOW_STAKES | {DecisionKind.spend_approval.value}
-_EVERYTHING = _WITH_SPEND | {
-    DecisionKind.hire_approval.value,
-    DecisionKind.external_comm.value,
-}
-
-
-@dataclass(frozen=True)
-class LevelPolicy:
-    """What one autonomy level lets the delegate do — the hard, in-code gate."""
-
-    enabled: bool  # False at level 1: nothing auto-resolves
-    auto_kinds: frozenset[str]  # decision kinds eligible for auto-resolution
-    spend_cap_cents: int | None  # per-decision spend ceiling; None = within-budget
-    extreme_cents: int  # level 4: escalate spend at/over this absolute floor…
-    extreme_fraction: float  # …or over this fraction of remaining budget
-
-
-def level_policy(level: int) -> LevelPolicy:
-    """Map an autonomy level (1–4) to its concrete permissions."""
-    if level <= DelegateAutonomy.manual.value:
-        return LevelPolicy(False, frozenset(), 0, 0, 0.0)
-    if level == DelegateAutonomy.assisted.value:
-        return LevelPolicy(True, _LOW_STAKES, 0, 0, 0.0)
-    if level == DelegateAutonomy.supervised.value:
-        return LevelPolicy(True, _WITH_SPEND, settings.delegate_l3_spend_cap_cents, 0, 0.0)
-    # autonomous: everything eligible, spend gated only by "extreme" thresholds.
-    return LevelPolicy(
-        True,
-        _EVERYTHING,
-        None,
-        settings.delegate_l4_extreme_cents,
-        settings.delegate_l4_extreme_fraction,
-    )
-
 
 @dataclass(frozen=True)
 class WebhookTarget:
@@ -124,7 +78,8 @@ class WebhookTarget:
 
 @dataclass(frozen=True)
 class DelegateConfig:
-    autonomy_level: int
+    """The founder's NOTIFICATION settings (routing itself is prose-driven)."""
+
     webhooks: tuple[WebhookTarget, ...]
     signing_secret: str | None
     #: The founder's linked Telegram chat (shared platform bot), if connected.
@@ -132,18 +87,14 @@ class DelegateConfig:
     telegram_events: str = "all"  # one of WEBHOOK_EVENTS
 
     @property
-    def active(self) -> bool:
-        """Whether there's anything for the triage cron to do."""
-        return (
-            self.autonomy_level >= DelegateAutonomy.assisted.value
-            or bool(self.webhooks)
-            or bool(self.telegram_chat_id)
-        )
+    def has_targets(self) -> bool:
+        """Whether there's any channel to notify (webhooks or Telegram)."""
+        return bool(self.webhooks) or bool(self.telegram_chat_id)
 
 
 @dataclass(frozen=True)
 class DelegateOutcome:
-    disposition: str  # "auto_approved" | "auto_rejected" | "escalated"
+    disposition: str  # "auto_approved" | "escalated"
     resumed_task_id: uuid.UUID | None
     webhook_payload: dict | None
 
@@ -162,13 +113,6 @@ def _parse(policy: Policy | None) -> DelegateConfig | None:
         return None
     rule = policy.rule or {}
 
-    # Autonomy level, clamped to the valid range. Migrate pre-slider configs: an
-    # old auto-pilot-on row maps to "assisted", else "manual".
-    if "autonomy_level" in rule:
-        level = max(1, min(4, int(rule.get("autonomy_level") or 1)))
-    else:
-        level = DelegateAutonomy.assisted.value if rule.get("auto_pilot_enabled") else 1
-
     # Webhooks. Migrate the old single `webhook_url` into the new list shape.
     raw = rule.get("webhooks")
     if raw is None and rule.get("webhook_url"):
@@ -183,7 +127,6 @@ def _parse(policy: Policy | None) -> DelegateConfig | None:
 
     tg_events = rule.get("telegram_events") or "all"
     return DelegateConfig(
-        autonomy_level=level,
         webhooks=webhooks,
         signing_secret=(rule.get("signing_secret") or None),
         telegram_chat_id=(rule.get("telegram_chat_id") or None),
@@ -199,25 +142,18 @@ async def set_config(
     db: AsyncSession,
     *,
     company_id: uuid.UUID,
-    autonomy_level: int | None = None,
     webhooks: list[dict] | None = None,
     rotate_secret: bool = False,
     telegram_events: str | None = None,
 ) -> DelegateConfig:
-    """Partial-update the delegate config: only the fields you pass change, the rest
-    are preserved. This is what lets the *autonomy* control and the *notification*
-    controls live in separate places and save independently without clobbering each
-    other. Invalid webhooks/levels are normalised. A signing secret is minted the
-    first time a webhook is set (spoof protection on by default) and rotatable on
-    demand. The Telegram connection (chat id) is linked from Telegram, never here.
-    Stored with ``effect=allow`` so the policy engine ignores the row."""
+    """Partial-update the delegate's NOTIFICATION config: only the fields you pass
+    change, the rest are preserved. Invalid webhooks are normalised. A signing
+    secret is minted the first time a webhook is set (spoof protection on by
+    default) and rotatable on demand. The Telegram connection (chat id) is linked
+    from Telegram, never here. Stored with ``effect=allow`` so the policy engine
+    ignores the row."""
     policy = await _config_policy(db, company_id)
     prev = (policy.rule or {}) if policy else {}
-
-    if autonomy_level is None:
-        level = max(1, min(4, int(prev.get("autonomy_level") or 1)))
-    else:
-        level = max(1, min(4, int(autonomy_level)))
 
     if webhooks is None:
         targets = prev.get("webhooks") or []
@@ -239,7 +175,6 @@ async def set_config(
     )
 
     rule = {
-        "autonomy_level": level,
         "webhooks": targets,
         "signing_secret": secret,
         "telegram_chat_id": prev.get("telegram_chat_id") or None,
@@ -271,7 +206,7 @@ async def _upsert_rule(db: AsyncSession, company_id: uuid.UUID, patch: dict) -> 
             company_id=company_id,
             name=DELEGATE_POLICY_NAME,
             scope=PolicyScope.global_,
-            rule={"autonomy_level": 1, "webhooks": [], **patch},
+            rule={"webhooks": [], **patch},
             effect=PolicyEffect.allow,
             priority=1000,
             enabled=True,
@@ -310,131 +245,6 @@ async def company_for_telegram_chat(
     )
 
 
-# ── Eligibility (the hard, in-code guard) ─────────────────────────────────────
-def _spend_cents(decision: DecisionRequest) -> int:
-    payload = decision.payload or {}
-    args = payload.get("args") or {}
-    return int(payload.get("amount_cents") or args.get("amount_cents") or 0)
-
-
-def _extreme_spend_floor(policy: LevelPolicy, remaining_budget_cents: int | None) -> int:
-    """Above this, a level-4 spend is 'extreme' and escalates to the founder."""
-    by_fraction = int((remaining_budget_cents or 0) * policy.extreme_fraction)
-    return max(policy.extreme_cents, by_fraction)
-
-
-def _auto_eligible(
-    cfg: DelegateConfig,
-    decision: DecisionRequest,
-    remaining_budget_cents: int | None = None,
-) -> bool:
-    """Whether a decision may even be *considered* for auto-resolution.
-
-    Runs before any LLM call — the model cannot widen this. Spend is gated by the
-    level: a fixed cap below level 4, and an "extreme" threshold at level 4 (the
-    actual budget ceiling is separately enforced downstream by ``CostMeter``)."""
-    policy = level_policy(cfg.autonomy_level)
-    if not policy.enabled:
-        return False
-    kind = decision.kind.value if hasattr(decision.kind, "value") else str(decision.kind)
-    if kind not in policy.auto_kinds:
-        return False
-    if kind == DecisionKind.spend_approval.value:
-        amount = _spend_cents(decision)
-        if policy.spend_cap_cents is not None:
-            return amount <= policy.spend_cap_cents
-        return amount < _extreme_spend_floor(policy, remaining_budget_cents)
-    return True
-
-
-# ── Model triage ──────────────────────────────────────────────────────────────
-_TRIAGE_SYSTEM = (
-    "You are the founder's trusted delegate for their autonomous company's "
-    "decision inbox. An agent has asked the founder to approve a specific action. "
-    "You may only clear ROUTINE, low-stakes, on-mission, reversible decisions on "
-    "the founder's behalf. Decide:\n"
-    '- "approve": clearly aligned with the mission, low-risk, and something a '
-    "founder would wave through without a second thought.\n"
-    '- "reject": clearly off-mission, wasteful, or harmful.\n'
-    '- "escalate": anything strategic, ambiguous, novel, expensive, or that a '
-    "prudent founder would want to see. When in ANY doubt, escalate.\n"
-    "Bias hard toward escalate — you exist to remove noise, not to make judgement "
-    "calls the founder would want to make themselves. Give a one-sentence rationale."
-)
-
-_TRIAGE_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "verdict": {"type": "string", "enum": ["approve", "reject", "escalate"]},
-        "rationale": {"type": "string"},
-    },
-    "required": ["verdict", "rationale"],
-}
-
-
-async def _company_context(db: AsyncSession, company_id: uuid.UUID) -> str:
-    company = await db.get(Company, company_id)
-    mission = (
-        await db.get(Mission, company.mission_id)
-        if company and company.mission_id
-        else None
-    )
-    budget = await budget_svc.get_active_budget(db, company_id)
-    lines = []
-    if mission is not None:
-        lines.append(f"Mission: {mission.raw_text[:400]}")
-    if company is not None and company.playbook:
-        lines.append(f"Playbook: {company.playbook[:400]}")
-    if budget is not None:
-        lines.append(
-            f"Budget: {budget.spent_cents}c spent / {budget.limit_cents}c limit."
-        )
-    return "\n".join(lines) or "(no additional company context)"
-
-
-async def _triage(
-    db: AsyncSession, *, company_id: uuid.UUID, decision: DecisionRequest
-) -> tuple[str, str | None]:
-    """Ask the company's model to approve/reject/escalate. Any failure → escalate,
-    so the founder never loses a decision to a provider hiccup."""
-    resolved = await apikeys.resolve_active_provider(db, company_id=company_id)
-    if resolved is None:
-        return "escalate", None
-    context = await _company_context(db, company_id)
-    meter = CostMeter(SessionLocal)
-    try:
-        resp = await meter.run_llm(
-            resolved.provider,
-            api_key=resolved.api_key,
-            company_id=company_id,
-            agent_id=None,
-            task_id=None,
-            model=resolved.provider.default_models["cheap"],
-            system=_TRIAGE_SYSTEM,
-            messages=[
-                Message(
-                    role="user",
-                    content=(
-                        f"Company context:\n{context}\n\n"
-                        f"Decision the agent is asking the founder to approve "
-                        f"({decision.kind.value}):\n{decision.summary}"
-                    ),
-                )
-            ],
-            max_tokens=200,
-            json_schema=_TRIAGE_SCHEMA,
-            funding_user_id=resolved.funding_user_id,
-        )
-        data = json.loads(resp.text)
-        verdict = data.get("verdict")
-        rationale = (data.get("rationale") or "").strip()[:400] or None
-    except Exception:
-        return "escalate", None
-    if verdict not in ("approve", "reject"):
-        return "escalate", rationale
-    return verdict, rationale
-
-
 # ── Handling one decision ─────────────────────────────────────────────────────
 async def untriaged_pending(
     db: AsyncSession, company_id: uuid.UUID, limit: int = 50
@@ -456,7 +266,12 @@ async def untriaged_pending(
 
 
 async def _webhook_payload(
-    db: AsyncSession, *, company: Company, decision: DecisionRequest, disposition: str, rationale: str | None
+    db: AsyncSession,
+    *,
+    company: Company,
+    decision: DecisionRequest,
+    disposition: str,
+    rationale: str | None,
 ) -> dict:
     agent = await db.get(Agent, decision.agent_id) if decision.agent_id else None
     web = settings.web_base_url.rstrip("/") if settings.web_base_url else ""
@@ -487,44 +302,71 @@ async def handle(
     *,
     company: Company,
     decision: DecisionRequest,
-    cfg: DelegateConfig,
-    remaining_budget_cents: int | None = None,
+    cfg: DelegateConfig | None = None,
 ) -> DelegateOutcome:
-    """Triage one pending decision. Resolves it in-session when the autonomy level
-    clears it, else marks it escalated; either way stamps a ``delegate`` marker so
-    it's handled exactly once. Returns the resumed task id (to enqueue) and the
-    base webhook payload (to sign + POST) for the caller to fire AFTER commit."""
-    disposition = "escalated"
-    rationale: str | None = None
+    """Route one pending decision by human involvement (see module docstring).
+
+    Escalates to the involvement owner (or the founder, per the router's fail-safe),
+    else auto-approves so agents proceed. An ``external_comm`` is always escalated
+    while the external-comms approval guardrail is on. Either way stamps a
+    ``delegate`` marker so it's handled exactly once. Returns the resumed task id
+    (to enqueue) and the base webhook payload (to sign + POST) for the caller to
+    fire AFTER commit."""
+    routed_to: uuid.UUID | None = None
     resumed: uuid.UUID | None = None
 
-    if _auto_eligible(cfg, decision, remaining_budget_cents):
-        verdict, rationale = await _triage(db, company_id=company.id, decision=decision)
-        if verdict in ("approve", "reject"):
-            approved = verdict == "approve"
-            disposition = "auto_approved" if approved else "auto_rejected"
+    # Hard override: an explicit external-comms guardrail always wants a human.
+    if decision.kind == DecisionKind.external_comm and await (
+        governance_svc.get_external_comms_approval(db, company_id=company.id)
+    ):
+        disposition = "escalated"
+        rationale: str | None = "external-communication approval guardrail is on"
+    else:
+        d = await involvement_router.route(
+            db,
+            company_id=company.id,
+            subject=involvement_router.RoutingSubject(
+                kind=decision.kind.value, summary=decision.summary
+            ),
+        )
+        rationale = d.reason or None
+        if d.involve_human:
+            disposition = "escalated"
+            routed_to = d.user_id
+        else:
+            disposition = "auto_approved"
             note = (
-                f"Auto-{'approved' if approved else 'rejected'} by your Claude "
-                f"delegate. {rationale or ''}"
+                "Auto-approved by your delegate: no teammate opted into this kind "
+                f"of decision. {rationale or ''}"
             ).strip()
             resumed = await decisions_svc.resolve_decision(
-                db, decision, approved=approved, user_id=None, note=note
+                db, decision, approved=True, user_id=None, note=note
             )
 
     # Stamp the marker so the triage cron never touches this decision twice (an
     # escalated one stays pending, so without this it would re-notify every run).
     decision.payload = {
         **(decision.payload or {}),
-        "delegate": {"disposition": disposition, "rationale": rationale},
+        "delegate": {
+            "disposition": disposition,
+            "rationale": rationale,
+            "routed_to": str(routed_to) if routed_to else None,
+        },
     }
     await db.flush()
 
     payload = None
-    if cfg.webhooks or cfg.telegram_chat_id:
+    if cfg is not None and cfg.has_targets:
         payload = await _webhook_payload(
-            db, company=company, decision=decision, disposition=disposition, rationale=rationale
+            db,
+            company=company,
+            decision=decision,
+            disposition=disposition,
+            rationale=rationale,
         )
-    return DelegateOutcome(disposition=disposition, resumed_task_id=resumed, webhook_payload=payload)
+    return DelegateOutcome(
+        disposition=disposition, resumed_task_id=resumed, webhook_payload=payload
+    )
 
 
 # ── Webhook delivery (signed) ─────────────────────────────────────────────────
@@ -535,7 +377,7 @@ def webhook_wants(events: str, disposition: str) -> bool:
     if events == "escalations":
         return disposition == "escalated"
     if events == "auto_handled":
-        return disposition in ("auto_approved", "auto_rejected")
+        return disposition == "auto_approved"
     return False
 
 

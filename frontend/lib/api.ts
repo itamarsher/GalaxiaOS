@@ -238,15 +238,13 @@ export interface TelegramStatus {
   events: WebhookEvents;
 }
 export interface DelegateSettings {
-  autonomy_level: number; // 1..4
   webhooks: DelegateWebhook[];
   signing_secret: string | null;
   telegram: TelegramStatus;
 }
-// A partial update: autonomy and notifications are edited from separate cards, so
-// each field is optional and omitting one leaves it untouched on the server.
+// A partial update of the notification config: each field is optional and omitting
+// one leaves it untouched on the server.
 export interface DelegateUpdate {
-  autonomy_level?: number;
   webhooks?: DelegateWebhook[];
   rotate_secret?: boolean;
   telegram_events?: WebhookEvents;
@@ -544,7 +542,7 @@ export const api = {
   deleteMcpServer: (companyId: string, serverId: string) =>
     req<void>(`/companies/${companyId}/mcp/servers/${serverId}`, { method: "DELETE" }),
 
-  // Decision delegate — autonomy slider + notification webhooks.
+  // Decision delegate — notification webhooks + Telegram (routing is per-person).
   delegate: (companyId: string) => req<DelegateSettings>(`/companies/${companyId}/delegate`),
   updateDelegate: (companyId: string, patch: DelegateUpdate) =>
     req<DelegateSettings>(`/companies/${companyId}/delegate`, {

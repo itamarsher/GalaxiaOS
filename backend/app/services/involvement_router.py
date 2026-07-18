@@ -11,9 +11,10 @@ while still asking for human involvement, it defaults to the **founder** rather 
 silently letting agents act — the founder is always the ultimate fallback for
 anything a human must own.
 
-This module is the routing decision; wiring it into the decision/task delegation
-points and deleting ``DelegateAutonomy`` is a separate step. The pure prompt-build
-and parse helpers carry the logic and are unit-tested; the LLM call is thin.
+This module is the routing decision; it is wired into the founder-decision triage
+(``app.services.delegate`` / ``app.jobs.scheduled.triage_founder_decisions``),
+which replaced the old ``DelegateAutonomy`` slider. The pure prompt-build and parse
+helpers carry the logic and are unit-tested; the LLM call is thin.
 """
 
 from __future__ import annotations
