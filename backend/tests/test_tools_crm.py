@@ -7,12 +7,13 @@ stubs (create → search → advance pipeline → log activity → timeline).
 
 from __future__ import annotations
 
+import uuid
 from types import SimpleNamespace
 
 from sqlalchemy import select
 
 from app.models import CrmActivity, CrmContact, CrmDeal, MetricSignal
-from app.models.enums import CrmActivityKind, CrmContactStatus, CrmDealStage
+from app.models.enums import AgentRole, CrmActivityKind, CrmContactStatus, CrmDealStage
 from app.runtime.tools import TOOL_SPECS, execute_tool
 from app.runtime.tools.crm import (
     ACTIVITY_KINDS,
@@ -89,6 +90,14 @@ def _task(company_id):
     return SimpleNamespace(company_id=company_id, id=None)
 
 
+def _agent(*, role=AgentRole.growth, access_labels=("customers",)):
+    """A CRM-cleared agent by default (has the ``customers`` label)."""
+    return SimpleNamespace(
+        id=uuid.uuid4(), role=role,
+        access_labels=None if access_labels is None else list(access_labels),
+    )
+
+
 @requires_db
 async def test_save_contact_upserts_by_email(session_factory, company_with_budget):
     company_id = company_with_budget
@@ -141,7 +150,7 @@ async def test_find_contacts_filters(session_factory, company_with_budget):
         by_query = await execute_tool(
             db,
             object(),
-            agent=None,
+            agent=_agent(),
             task=task,
             name="crm_find_contacts",
             args={"query": "ali"},
@@ -149,7 +158,7 @@ async def test_find_contacts_filters(session_factory, company_with_budget):
         by_status = await execute_tool(
             db,
             object(),
-            agent=None,
+            agent=_agent(),
             task=task,
             name="crm_find_contacts",
             args={"status": "customer"},
@@ -235,7 +244,7 @@ async def test_log_activity_and_timeline(session_factory, company_with_budget):
         timeline = await execute_tool(
             db,
             object(),
-            agent=None,
+            agent=_agent(),
             task=task,
             name="crm_contact_timeline",
             args={"contact": "Dave"},
@@ -245,6 +254,33 @@ async def test_log_activity_and_timeline(session_factory, company_with_budget):
     assert activities[0].contact_id == contact.id
     assert "Dave" in timeline.observation
     assert "intro call" in timeline.observation
+
+
+@requires_db
+async def test_crm_reads_gated_on_customers_label(session_factory, company_with_budget):
+    """An agent without the ``customers`` label can't read the CRM; the CEO bypasses."""
+    company_id = company_with_budget
+    task = _task(company_id)
+    async with session_factory() as db:
+        await crm_svc.upsert_contact(db, company_id=company_id, name="Eve", email="eve@x.io")
+        await db.commit()
+
+    uncleared = _agent(role=AgentRole.finance, access_labels=["financial"])
+    ceo = _agent(role=AgentRole.ceo, access_labels=None)
+    async with session_factory() as db:
+        for name in ("crm_find_contacts", "crm_list_deals"):
+            out = await execute_tool(db, object(), agent=uncleared, task=task, name=name, args={})
+            assert out.is_error and "customer data" in out.observation
+        tl = await execute_tool(
+            db, object(), agent=uncleared, task=task,
+            name="crm_contact_timeline", args={"contact": "Eve"},
+        )
+        assert tl.is_error and "customer data" in tl.observation
+
+        # The CEO sees it all.
+        out = await execute_tool(db, object(), agent=ceo, task=task,
+                                 name="crm_find_contacts", args={"query": "eve"})
+        assert not out.is_error and "Eve" in out.observation
 
 
 @requires_db
@@ -264,7 +300,7 @@ async def test_list_deals_reports_pipeline(session_factory, company_with_budget)
         outcome = await execute_tool(
             db,
             object(),
-            agent=None,
+            agent=_agent(),
             task=task,
             name="crm_list_deals",
             args={},
