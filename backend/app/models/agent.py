@@ -47,6 +47,11 @@ class Agent(Base, PKMixin, TenantMixin, TimestampMixin):
         PGUUID(as_uuid=True), ForeignKey("agents.id", ondelete="SET NULL"), nullable=True
     )
     config: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    # Data-segmentation policy: the ``DataLabel.key``s this agent may be given. The
+    # founder sets it when hiring (a multiple-choice of available labels). The CEO
+    # agent bypasses this (full access); every other agent is filtered to data whose
+    # labels are all in this list. NULL/empty => only unlabelled data. RFC 0001.
+    access_labels: Mapped[list | None] = mapped_column(JSONB, nullable=True)
 
     # ── Backend / marketplace seams (MVP: native/generated; rest reserved) ──
     backend_type: Mapped[AgentBackendType] = mapped_column(

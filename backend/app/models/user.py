@@ -5,6 +5,7 @@ from __future__ import annotations
 import uuid
 
 from sqlalchemy import Enum, ForeignKey, LargeBinary, String, Text, UniqueConstraint
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -71,3 +72,8 @@ class Membership(Base, PKMixin, TimestampMixin):
     proposed_involvement: Mapped[str | None] = mapped_column(Text, nullable=True)
     # Optional area/function focus, a prior for routing (e.g. "finance, fundraising").
     coverage: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    # Data-segmentation policy: the ``DataLabel.key``s this human may be given. The
+    # founder sets it when onboarding the person. The founder bypasses this (full
+    # access); every other human is filtered to data whose labels are all in this
+    # list. NULL/empty => only unlabelled data. RFC 0001.
+    access_labels: Mapped[list | None] = mapped_column(JSONB, nullable=True)

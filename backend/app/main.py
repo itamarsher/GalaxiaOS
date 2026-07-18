@@ -23,6 +23,7 @@ from app.api import (
     comms,
     companies,
     copilot,
+    data_labels,
     decisions,
     delegate,
     domains,
@@ -143,6 +144,7 @@ def create_app() -> FastAPI:
     app.include_router(budget.router)
     app.include_router(governance.router)
     app.include_router(involvement.router)
+    app.include_router(data_labels.router)
     app.include_router(metrics.router)
     app.include_router(decisions.router)
     app.include_router(delegate.router)
