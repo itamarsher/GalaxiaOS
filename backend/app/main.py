@@ -16,6 +16,7 @@ from app.api import (
     apikeys,
     artifacts,
     auth,
+    bf_mcp,
     billing,
     budget,
     chat,
@@ -132,6 +133,8 @@ def create_app() -> FastAPI:
     app.include_router(integrations.callback_router)
     app.include_router(files.router)
     app.include_router(mcp.router)
+    app.include_router(bf_mcp.router)
+    app.include_router(bf_mcp.mint_router)
     app.include_router(artifacts.router)
     app.include_router(companies.router)
     app.include_router(companies.mine_router)
