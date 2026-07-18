@@ -52,7 +52,7 @@ from app.runtime.prompts import (
     REFINE_SYSTEM,
     generation_language_directive,
 )
-from app.services import apikeys, investors
+from app.services import apikeys, data_policy, investors
 from app.services import chat as chat_svc
 from app.services import governance as gov
 
@@ -502,6 +502,7 @@ async def provision_fleet(
             name=str(spec.get("name") or role.value.title())[:255],
             system_prompt=str(spec.get("responsibility") or ""),
             autonomy_level=_parse_autonomy(spec.get("autonomy_level")),
+            access_labels=data_policy.default_access_labels_for_role(role.value),
         )
         db.add(agent)
         await db.flush()
@@ -940,6 +941,7 @@ async def refine(db: AsyncSession, *, company: Company, message: str) -> dict:
                     name=str(spec.get("name") or role.value.title())[:255],
                     system_prompt=str(spec.get("responsibility") or ""),
                     autonomy_level=_parse_autonomy(spec.get("autonomy_level")),
+                    access_labels=data_policy.default_access_labels_for_role(role.value),
                     reports_to_agent_id=ceo.id if (ceo and role is not AgentRole.ceo) else None,
                 )
                 db.add(agent)
@@ -995,6 +997,10 @@ async def launch(db: AsyncSession, *, company: Company) -> uuid.UUID | None:
     # disabled, so it's visible and one toggle away (Communications settings) for
     # founders who want to vet all outbound messaging during early cycles.
     await gov.set_external_comms_approval(db, company_id=company.id, enabled=False)
+
+    # Seed the data-segmentation taxonomy so the founder's labels exist from launch
+    # (agents were provisioned with role-based access to these keys).
+    await data_policy.seed_default_labels(db, company_id=company.id)
 
     company.status = CompanyStatus.active
     # Open the founder's standing direct line to the CEO up front, so it's there
