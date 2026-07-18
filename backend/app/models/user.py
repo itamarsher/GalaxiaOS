@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import uuid
 
-from sqlalchemy import Enum, ForeignKey, LargeBinary, String, UniqueConstraint
+from sqlalchemy import Enum, ForeignKey, LargeBinary, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -57,3 +57,17 @@ class Membership(Base, PKMixin, TimestampMixin):
         default=MembershipRole.founder,
         nullable=False,
     )
+    # How this person wants to be involved in the business, in their own words —
+    # the input the involvement router reads to decide when to route a task or a
+    # decision to a human, and to whom (RFC 0001, human binding). Replaces the old
+    # global autonomy scale with per-person, natural-language preferences.
+    #
+    # ``involvement`` is the ACTIVE, founder-sanctioned prose — the ONLY field the
+    # router ever reads. A teammate cannot self-escalate: they may submit
+    # ``proposed_involvement`` (a pending proposal), which the founder must approve
+    # (or the founder writes ``involvement`` directly). The founder stays in
+    # ultimate control. NULL involvement = no stated human involvement.
+    involvement: Mapped[str | None] = mapped_column(Text, nullable=True)
+    proposed_involvement: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Optional area/function focus, a prior for routing (e.g. "finance, fundraising").
+    coverage: Mapped[str | None] = mapped_column(String(500), nullable=True)
