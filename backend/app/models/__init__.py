@@ -23,6 +23,7 @@ from app.models.chat import (
 from app.models.comms import ExternalMessage
 from app.models.company import Company
 from app.models.crm import CrmActivity, CrmContact, CrmDeal
+from app.models.data_label import DataLabel
 from app.models.event_counter import EventCounter
 from app.models.feature_request import FeatureRequest, FeatureRequestVote
 from app.models.file import CompanyFile
@@ -48,6 +49,7 @@ __all__ = [
     "User",
     "Membership",
     "Company",
+    "DataLabel",
     "Artifact",
     "McpServer",
     "CrmContact",
