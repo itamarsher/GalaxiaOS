@@ -49,6 +49,7 @@ from app.services import (
     apikeys,
     business_function,
     chat,
+    data_policy,
     event_counters,
     memory,
     mission_log,
@@ -208,6 +209,9 @@ class NativeBackend:
                 text=task.goal,
                 limit=settings.memory_recall_limit,
             )
+            # Data segmentation: withhold any recalled memory this agent isn't
+            # cleared for BEFORE it is summarised into the prompt (the CEO bypasses).
+            recalled = data_policy.filter_by_access(agent, recalled, labels=lambda e: e.labels)
             memory_summary = _summarize_memory(recalled)
             metrics_summary = mandate.metrics
 

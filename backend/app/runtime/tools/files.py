@@ -157,6 +157,9 @@ async def _save_file(db, ctx, *, agent: Agent, task: Task, args: dict) -> ToolOu
         content=f"Saved to {row.folder_path}/{row.name}."
         + (f"\n{row.description}" if row.description else ""),
         source_task_id=task.id,
+        # The breadcrumb inherits the filed document's labels, so recalling it is
+        # gated the same way as reading the document.
+        labels=row.labels,
     )
     where = f"{row.folder_path}/{row.name}"
     link = f" ({row.web_url})" if row.web_url else ""

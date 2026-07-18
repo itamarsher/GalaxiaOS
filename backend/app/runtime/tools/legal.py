@@ -194,6 +194,7 @@ async def _draft_document(db, ctx, *, agent: Agent, task: Task, args: dict) -> T
         title=f"Draft {doc_type}",
         content=draft,
         source_task_id=task.id,
+        labels=["legal"],
     )
     return ToolOutcome(
         observation=(
@@ -219,6 +220,7 @@ async def _check_compliance(db, ctx, *, agent: Agent, task: Task, args: dict) ->
         title=f"Compliance check{where}: {action[:60]}",
         content=f"Simulated, non-authoritative review of {action!r}{where}.\n{finding}",
         source_task_id=task.id,
+        labels=["legal"],
     )
     return ToolOutcome(
         observation=f"simulated compliance review{where} — {finding} (not legal advice)"

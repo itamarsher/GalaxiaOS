@@ -149,6 +149,7 @@ async def _record_transaction(db, ctx, *, agent: Agent, task: Task, args: dict) 
         title=f"Transaction: {detail}",
         content=content,
         source_task_id=task.id,
+        labels=["financial"],
     )
     # Best-effort: drop a record into the company's Financials folder so the audit
     # trail accretes in external storage too. Never blocks the transaction — no-ops
