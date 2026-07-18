@@ -30,6 +30,7 @@ from app.api import (
     files,
     governance,
     integrations,
+    involvement,
     marketplace,
     mcp,
     metrics,
@@ -141,6 +142,7 @@ def create_app() -> FastAPI:
     app.include_router(domains.router)
     app.include_router(budget.router)
     app.include_router(governance.router)
+    app.include_router(involvement.router)
     app.include_router(metrics.router)
     app.include_router(decisions.router)
     app.include_router(delegate.router)
