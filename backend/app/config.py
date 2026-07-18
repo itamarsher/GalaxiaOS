@@ -607,6 +607,12 @@ class Settings(BaseSettings):
     openclaw_model: str = ""
     openclaw_timeout_seconds: float = 120.0
 
+    # Secret that signs per-(company, function) connection tokens for the
+    # Business-Function MCP endpoint (RFC 0001 pull transport). Empty => the
+    # endpoint is disabled and all connection attempts are rejected, so the pull
+    # transport is strictly opt-in. Rotating this invalidates every issued token.
+    function_connection_secret: str = ""
+
     # Reliability monitor: the platform company watches its OWN failed agent tasks,
     # wakes the Platform agent to investigate each (reading the code, and the Render
     # deploys when it looks infrastructure-related), and files a bug report — which
