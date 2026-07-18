@@ -17,6 +17,7 @@ from __future__ import annotations
 import uuid
 
 from sqlalchemy import BigInteger, Enum, ForeignKey, String, Text
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -30,6 +31,10 @@ class CompanyFile(Base, PKMixin, TenantMixin, TimestampMixin):
     category: Mapped[FileCategory] = mapped_column(
         Enum(FileCategory, native_enum=False, length=20), nullable=False, index=True
     )
+    # Data-segmentation labels (``DataLabel.key``s). The data policy gates which
+    # non-privileged principals may be shown this file (RFC 0001). Defaulted from
+    # the category at archive time; empty = general (accessible to everyone).
+    labels: Mapped[list | None] = mapped_column(JSONB, nullable=True)
     name: Mapped[str] = mapped_column(String(500), nullable=False, index=True)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     mime_type: Mapped[str] = mapped_column(String(120), nullable=False)
