@@ -135,6 +135,10 @@ class AgentOut(ORMModel):
     # by the CEO); ``role_description`` is the fixed behaviour for its role.
     system_prompt: str = ""
     role_description: str = ""
+    #: Data-segmentation access labels the founder granted this agent (the CEO
+    #: bypasses segmentation, so its access is irrelevant). NULL/empty = only
+    #: general/unlabelled data.
+    access_labels: list[str] | None = None
 
 
 class AgentEdgeOut(ORMModel):
