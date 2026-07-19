@@ -25,6 +25,10 @@ class MemoryEntry(Base, PKMixin, TenantMixin, TimestampMixin):
     title: Mapped[str] = mapped_column(String(500), nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False)
     structured: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    # Data-segmentation labels (DataLabel keys) classifying this memory. The recall
+    # path withholds an entry from any agent not cleared for its labels (RFC 0001).
+    # Empty/NULL = general (recalled for everyone).
+    labels: Mapped[list | None] = mapped_column(JSONB, nullable=True)
     source_task_id: Mapped[uuid.UUID | None] = mapped_column(
         PGUUID(as_uuid=True), ForeignKey("tasks.id", ondelete="SET NULL"), nullable=True
     )

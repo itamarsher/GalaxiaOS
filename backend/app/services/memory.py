@@ -29,6 +29,7 @@ async def write(
     content: str,
     source_task_id: uuid.UUID | None = None,
     structured: dict | None = None,
+    labels: list[str] | None = None,
 ) -> MemoryEntry:
     entry = MemoryEntry(
         company_id=company_id,
@@ -37,6 +38,9 @@ async def write(
         content=content,
         structured=structured,
         source_task_id=source_task_id,
+        # Data-segmentation labels: sensitive sources (financial, legal, filed docs)
+        # pass their labels so recall can withhold them; general memory stays NULL.
+        labels=labels or None,
         embedding=await embeddings.embed_text(f"{title}\n{content}"),
     )
     db.add(entry)

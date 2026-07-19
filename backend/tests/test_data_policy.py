@@ -62,6 +62,22 @@ def test_ceo_and_founder_bypass_segmentation():
     assert data_policy.member_can_access(admin, ["financial"]) is True
 
 
+def test_filter_by_access_withholds_uncleared_items():
+    """The recall-style gate keeps only items the agent may access (CEO bypasses)."""
+    entries = [
+        SimpleNamespace(title="general", labels=None),
+        SimpleNamespace(title="fin", labels=["financial"]),
+        SimpleNamespace(title="legal", labels=["legal"]),
+    ]
+    finance = SimpleNamespace(role=AgentRole.finance, access_labels=["financial"])
+    kept = {e.title for e in data_policy.filter_by_access(finance, entries, labels=lambda e: e.labels)}
+    assert kept == {"general", "fin"}  # not the legal one
+
+    ceo = SimpleNamespace(role=AgentRole.ceo, access_labels=None)
+    kept_ceo = {e.title for e in data_policy.filter_by_access(ceo, entries, labels=lambda e: e.labels)}
+    assert kept_ceo == {"general", "fin", "legal"}  # CEO sees all
+
+
 # ── taxonomy + policy over DB ──────────────────────────────────────────────────
 @dataclass
 class _Ids:

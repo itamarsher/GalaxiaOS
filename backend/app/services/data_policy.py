@@ -215,6 +215,16 @@ def agent_can_access(agent: Agent, resource_labels: list[str] | None) -> bool:
     return permits(agent.access_labels, resource_labels)
 
 
+def filter_by_access(agent: Agent, items, *, labels):
+    """Keep only the items ``agent`` may access. ``labels(item) -> list[str] | None``.
+
+    A small reusable gate for the read paths that hand an agent a *set* of stored
+    records (e.g. recalled memory) — withhold anything the agent isn't cleared for
+    before it reaches the model, without leaking that it existed.
+    """
+    return [it for it in items if agent_can_access(agent, labels(it))]
+
+
 def member_can_access(membership: Membership, resource_labels: list[str] | None) -> bool:
     """The founder bypasses segmentation; every other human is filtered."""
     if membership.role is MembershipRole.founder:
