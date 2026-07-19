@@ -7,15 +7,20 @@ capability is unsupported instead of fabricating an invoice.
 
 from __future__ import annotations
 
+import uuid
+from types import SimpleNamespace
+
 import pytest
 
 from app.integrations.invoicing import get_invoicer
+from app.models.enums import AgentRole
 from app.runtime.tools import TOOL_SPECS
 from app.runtime.tools.finance import (
     HANDLERS,
     SPECS,
     TRANSACTION_KINDS,
     _dollars,
+    _read_financials,
     format_budget_summary,
     validate_kind,
 )
@@ -51,6 +56,15 @@ def test_dollars_formats_cents():
 
 def test_dollars_handles_none():
     assert _dollars(None) == "$0.00"
+
+
+async def test_read_financials_gated_on_financial_label():
+    """An agent without the ``financial`` label is denied before any DB read; the
+    denial short-circuits, so no session is touched (db=None here proves it)."""
+    task = SimpleNamespace(company_id=uuid.uuid4())
+    uncleared = SimpleNamespace(id=uuid.uuid4(), role=AgentRole.growth, access_labels=["customers"])
+    out = await _read_financials(None, None, agent=uncleared, task=task, args={})
+    assert out.is_error and "financials" in out.observation
 
 
 def test_validate_kind_normalizes():
