@@ -20,6 +20,7 @@ from app.models import Agent, Budget, Task
 from app.models.enums import BudgetPeriod, MemoryType, MetricSource
 from app.providers.base import ToolSpec
 from app.runtime.tools.base import ToolOutcome, unsupported_capability
+from app.services import data_policy
 from app.services import memory as memory_svc
 from app.services import metrics as metrics_svc
 
@@ -108,6 +109,16 @@ SPECS: list[ToolSpec] = [
 
 
 async def _read_financials(db, ctx, *, agent: Agent, task: Task, args: dict) -> ToolOutcome:
+    # Financial data (budget + revenue/spend signals) is gated on the ``financial``
+    # data label; the CEO bypasses (data segmentation, RFC 0001).
+    if not data_policy.agent_can_access(agent, ["financial"]):
+        return ToolOutcome(
+            observation=(
+                "You don't have access to the company's financials. Ask the founder "
+                "to grant your agent the 'financial' data label if you need it."
+            ),
+            is_error=True,
+        )
     budget = await db.scalar(
         select(Budget).where(
             Budget.company_id == task.company_id, Budget.period == BudgetPeriod.monthly
