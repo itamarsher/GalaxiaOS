@@ -80,6 +80,12 @@ export interface Agent {
   access_labels: string[] | null;
 }
 export interface DataLabel { key: string; name: string; description: string | null; is_default: boolean }
+export interface Member {
+  user_id: string; email: string; name: string | null; role: string;
+  involvement: string | null; proposed_involvement: string | null;
+  coverage: string | null; access_labels: string[];
+}
+export interface Invite { id: string; email: string; role: string; access_labels: string[]; status: string }
 export interface Playbook { playbook: string; customized: boolean; default: string }
 export interface AgentEdge { from_agent_id: string; to_agent_id: string; relation: string }
 export interface Objective { id: string; title: string; rationale: string | null; priority: number; status: string }
@@ -567,6 +573,32 @@ export const api = {
     req<{ labels: string[] }>(`/companies/${companyId}/agents/${agentId}/access-labels`, {
       method: "PUT",
       body: JSON.stringify({ labels }),
+    }),
+
+  // Team — the roster, email invites, and per-member involvement (founder-only).
+  members: (companyId: string) => req<Member[]>(`/companies/${companyId}/members`),
+  invites: (companyId: string) => req<Invite[]>(`/companies/${companyId}/invites`),
+  createInvite: (companyId: string, email: string, access_labels: string[]) =>
+    req<Invite>(`/companies/${companyId}/invites`, {
+      method: "POST",
+      body: JSON.stringify({ email, access_labels }),
+    }),
+  revokeInvite: (companyId: string, inviteId: string) =>
+    req<void>(`/companies/${companyId}/invites/${inviteId}`, { method: "DELETE" }),
+  setMemberAccessLabels: (companyId: string, userId: string, labels: string[]) =>
+    req<{ labels: string[] }>(`/companies/${companyId}/members/${userId}/access-labels`, {
+      method: "PUT",
+      body: JSON.stringify({ labels }),
+    }),
+  setMemberInvolvement: (companyId: string, userId: string, text: string, coverage?: string) =>
+    req<Member>(`/companies/${companyId}/members/${userId}/involvement`, {
+      method: "PUT",
+      body: JSON.stringify({ text, coverage: coverage ?? null }),
+    }),
+  approveMemberInvolvement: (companyId: string, userId: string, text?: string) =>
+    req<Member>(`/companies/${companyId}/members/${userId}/involvement/approve`, {
+      method: "POST",
+      body: JSON.stringify({ text: text ?? null }),
     }),
 
   // Founder-facing reports (artifacts).

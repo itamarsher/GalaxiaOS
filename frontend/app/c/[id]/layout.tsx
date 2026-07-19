@@ -18,6 +18,7 @@ const SPACES = [
   ["", "Home"],
   ["game", "🎮 Game"],
   ["org", "Org"],
+  ["members", "Team"],
   ["budget", "Budget"],
   ["tasks", "Tasks"],
   ["reports", "Reports"],
