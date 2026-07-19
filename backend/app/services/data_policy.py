@@ -171,6 +171,11 @@ async def _validate_labels(db, company_id, labels: list[str]) -> list[str]:
     return list(dict.fromkeys(cleaned))
 
 
+async def validate_labels(db: AsyncSession, company_id: uuid.UUID, labels: list[str]) -> list[str]:
+    """Normalise + validate label keys against the company taxonomy (public helper)."""
+    return await _validate_labels(db, company_id, labels)
+
+
 async def set_agent_access(
     db: AsyncSession, company_id: uuid.UUID, agent_id: uuid.UUID, labels: list[str]
 ) -> Agent:
