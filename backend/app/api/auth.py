@@ -36,7 +36,7 @@ from app.security import (
     verify_login_state,
     verify_password,
 )
-from app.services import google_auth, user_drive
+from app.services import google_auth, invites, user_drive
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -48,6 +48,9 @@ async def signup(body: SignupRequest, db: DbDep) -> TokenResponse:
         raise HTTPException(status.HTTP_409_CONFLICT, "Email already registered")
     user = User(email=body.email, hashed_password=hash_password(body.password))
     db.add(user)
+    await db.flush()
+    # Materialise any team invites addressed to this email (they join by signing up).
+    await invites.consume_for_user(db, user)
     await db.commit()
     return TokenResponse(access_token=create_access_token(user.id))
 
@@ -61,6 +64,9 @@ async def login(db: DbDep, form: OAuth2PasswordRequestForm = Depends()) -> Token
         form.password, user.hashed_password
     ):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid credentials")
+    # Pick up any invites created for this email since they last signed in.
+    if await invites.consume_for_user(db, user):
+        await db.commit()
     return TokenResponse(access_token=create_access_token(user.id))
 
 
@@ -178,6 +184,8 @@ async def google_callback(
     except FileProviderError:
         return _web_redirect("/", auth="error")
     user = await google_auth.upsert_google_user(db, identity)
+    # Team invites addressed to this Google email are consumed on sign-in.
+    await invites.consume_for_user(db, user)
     await db.commit()
     # Hand the freshly-minted access token back to the SPA via the URL; the page
     # reads and stores it, then strips it from the address bar.

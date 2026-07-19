@@ -18,6 +18,12 @@ class MembershipRole(str, enum.Enum):
     admin = "admin"
 
 
+class InviteStatus(str, enum.Enum):
+    pending = "pending"  # awaiting the invitee's first authentication
+    accepted = "accepted"  # consumed → a membership was created
+    revoked = "revoked"  # withdrawn by the founder before acceptance
+
+
 class AgentRole(str, enum.Enum):
     ceo = "ceo"
     growth = "growth"

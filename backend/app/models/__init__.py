@@ -35,6 +35,7 @@ from app.models.governance import (
     ReputationScore,
 )
 from app.models.investment import InvestmentReview
+from app.models.invite import CompanyInvite
 from app.models.mcp import McpServer
 from app.models.memory import MemoryEntry
 from app.models.metrics import MetricSignal
@@ -58,6 +59,7 @@ __all__ = [
     "FeatureRequest",
     "FeatureRequestVote",
     "CompanyFile",
+    "CompanyInvite",
     "Mission",
     "Objective",
     "KeyResult",
