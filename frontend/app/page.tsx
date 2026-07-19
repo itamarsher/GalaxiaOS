@@ -24,6 +24,7 @@ export default function Home() {
   const [password, setPassword] = useState("");
   const [mission, setMission] = useState("");
   const [budget, setBudget] = useState("500");
+  const [involvement, setInvolvement] = useState("");
   const [companyId, setCompanyId] = useState<string | null>(null);
   const [apiKey, setApiKey] = useState("");
   const [tavilyKey, setTavilyKey] = useState("");
@@ -208,7 +209,12 @@ export default function Home() {
 
   const startOnboarding = () =>
     guard(async () => {
-      const c = await api.startOnboarding(mission, Math.round(parseFloat(budget) * 100), []);
+      const c = await api.startOnboarding(
+        mission,
+        Math.round(parseFloat(budget) * 100),
+        [],
+        involvement.trim() || undefined,
+      );
       setCompanyId(c.id);
       setStep("key");
     });
@@ -395,6 +401,15 @@ export default function Home() {
           />
           <label>Initial budget (USD)</label>
           <input value={budget} onChange={(e) => setBudget(e.target.value)} />
+          <label>How you want to be involved <span className="muted" style={{ fontWeight: 400 }}>(optional)</span></label>
+          <textarea
+            value={involvement}
+            onChange={(e) => setInvolvement(e.target.value)}
+            placeholder="e.g. Approve anything over $500, and any hire. Loop me in on customer escalations. Otherwise run autonomously."
+          />
+          <p className="muted" style={{ fontSize: 12, marginTop: -4 }}>
+            In your own words — the system routes decisions to you when they match. You&apos;re always the ultimate fallback, and you can change this anytime.
+          </p>
           <button disabled={busy || !mission} onClick={startOnboarding}>Continue</button>
         </div>
       )}

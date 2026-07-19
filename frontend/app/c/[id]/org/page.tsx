@@ -2,13 +2,14 @@
 
 import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
-import { api, fmtUsd, type Agent } from "@/lib/api";
+import { api, fmtUsd, type Agent, type DataLabel } from "@/lib/api";
 import { usePoll } from "@/lib/useApi";
 
 export default function OrgPage() {
   const { id } = useParams<{ id: string }>();
   const org = usePoll(() => api.org(id), 8000, [id]);
   const reputation = usePoll(() => api.reputation(id), 8000, [id]);
+  const labels = usePoll(() => api.dataLabels(id), 0, [id]);
 
   const repByAgent = new Map((reputation.data ?? []).map((r) => [r.agent_id, r]));
   const agents = org.data?.agents ?? [];
@@ -57,6 +58,7 @@ export default function OrgPage() {
             </div>
           </div>
         )}
+        <AccessEditor companyId={id} agent={a} labels={labels.data ?? []} onSaved={() => org.reload()} />
       </div>
     );
   };
@@ -73,6 +75,86 @@ export default function OrgPage() {
         {others.map((a) => <Card key={a.id} a={a} />)}
       </div>
       {agents.length === 0 && <div className="empty">No agents yet.</div>}
+    </div>
+  );
+}
+
+// Per-agent data-access editor: which data labels this agent may be shown. The CEO
+// bypasses segmentation entirely, so it shows a note instead of a picker. Sensitive
+// labels the founder hasn't granted are simply unchecked; saving PUTs the new set.
+function AccessEditor({
+  companyId, agent, labels, onSaved,
+}: { companyId: string; agent: Agent; labels: DataLabel[]; onSaved: () => void }) {
+  const [open, setOpen] = useState(false);
+  const [sel, setSel] = useState<Set<string>>(new Set(agent.access_labels ?? []));
+  const [busy, setBusy] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => { setSel(new Set(agent.access_labels ?? [])); }, [agent.access_labels]);
+
+  if (agent.role === "ceo") {
+    return (
+      <div className="muted" style={{ fontSize: 12, marginTop: 10 }}>
+        🔓 Sees all company data (the CEO bypasses data segmentation).
+      </div>
+    );
+  }
+
+  const toggle = (key: string) =>
+    setSel((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key); else next.add(key);
+      return next;
+    });
+
+  const save = async () => {
+    setBusy(true); setErr(null); setSaved(false);
+    try {
+      await api.setAgentAccessLabels(companyId, agent.id, [...sel]);
+      setSaved(true);
+      onSaved();
+    } catch (e) {
+      setErr(String(e instanceof Error ? e.message : e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const current = agent.access_labels ?? [];
+  return (
+    <div style={{ marginTop: 10 }}>
+      <div className="btnrow" style={{ justifyContent: "space-between", alignItems: "center" }}>
+        <span className="muted" style={{ fontSize: 12, fontWeight: 600 }}>
+          Data access: {current.length ? current.join(", ") : "general only"}
+        </span>
+        <button className="ghost" style={{ marginTop: 0, padding: "4px 10px", fontSize: 12 }}
+          onClick={() => setOpen((o) => !o)}>
+          {open ? "Close" : "Manage access"}
+        </button>
+      </div>
+      {open && (
+        <div style={{ marginTop: 8 }}>
+          {labels.length === 0 && <div className="muted" style={{ fontSize: 12 }}>No labels defined yet.</div>}
+          {labels.map((l) => (
+            <label key={l.key} style={{ display: "flex", gap: 8, alignItems: "flex-start", fontSize: 13, margin: "4px 0", fontWeight: 400 }}>
+              <input type="checkbox" checked={sel.has(l.key)} disabled={busy} onChange={() => toggle(l.key)} />
+              <span>
+                <strong>{l.name}</strong>
+                {l.description && <span className="muted"> — {l.description}</span>}
+              </span>
+            </label>
+          ))}
+          <div className="btnrow" style={{ marginTop: 8, alignItems: "center" }}>
+            <button style={{ marginTop: 0 }} disabled={busy} onClick={save}>Save access</button>
+            {saved && <span className="muted" style={{ fontSize: 12 }}>Saved.</span>}
+            {err && <span className="err">{err}</span>}
+          </div>
+          <p className="muted" style={{ fontSize: 11, marginTop: 6 }}>
+            Unlabelled data is general (everyone sees it). This agent is only shown data whose labels are all granted here.
+          </p>
+        </div>
+      )}
     </div>
   );
 }

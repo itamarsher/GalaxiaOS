@@ -37,6 +37,7 @@ async def start(body: OnboardingStartRequest, db: DbDep, user: CurrentUser):
         mission_text=body.mission_text,
         budget_cents=body.budget_cents,
         constraints=body.constraints,
+        involvement=body.involvement,
     )
     await db.commit()
     return company

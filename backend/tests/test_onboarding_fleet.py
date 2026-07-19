@@ -6,13 +6,50 @@ company was left with no fleet, plus the budget-reallocation behavior.
 
 from __future__ import annotations
 
+import uuid
+
 from sqlalchemy import select
 
 from app.config import settings
-from app.models import Agent, Budget
-from app.models.enums import AgentRole
+from app.models import Agent, Budget, Membership, User
+from app.models.enums import AgentRole, MembershipRole
 from app.services import onboarding
 from tests.conftest import requires_db
+
+
+@requires_db
+async def test_start_captures_founder_involvement(session_factory):
+    """The founder's stated involvement is stored on their membership at onboarding."""
+    async with session_factory() as db:
+        user = User(email=f"{uuid.uuid4()}@t.io", hashed_password="x")
+        db.add(user)
+        await db.flush()
+        company = await onboarding.start(
+            db, user=user, mission_text="Build a thing", budget_cents=10_000,
+            constraints=None, involvement="  Approve anything over $500.  ",
+        )
+        await db.commit()
+        m = await db.scalar(
+            select(Membership).where(
+                Membership.company_id == company.id, Membership.user_id == user.id
+            )
+        )
+        assert m.role is MembershipRole.founder
+        assert m.involvement == "Approve anything over $500."  # trimmed, stored
+
+    # Omitting involvement leaves it NULL (stays fully autonomous by default).
+    async with session_factory() as db:
+        user2 = User(email=f"{uuid.uuid4()}@t.io", hashed_password="x")
+        db.add(user2)
+        await db.flush()
+        company2 = await onboarding.start(
+            db, user=user2, mission_text="Another thing", budget_cents=10_000, constraints=None
+        )
+        await db.commit()
+        m2 = await db.scalar(
+            select(Membership).where(Membership.company_id == company2.id)
+        )
+        assert m2.involvement is None
 
 
 def test_fleet_specs_backfills_empty_llm_output():

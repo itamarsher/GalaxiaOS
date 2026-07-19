@@ -46,6 +46,10 @@ class OnboardingStartRequest(BaseModel):
     mission_text: str = Field(min_length=4)
     budget_cents: int = Field(gt=0, description="Monthly budget in cents, e.g. 50000 = $500")
     constraints: list[str] = Field(default_factory=list)
+    #: How the founder wants to be involved, in their own words (drives human
+    #: routing via the involvement router). Optional; the founder is always the
+    #: ultimate fallback regardless.
+    involvement: str | None = Field(default=None, max_length=4000)
 
 
 class CompanyOut(ORMModel):
@@ -131,6 +135,10 @@ class AgentOut(ORMModel):
     # by the CEO); ``role_description`` is the fixed behaviour for its role.
     system_prompt: str = ""
     role_description: str = ""
+    #: Data-segmentation access labels the founder granted this agent (the CEO
+    #: bypasses segmentation, so its access is irrelevant). NULL/empty = only
+    #: general/unlabelled data.
+    access_labels: list[str] | None = None
 
 
 class AgentEdgeOut(ORMModel):

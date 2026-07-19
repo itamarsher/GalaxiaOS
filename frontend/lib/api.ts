@@ -77,7 +77,9 @@ export interface Agent {
   status: string; monthly_budget_cents: number | null; reports_to_agent_id: string | null;
   backend_type: string; source: string;
   system_prompt: string; role_description: string;
+  access_labels: string[] | null;
 }
+export interface DataLabel { key: string; name: string; description: string | null; is_default: boolean }
 export interface Playbook { playbook: string; customized: boolean; default: string }
 export interface AgentEdge { from_agent_id: string; to_agent_id: string; relation: string }
 export interface Objective { id: string; title: string; rationale: string | null; priority: number; status: string }
@@ -284,10 +286,15 @@ export const api = {
     return (await res.json()) as TokenResponse;
   },
 
-  startOnboarding: (mission_text: string, budget_cents: number, constraints: string[]) =>
+  startOnboarding: (
+    mission_text: string,
+    budget_cents: number,
+    constraints: string[],
+    involvement?: string,
+  ) =>
     req<Company>("/onboarding/start", {
       method: "POST",
-      body: JSON.stringify({ mission_text, budget_cents, constraints }),
+      body: JSON.stringify({ mission_text, budget_cents, constraints, involvement }),
     }),
 
   addApiKey: (companyId: string, apiKey: string, provider = "anthropic") =>
@@ -553,6 +560,14 @@ export const api = {
     req<{ connect_url: string | null }>(`/companies/${companyId}/delegate/telegram/connect`),
   telegramDisconnect: (companyId: string) =>
     req<void>(`/companies/${companyId}/delegate/telegram`, { method: "DELETE" }),
+
+  // Data segmentation — founder-managed labels + per-agent access.
+  dataLabels: (companyId: string) => req<DataLabel[]>(`/companies/${companyId}/data-labels`),
+  setAgentAccessLabels: (companyId: string, agentId: string, labels: string[]) =>
+    req<{ labels: string[] }>(`/companies/${companyId}/agents/${agentId}/access-labels`, {
+      method: "PUT",
+      body: JSON.stringify({ labels }),
+    }),
 
   // Founder-facing reports (artifacts).
   reports: (companyId: string) => req<ArtifactSummary[]>(`/companies/${companyId}/reports`),
