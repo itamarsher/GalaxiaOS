@@ -284,10 +284,15 @@ export const api = {
     return (await res.json()) as TokenResponse;
   },
 
-  startOnboarding: (mission_text: string, budget_cents: number, constraints: string[]) =>
+  startOnboarding: (
+    mission_text: string,
+    budget_cents: number,
+    constraints: string[],
+    involvement?: string,
+  ) =>
     req<Company>("/onboarding/start", {
       method: "POST",
-      body: JSON.stringify({ mission_text, budget_cents, constraints }),
+      body: JSON.stringify({ mission_text, budget_cents, constraints, involvement }),
     }),
 
   addApiKey: (companyId: string, apiKey: string, provider = "anthropic") =>

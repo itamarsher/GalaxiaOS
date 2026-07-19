@@ -544,6 +544,7 @@ async def start(
     mission_text: str,
     budget_cents: int,
     constraints: list[str] | None,
+    involvement: str | None = None,
 ) -> Company:
     """Create the draft company, budget, and mission. No LLM call yet.
 
@@ -559,7 +560,15 @@ async def start(
 
     await platform_company.designate_if_first(db, company)
 
-    db.add(Membership(user_id=user.id, company_id=company.id, role=MembershipRole.founder))
+    db.add(
+        Membership(
+            user_id=user.id,
+            company_id=company.id,
+            role=MembershipRole.founder,
+            # The founder's own stated involvement (how they want to be looped in).
+            involvement=(involvement or "").strip() or None,
+        )
+    )
     db.add(
         Budget(
             company_id=company.id,
