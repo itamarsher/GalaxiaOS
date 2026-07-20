@@ -106,6 +106,22 @@ _TOOL_SPECS = [
             "required": ["title", "content"],
         },
     },
+    {
+        "name": "request_budget",
+        "description": "Ask whether you may spend an amount (cents). A spend within the "
+        "founder's remaining budget clears immediately ({cleared:true}) — proceed. Over "
+        "budget escalates to the founder and parks this initiative until they decide; "
+        "pass initiative_id so the parked initiative is the one you're working.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "amount_cents": {"type": "integer"},
+                "reason": {"type": "string"},
+                "initiative_id": {"type": "string"},
+            },
+            "required": ["amount_cents"],
+        },
+    },
 ]
 
 
@@ -261,6 +277,17 @@ async def _call_tool(db, company_id, agent_id, mid, params: dict) -> dict:
             )
             await db.commit()
             return _ok(mid, _content({"ok": True, "memory_id": str(entry.id)}))
+
+        if name == "request_budget":
+            iid = args.get("initiative_id")
+            result = await business_function.request_budget(
+                db, company_id=company_id, agent_id=agent_id,
+                amount_cents=int(args["amount_cents"]),
+                reason=str(args.get("reason") or ""),
+                initiative_id=uuid.UUID(str(iid)) if iid else None,
+            )
+            await db.commit()
+            return _ok(mid, _content(result))
 
         return _error(mid, -32602, f"unknown tool: {name}")
     except (KeyError, ValueError) as exc:

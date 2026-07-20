@@ -115,6 +115,45 @@ async def _task(db, company_id, run, agent_id, *, status, goal, created_at):
     return task
 
 
+# ── request_budget ────────────────────────────────────────────────────────────
+@requires_db
+async def test_request_budget_clears_within_and_escalates_over(session_factory):
+    from app.models import DecisionRequest
+    from app.models.enums import DecisionKind
+
+    company_id = await _company(session_factory, limit_cents=10_000)
+    async with session_factory() as db:
+        agent = await _agent(db, company_id)
+        run = await _run(db, company_id)
+        task = await _task(db, company_id, run, agent.id, status=TaskStatus.running,
+                           goal="buy ads", created_at=_T0)
+        await db.commit()
+        agent_id, task_id = agent.id, task.id
+
+    # Within the remaining budget → cleared immediately; no decision, no park.
+    async with session_factory() as db:
+        r = await bf.request_budget(db, company_id=company_id, agent_id=agent_id,
+                                    amount_cents=5_000, reason="tools")
+        await db.commit()
+        assert r["cleared"] is True
+        assert (await db.scalars(
+            select(DecisionRequest).where(DecisionRequest.company_id == company_id)
+        )).first() is None
+
+    # Over budget → escalated: a spend_approval is raised and the initiative parks.
+    async with session_factory() as db:
+        r = await bf.request_budget(db, company_id=company_id, agent_id=agent_id,
+                                    amount_cents=50_000, reason="a big buy", initiative_id=task_id)
+        await db.commit()
+        assert r["cleared"] is False and r["escalated"] is True and r["initiative_parked"] is True
+        assert r["shortfall_cents"] == 40_000
+        dec = (await db.scalars(
+            select(DecisionRequest).where(DecisionRequest.company_id == company_id)
+        )).one()
+        assert dec.kind is DecisionKind.spend_approval and dec.task_id == task_id
+        assert (await db.get(Task, task_id)).status is TaskStatus.waiting_approval
+
+
 # ── get_mandate ───────────────────────────────────────────────────────────────
 @requires_db
 async def test_get_mandate_assembles_from_business_state(session_factory):
