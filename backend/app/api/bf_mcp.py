@@ -159,8 +159,9 @@ async def _call_tool(db, company_id, agent_id, mid, params: dict) -> dict:
     args = params.get("arguments") or {}
     try:
         if name == "get_mandate":
+            # A connection token holder is an external worker; segment its mandate.
             mandate = await business_function.get_mandate(
-                db, company_id=company_id, agent_id=agent_id
+                db, company_id=company_id, agent_id=agent_id, redact_for_access=True
             )
             return _ok(mid, _content(mandate.model_dump(mode="json")))
 

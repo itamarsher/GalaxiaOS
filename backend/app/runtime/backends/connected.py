@@ -77,7 +77,7 @@ class ConnectedBackend:
         async with ctx.session_factory() as db:
             await set_tenant(db, task.company_id)
             mandate = await business_function.get_mandate(
-                db, company_id=task.company_id, agent_id=agent.id
+                db, company_id=task.company_id, agent_id=agent.id, redact_for_access=True
             )
             initiative = business_function.Initiative(
                 id=task.id,
