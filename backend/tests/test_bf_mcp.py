@@ -58,7 +58,12 @@ def test_mint_and_verify_round_trip(monkeypatch):
 def test_verify_rejects_tampered_and_disabled(monkeypatch):
     monkeypatch.setattr(settings, "function_connection_secret", _SECRET)
     token = function_token.mint(company_id=uuid.uuid4(), agent_id=uuid.uuid4())
-    assert function_token.verify(token[:-2] + "xx") is None  # bad signature
+    # Tamper the FIRST signature char — a fully-significant base64 position, so the
+    # decoded signature always changes. (Tampering the last char is flaky: base64's
+    # final char carries unused bits, so a tail edit can decode to the same bytes.)
+    p_b64, _, s_b64 = token.partition(".")
+    flipped = ("B" if s_b64[0] != "B" else "C") + s_b64[1:]
+    assert function_token.verify(f"{p_b64}.{flipped}") is None  # bad signature
     assert function_token.verify("garbage") is None
     # With no secret configured the transport is disabled — mint raises, verify fails.
     monkeypatch.setattr(settings, "function_connection_secret", "")

@@ -165,13 +165,21 @@ function AccessEditor({
 // Function surface). Switching to external + minting a connection token is the
 // "connect your own agent" flow (RFC 0001). The CEO runs natively (it orchestrates
 // the company) and a marketplace agent's runtime is fixed by its listing.
+// The three worker bindings from RFC 0001 §1a — one function slot, filled by an
+// internal agent, an external agent, or a human — interchangeably.
+const RUNTIMES: { key: "native" | "external" | "human"; label: string }[] = [
+  { key: "native", label: "Native agent" },
+  { key: "external", label: "External agent" },
+  { key: "human", label: "Human" },
+];
+
 function RuntimeEditor({ companyId, agent, onSaved }: { companyId: string; agent: Agent; onSaved: () => void }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [conn, setConn] = useState<{ token: string; mcp_url: string } | null>(null);
 
   if (agent.role === "ceo" || agent.backend_type === "marketplace") return null;
-  const external = agent.backend_type === "external";
+  const current = (agent.backend_type as "native" | "external" | "human") ?? "native";
 
   const run = async (fn: () => Promise<unknown>) => {
     setBusy(true); setErr(null);
@@ -181,19 +189,21 @@ function RuntimeEditor({ companyId, agent, onSaved }: { companyId: string; agent
 
   return (
     <div style={{ marginTop: 12, borderTop: "1px solid rgba(128,128,128,0.15)", paddingTop: 10 }}>
-      <div className="btnrow" style={{ justifyContent: "space-between", alignItems: "center" }}>
-        <span className="muted" style={{ fontSize: 12, fontWeight: 600 }}>
-          Runtime: {external ? "external (connected worker)" : "native (in-process)"}
-        </span>
-        <button className="ghost" style={{ marginTop: 0, padding: "4px 10px", fontSize: 12 }} disabled={busy}
-          onClick={() => run(async () => {
-            await api.setAgentBackend(companyId, agent.id, external ? "native" : "external");
-            setConn(null); onSaved();
-          })}>
-          {external ? "Switch to native" : "Connect an external agent"}
-        </button>
+      <div className="muted" style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>Runtime</div>
+      <div className="btnrow" style={{ gap: 6 }}>
+        {RUNTIMES.map((rt) => (
+          <button key={rt.key} className={current === rt.key ? "" : "ghost"}
+            style={{ marginTop: 0, padding: "4px 10px", fontSize: 12 }}
+            disabled={busy || current === rt.key}
+            onClick={() => run(async () => {
+              await api.setAgentBackend(companyId, agent.id, rt.key);
+              setConn(null); onSaved();
+            })}>
+            {rt.label}
+          </button>
+        ))}
       </div>
-      {external && (
+      {current === "external" && (
         <div style={{ marginTop: 8 }}>
           <button style={{ marginTop: 0 }} disabled={busy}
             onClick={() => run(async () => setConn(await api.mintConnection(companyId, agent.id)))}>
@@ -213,6 +223,69 @@ Bearer token: ${conn.token}`}
           <p className="muted" style={{ fontSize: 11, marginTop: 6 }}>
             An external agent needs a connected worker (an OpenClaw Gateway or your own runtime). Until one is bound, this function&apos;s tasks report &quot;no runtime connected.&quot;
           </p>
+        </div>
+      )}
+      {current === "human" && <HumanWorkPanel companyId={companyId} agent={agent} />}
+      {err && <div className="err">{err}</div>}
+    </div>
+  );
+}
+
+// A person staffs this function: view its mandate + the initiative on deck, claim
+// it, and report the outcome — the same loop an agent drives, rendered for a human.
+function HumanWorkPanel({ companyId, agent }: { companyId: string; agent: Agent }) {
+  const work = usePoll(() => api.functionWork(companyId, agent.id), 10000, [companyId, agent.id]);
+  const [busy, setBusy] = useState(false);
+  const [summary, setSummary] = useState("");
+  const [err, setErr] = useState<string | null>(null);
+
+  const run = async (fn: () => Promise<unknown>) => {
+    setBusy(true); setErr(null);
+    try { await fn(); await work.reload(); } catch (e) { setErr(String(e instanceof Error ? e.message : e)); }
+    finally { setBusy(false); }
+  };
+
+  const w = work.data;
+  const init = w?.initiative ?? null;
+  const claimed = init?.status === "running";
+
+  return (
+    <div className="card" style={{ marginTop: 8 }}>
+      <div className="muted" style={{ fontSize: 12, fontWeight: 600 }}>My work — {agent.name}</div>
+      {w?.mandate?.constraints?.length ? (
+        <p className="muted" style={{ fontSize: 11, marginTop: 4 }}>
+          Constraints: {w.mandate.constraints.join(" · ")}
+        </p>
+      ) : null}
+      {!init && <p className="muted" style={{ fontSize: 12, marginTop: 6 }}>No initiative on deck.</p>}
+      {init && (
+        <div style={{ marginTop: 6 }}>
+          <div style={{ fontSize: 13 }}><strong>Initiative:</strong> {init.goal}</div>
+          <div className="muted" style={{ fontSize: 11 }}>status: {init.status}</div>
+          {!claimed && (
+            <button style={{ marginTop: 8 }} disabled={busy}
+              onClick={() => run(() => api.claimWork(companyId, agent.id, init.id))}>
+              Claim this initiative
+            </button>
+          )}
+          {claimed && (
+            <div style={{ marginTop: 8 }}>
+              <input placeholder="One-line summary of the outcome" value={summary}
+                onChange={(e) => setSummary(e.target.value)} style={{ width: "100%" }} />
+              <div className="btnrow" style={{ marginTop: 6, gap: 6 }}>
+                {["done", "blocked", "needs_decision"].map((outcome) => (
+                  <button key={outcome} className={outcome === "done" ? "" : "ghost"}
+                    style={{ marginTop: 0, padding: "4px 10px", fontSize: 12 }} disabled={busy}
+                    onClick={() => run(async () => {
+                      await api.reportWork(companyId, agent.id, init.id, outcome, summary);
+                      setSummary("");
+                    })}>
+                    Report {outcome.replace("_", " ")}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       )}
       {err && <div className="err">{err}</div>}
