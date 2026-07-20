@@ -62,8 +62,12 @@ class OpenClawWorker:
         self._client = client  # injectable for tests; otherwise created per call
 
     def _route(self, mandate: business_function.Mandate) -> str:
-        # Explicit model wins; otherwise each function maps to its own persona.
-        return self._model or f"openclaw/{mandate.function}"
+        # Explicit model wins; otherwise each function maps to its own persona,
+        # keyed by (company, function) so the SAME role across two businesses is two
+        # distinct, isolated Gateway agents — never one shared persona (RFC 0001 §6:
+        # agentId = <company_id>:<function>; reusing a persona/workspace across
+        # tenants would leak the first company's workspace + memory into the second).
+        return self._model or f"openclaw/{mandate.company_id}:{mandate.function}"
 
     @staticmethod
     def _briefing(mandate: business_function.Mandate) -> str:

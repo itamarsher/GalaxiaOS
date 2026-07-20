@@ -596,10 +596,20 @@ class Settings(BaseSettings):
     # `external` agent fails with a clear "no runtime connected" message.
     openclaw_base_url: str = ""
     openclaw_api_key: str = ""
-    # Model/agent route. Empty => route by function ("openclaw/<function>"), so each
-    # business function maps to its own OpenClaw agent persona.
+    # Model/agent route. Empty => route by tenant+function
+    # ("openclaw/<company_id>:<function>"), so each business function maps to its own
+    # per-tenant OpenClaw agent persona (RFC 0001 §6 — never a shared persona).
     openclaw_model: str = ""
     openclaw_timeout_seconds: float = 120.0
+
+    # Default runtime binding for a newly *generated* functional agent (RFC 0001
+    # §5 — the batteries-included, same-day binding). "native" runs the in-process
+    # loop; "external" auto-binds each generated function to the managed OpenClaw
+    # Gateway. "external" only takes effect when a Gateway is actually configured
+    # (openclaw_base_url set), so a mis-set default can never strand agents with no
+    # worker — see `services.worker_binding.default_backend_for`. The CEO always
+    # runs natively regardless (it orchestrates the company).
+    default_agent_backend: str = "native"
 
     # Secret that signs per-(company, function) connection tokens for the
     # Business-Function MCP endpoint (RFC 0001 pull transport). Empty => the
@@ -669,6 +679,14 @@ class Settings(BaseSettings):
     # web app, so we can land them back on the company's Settings page. Set per
     # environment via ``ABOS_WEB_BASE_URL`` (no trailing slash).
     web_base_url: str = ""
+
+    @field_validator("default_agent_backend")
+    @classmethod
+    def _valid_default_backend(cls, v: str) -> str:
+        v = (v or "native").strip().lower()
+        if v not in ("native", "external"):
+            raise ValueError("ABOS_DEFAULT_AGENT_BACKEND must be 'native' or 'external'")
+        return v
 
     @field_validator("public_api_base_url", "web_base_url")
     @classmethod
