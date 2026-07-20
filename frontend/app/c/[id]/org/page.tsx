@@ -59,6 +59,7 @@ export default function OrgPage() {
           </div>
         )}
         <AccessEditor companyId={id} agent={a} labels={labels.data ?? []} onSaved={() => org.reload()} />
+        <RuntimeEditor companyId={id} agent={a} onSaved={() => org.reload()} />
       </div>
     );
   };
@@ -155,6 +156,66 @@ function AccessEditor({
           </p>
         </div>
       )}
+    </div>
+  );
+}
+
+// Where this function runs: 'native' (Galaxia's in-process loop) or 'external' (a
+// connected worker — an OpenClaw Gateway or your own agent — over the Business-
+// Function surface). Switching to external + minting a connection token is the
+// "connect your own agent" flow (RFC 0001). The CEO runs natively (it orchestrates
+// the company) and a marketplace agent's runtime is fixed by its listing.
+function RuntimeEditor({ companyId, agent, onSaved }: { companyId: string; agent: Agent; onSaved: () => void }) {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [conn, setConn] = useState<{ token: string; mcp_url: string } | null>(null);
+
+  if (agent.role === "ceo" || agent.backend_type === "marketplace") return null;
+  const external = agent.backend_type === "external";
+
+  const run = async (fn: () => Promise<unknown>) => {
+    setBusy(true); setErr(null);
+    try { await fn(); } catch (e) { setErr(String(e instanceof Error ? e.message : e)); }
+    finally { setBusy(false); }
+  };
+
+  return (
+    <div style={{ marginTop: 12, borderTop: "1px solid rgba(128,128,128,0.15)", paddingTop: 10 }}>
+      <div className="btnrow" style={{ justifyContent: "space-between", alignItems: "center" }}>
+        <span className="muted" style={{ fontSize: 12, fontWeight: 600 }}>
+          Runtime: {external ? "external (connected worker)" : "native (in-process)"}
+        </span>
+        <button className="ghost" style={{ marginTop: 0, padding: "4px 10px", fontSize: 12 }} disabled={busy}
+          onClick={() => run(async () => {
+            await api.setAgentBackend(companyId, agent.id, external ? "native" : "external");
+            setConn(null); onSaved();
+          })}>
+          {external ? "Switch to native" : "Connect an external agent"}
+        </button>
+      </div>
+      {external && (
+        <div style={{ marginTop: 8 }}>
+          <button style={{ marginTop: 0 }} disabled={busy}
+            onClick={() => run(async () => setConn(await api.mintConnection(companyId, agent.id)))}>
+            Generate connection token
+          </button>
+          {conn && (
+            <div className="card" style={{ marginTop: 8 }}>
+              <div className="muted" style={{ fontSize: 12, fontWeight: 600 }}>
+                Point your OpenClaw / MCP agent at this — the token is a secret, store it safely.
+              </div>
+              <pre className="prompt" style={{ whiteSpace: "pre-wrap", wordBreak: "break-all" }}>
+{`MCP URL: ${conn.mcp_url}
+Bearer token: ${conn.token}`}
+              </pre>
+            </div>
+          )}
+          <p className="muted" style={{ fontSize: 11, marginTop: 6 }}>
+            An external agent needs a connected worker (an OpenClaw Gateway or your own runtime). Until one is bound, this function&apos;s tasks report &quot;no runtime connected.&quot;
+          </p>
+        </div>
+      )}
+      {err && <div className="err">{err}</div>}
     </div>
   );
 }

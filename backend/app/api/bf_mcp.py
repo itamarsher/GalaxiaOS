@@ -30,9 +30,10 @@ from fastapi import APIRouter, HTTPException, Request, Response, status
 
 from app.config import settings
 from app.db import set_tenant
-from app.deps import CompanyDep, DbDep
+from app.deps import CompanyDep, CurrentUser, DbDep
 from app.models import Agent
 from app.services import business_function, function_token
+from app.services import involvement as involvement_svc
 
 # Mirror the protocol version the repo's MCP client advertises.
 _PROTOCOL_VERSION = "2025-06-18"
@@ -82,8 +83,15 @@ mint_router = APIRouter(prefix="/companies/{company_id}", tags=["business-functi
 
 
 @mint_router.post("/functions/{agent_id}/connection")
-async def mint_connection(company: CompanyDep, agent_id: uuid.UUID, db: DbDep):
-    """Issue a connection token an external agent uses to staff this function."""
+async def mint_connection(
+    company: CompanyDep, agent_id: uuid.UUID, db: DbDep, user: CurrentUser
+):
+    """Issue a connection token an external agent uses to staff this function.
+
+    Founder-only: a connection token lets an external runtime pull this function's
+    mandate and claim its initiatives, so minting one is the founder's call."""
+    if not await involvement_svc.is_founder(db, company_id=company.id, user_id=user.id):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "only the founder can connect an external agent")
     agent = await db.get(Agent, agent_id)
     if agent is None or agent.company_id != company.id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "function not found")

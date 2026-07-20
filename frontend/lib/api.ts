@@ -575,6 +575,18 @@ export const api = {
       body: JSON.stringify({ labels }),
     }),
 
+  // Connected runtime — switch an agent to an external worker + mint its token.
+  setAgentBackend: (companyId: string, agentId: string, backend_type: "native" | "external") =>
+    req<Agent>(`/companies/${companyId}/agents/${agentId}/backend`, {
+      method: "PUT",
+      body: JSON.stringify({ backend_type }),
+    }),
+  mintConnection: (companyId: string, agentId: string) =>
+    req<{ function: string; token: string; mcp_url: string }>(
+      `/companies/${companyId}/functions/${agentId}/connection`,
+      { method: "POST" },
+    ),
+
   // Team — the roster, email invites, and per-member involvement (founder-only).
   members: (companyId: string) => req<Member[]>(`/companies/${companyId}/members`),
   invites: (companyId: string) => req<Invite[]>(`/companies/${companyId}/invites`),
