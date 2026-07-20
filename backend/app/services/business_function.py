@@ -32,8 +32,8 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.models import Agent, Mission, Task
-from app.models.enums import TaskStatus
+from app.models import Agent, DecisionRequest, Mission, Task
+from app.models.enums import DecisionKind, DecisionStatus, TaskStatus
 from app.services import budget as budget_svc
 from app.services import chat as chat_svc
 from app.services import data_policy
@@ -355,3 +355,82 @@ async def _park_for_decision(db: AsyncSession, *, task: Task, output: dict) -> i
     task.output = output
     await db.flush()
     return task.cost_cents or 0
+
+
+async def request_budget(
+    db: AsyncSession,
+    *,
+    company_id: uuid.UUID,
+    agent_id: uuid.UUID,
+    amount_cents: int,
+    reason: str = "",
+    initiative_id: uuid.UUID | None = None,
+) -> dict:
+    """A worker asks whether it may spend ``amount_cents`` (RFC 0001 §2).
+
+    Synchronous when it fits: a spend within the founder's remaining monthly budget
+    is **cleared immediately** — no founder round-trip — so the worker keeps going.
+    Over budget, it **escalates**: a ``spend_approval`` decision is raised in the
+    founder's inbox (routed like any other decision), and — since a pull worker can't
+    block — the initiative is parked (``waiting_approval``, lease released) so it is
+    re-offered once the founder resolves it. The caller commits.
+    """
+    reason = (reason or "").strip()
+    if amount_cents <= 0:
+        raise ValueError("budget request must be a positive amount")
+    budget = await budget_svc.get_active_budget(db, company_id)
+    remaining = (
+        int(budget.limit_cents) - int(budget.spent_cents) - int(budget.reserved_cents)
+        if budget is not None
+        else 0
+    )
+    if amount_cents <= remaining:
+        return {
+            "cleared": True,
+            "remaining_cents": remaining,
+            "message": (
+                f"Cleared: ${amount_cents / 100:.2f} for {reason or 'this spend'} fits the "
+                f"remaining ${remaining / 100:.2f} monthly budget. Proceed."
+            ),
+        }
+
+    shortfall = amount_cents - max(0, remaining)
+    decision = DecisionRequest(
+        company_id=company_id,
+        agent_id=agent_id,
+        task_id=initiative_id,
+        kind=DecisionKind.spend_approval,
+        summary=(
+            f"**Budget request — over budget**\n\n"
+            f"**${amount_cents / 100:.2f}** requested for {reason or 'an upcoming spend'}, "
+            f"but only **${max(0, remaining) / 100:.2f}** is left this month.\n\n"
+            f"Approve to add **${shortfall / 100:.2f}** of headroom."
+        ),
+        payload={
+            "tool": "request_budget",
+            "reason": reason,
+            "requested_cents": amount_cents,
+            "available_cents": max(0, remaining),
+            "budget_increase_cents": shortfall,
+        },
+        status=DecisionStatus.pending,
+    )
+    db.add(decision)
+    await db.flush()
+    await chat_svc.attach_decision_dm(db, decision=decision)
+
+    parked = False
+    if initiative_id is not None:
+        task = await db.get(Task, initiative_id)
+        if task is not None and task.company_id == company_id:
+            task.lease_expires_at = None  # end the claim; re-offered on resolution
+            task.status = TaskStatus.waiting_approval
+            await db.flush()
+            parked = True
+    return {
+        "cleared": False,
+        "escalated": True,
+        "decision_id": str(decision.id),
+        "shortfall_cents": shortfall,
+        "initiative_parked": parked,
+    }

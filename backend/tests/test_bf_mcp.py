@@ -147,7 +147,11 @@ async def test_mcp_endpoint_full_lifecycle(session_factory, monkeypatch):
         # Discovery.
         tools = {t["name"] for t in _rpc(client, token, "tools/list").json()["result"]["tools"]}
         assert {"get_mandate", "get_next_initiative", "claim_initiative", "report_result",
-                "record_metric", "write_memory"} <= tools
+                "record_metric", "write_memory", "request_budget"} <= tools
+
+        # A within-budget spend clears synchronously (the $100 monthly budget covers $10).
+        cleared, _ = _tool(client, token, "request_budget", {"amount_cents": 1000, "reason": "a tool"})
+        assert cleared["cleared"] is True
 
         # Mandate is scoped to this function.
         mandate, _ = _tool(client, token, "get_mandate")
