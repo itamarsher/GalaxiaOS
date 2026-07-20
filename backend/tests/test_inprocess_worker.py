@@ -16,6 +16,13 @@ def test_build_worker_uses_worker_settings_without_signal_handlers():
     assert len(worker.cron_jobs) == len(WorkerSettings.cron_jobs)
 
 
+def test_lease_reaper_is_scheduled():
+    """The initiative lease reaper must be an actual cron, not just a function —
+    without it, a crashed pull worker's claim is stuck 'running' forever (RFC 0001)."""
+    coro_names = {c.coroutine.__name__ for c in WorkerSettings.cron_jobs}
+    assert "reclaim_expired_initiatives" in coro_names
+
+
 def test_lifespan_is_noop_when_flag_disabled(monkeypatch):
     """With the flag off (production default), no in-process worker is started."""
     monkeypatch.setattr(main.settings, "run_worker_in_process", False)

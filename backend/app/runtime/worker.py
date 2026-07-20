@@ -16,6 +16,7 @@ from app.jobs.scheduled import (
     monitor_render_platform,
     optimize_skills,
     promote_feature_backlog,
+    reclaim_expired_initiatives,
     recompute_runway,
     reconcile_delivered_requests,
     reconcile_site_domains,
@@ -92,6 +93,10 @@ class WorkerSettings:
         # no delegate configured, and entirely off via ABOS_DELEGATE_ENABLED.
         cron(triage_founder_decisions, minute=set(range(0, 60))),
         cron(run_business_cycle, hour=settings.business_cycle_hour_utc, minute=0),
+        # Reclaim initiatives whose connected-worker lease expired (crashed/stalled
+        # pull worker), so they're re-offered instead of stuck running. Every 5
+        # minutes; no-op unless a lease has actually lapsed.
+        cron(reclaim_expired_initiatives, minute=set(range(2, 60, 5))),
         # Push in-flight domain connections forward (zone activation + HTTPS take
         # minutes and happen out-of-band); every 5 minutes is plenty.
         cron(reconcile_site_domains, minute=set(range(0, 60, 5))),

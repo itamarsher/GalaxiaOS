@@ -34,6 +34,26 @@ async def recompute_runway(ctx: dict) -> dict:
     return {"companies": count}
 
 
+async def reclaim_expired_initiatives(ctx: dict) -> dict:
+    """Reset initiatives whose worker lease expired back to queued (RFC 0001).
+
+    A connected/pull worker claims an initiative (queued → running, with a lease)
+    and reports the result; if it crashes mid-flight the lease lapses and the task
+    would otherwise be stuck ``running`` forever. This releases those so the next
+    worker poll (``get_next_initiative``) re-offers them. Native/push tasks carry no
+    lease, so they're never touched. Cheap and idempotent — only expired rows move.
+    """
+    from app.services import business_function as bf
+
+    released = 0
+    for company_id in await _active_company_ids():
+        async with SessionLocal() as db:
+            await set_tenant(db, company_id)
+            released += await bf.release_expired_claims(db, company_id=company_id)
+            await db.commit()
+    return {"released": released}
+
+
 async def generate_digests(ctx: dict) -> dict:
     count = 0
     for company_id in await _active_company_ids():
