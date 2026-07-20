@@ -105,6 +105,7 @@ class ConnectedBackend:
                 task_id=task.id,
                 outcome=report.outcome,
                 output=report.output or {"summary": ""},
+                agent_id=agent.id,
             )
             await db.commit()
             row = await db.get(Task, task.id)

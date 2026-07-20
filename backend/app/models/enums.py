@@ -53,6 +53,7 @@ class AgentBackendType(str, enum.Enum):
     native = "native"
     external = "external"
     marketplace = "marketplace"
+    human = "human"  # a person staffs this function slot (RFC 0001 §1a, step 6)
 
 
 class AgentSource(str, enum.Enum):

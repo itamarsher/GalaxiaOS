@@ -64,6 +64,11 @@ async def test_founder_can_switch_agent_to_external_and_back(session_factory):
                        json={"backend_type": "external"})
         assert r.status_code == 200 and r.json()["backend_type"] == "external"
 
+        # …a human can also staff the function (RFC 0001 step 6)…
+        r = client.put(f"{base}/{growth_id}/backend", headers=_auth(founder_id),
+                       json={"backend_type": "human"})
+        assert r.status_code == 200 and r.json()["backend_type"] == "human"
+
         # …and back to native.
         r = client.put(f"{base}/{growth_id}/backend", headers=_auth(founder_id),
                        json={"backend_type": "native"})
@@ -73,9 +78,11 @@ async def test_founder_can_switch_agent_to_external_and_back(session_factory):
         assert client.put(f"{base}/{growth_id}/backend", headers=_auth(other_id),
                           json={"backend_type": "external"}).status_code == 403
 
-        # The CEO must stay native (it orchestrates the company).
+        # The CEO must stay native (it orchestrates the company) — no external, no human.
         assert client.put(f"{base}/{ceo_id}/backend", headers=_auth(founder_id),
                           json={"backend_type": "external"}).status_code == 400
+        assert client.put(f"{base}/{ceo_id}/backend", headers=_auth(founder_id),
+                          json={"backend_type": "human"}).status_code == 400
 
         # Invalid / non-settable values are rejected.
         assert client.put(f"{base}/{growth_id}/backend", headers=_auth(founder_id),
