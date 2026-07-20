@@ -96,12 +96,14 @@ async def test_execute_posts_briefing_and_routes_by_function():
         return _completion('{"outcome": "done", "summary": "ok"}')
 
     worker = OpenClawWorker(base_url="https://gw.test/", api_key="secret", client=_client(handler))
-    report = await worker.execute(mandate=_mandate(), initiative=_initiative())
+    mandate = _mandate()
+    report = await worker.execute(mandate=mandate, initiative=_initiative())
 
     assert report.outcome == "done"
     assert seen["url"].endswith("/v1/chat/completions")
     assert seen["auth"] == "Bearer secret"
-    assert seen["body"]["model"] == "openclaw/growth"  # routes to the function persona
+    # Routes to the per-tenant function persona (RFC 0001 §6): <company_id>:<function>.
+    assert seen["body"]["model"] == f"openclaw/{mandate.company_id}:growth"
     assert "Growth Lead" in seen["body"]["messages"][0]["content"]  # mandate briefing
     assert "No paid ads" in seen["body"]["messages"][0]["content"]  # constraints
     assert "publish the launch page" in seen["body"]["messages"][1]["content"]  # initiative

@@ -52,7 +52,7 @@ from app.runtime.prompts import (
     REFINE_SYSTEM,
     generation_language_directive,
 )
-from app.services import apikeys, data_policy, investors
+from app.services import apikeys, data_policy, investors, worker_binding
 from app.services import chat as chat_svc
 from app.services import governance as gov
 
@@ -503,6 +503,7 @@ async def provision_fleet(
             system_prompt=str(spec.get("responsibility") or ""),
             autonomy_level=_parse_autonomy(spec.get("autonomy_level")),
             access_labels=data_policy.default_access_labels_for_role(role.value),
+            backend_type=worker_binding.default_backend_for(role),
         )
         db.add(agent)
         await db.flush()
@@ -951,6 +952,7 @@ async def refine(db: AsyncSession, *, company: Company, message: str) -> dict:
                     system_prompt=str(spec.get("responsibility") or ""),
                     autonomy_level=_parse_autonomy(spec.get("autonomy_level")),
                     access_labels=data_policy.default_access_labels_for_role(role.value),
+                    backend_type=worker_binding.default_backend_for(role),
                     reports_to_agent_id=ceo.id if (ceo and role is not AgentRole.ceo) else None,
                 )
                 db.add(agent)

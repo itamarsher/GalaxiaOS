@@ -30,7 +30,6 @@ from sqlalchemy import select
 
 from app.models import Agent, AgentEdge, Company, DecisionRequest, Task
 from app.models.enums import (
-    AgentBackendType,
     AgentRole,
     AgentSource,
     AgentStatus,
@@ -44,7 +43,7 @@ from app.providers.base import ToolSpec
 from app.runtime.prompts import effective_playbook
 from app.runtime.tools.base import ToolOutcome, consume_approval_grant
 from app.services import budget as budget_svc
-from app.services import chat, data_policy
+from app.services import chat, data_policy, worker_binding
 
 #: Cap on the global playbook so a runaway edit can't bloat every agent's prompt.
 _MAX_PLAYBOOK_CHARS = 8000
@@ -375,7 +374,9 @@ async def _hire_agent(db, ctx, *, agent: Agent, task: Task, args: dict) -> ToolO
         access_labels=data_policy.default_access_labels_for_role(role.value),
         monthly_budget_cents=allocation,
         source=AgentSource.hired,
-        backend_type=AgentBackendType.native,
+        # A CEO-hired function binds to the same default runtime as a generated one
+        # (RFC 0001 §5): native by default, the managed Gateway when configured.
+        backend_type=worker_binding.default_backend_for(role),
         reports_to_agent_id=agent.id,
     )
     db.add(new_agent)
