@@ -1,6 +1,7 @@
 {
   "gateway": {
-    "bind": "0.0.0.0",
+    "mode": "local",
+    "bind": "lan",
     "port": 18789,
     "auth": { "mode": "token", "token": "${OPENCLAW_GATEWAY_TOKEN}" },
     "http": { "endpoints": { "chatCompletions": { "enabled": true } } }
