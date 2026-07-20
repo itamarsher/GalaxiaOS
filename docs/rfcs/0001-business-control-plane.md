@@ -301,25 +301,58 @@ Gateway lifecycle + version churn of a large, fast-moving monorepo.
 
 1. **Define the Business-Function MCP surface** ([§2](#2-the-business-function-mcp-surface))
    as a first-class server over existing services. No user-visible change.
+   **✅ Done** — `services/business_function.py` (the worker-agnostic surface) +
+   `api/bf_mcp.py` (the MCP transport).
 2. **Re-point `NativeBackend` to consume that API** instead of reaching into
-   services directly. Proves the protocol against our own runtime.
+   services directly. Proves the protocol against our own runtime. **✅ Done** —
+   the native loop assembles its mandate from `business_function.get_mandate`.
 3. **Make the initiative lifecycle async-first** (*offered → claimed →
    in-progress → reported → audited* with timeouts/reassignment) so a slow worker
-   (human or scheduled agent) is a first-class case, not an exception.
+   (human or scheduled agent) is a first-class case, not an exception. **✅ Done** —
+   `claim_initiative` (atomic) + a claim lease (`tasks.lease_expires_at`) reaped by
+   `release_expired_claims` on a cron.
 4. **Add `ConnectedBackend`** + a "connect your own agent" flow (per-function
    token + a template OpenClaw/Claude Code config). First external function goes
-   live behind a flag.
+   live behind a flag. **✅ Done** — `runtime/backends/connected.py`, the founder
+   runtime switch, and the mint-a-connection-token UX (off until a secret/Gateway
+   is configured).
 5. **Ship the managed OpenClaw Gateway** as the default internal-agent runtime;
-   make it the batteries-included binding.
+   make it the batteries-included binding. **✅ In-repo half done** — the default
+   binding is configurable (`ABOS_DEFAULT_AGENT_BACKEND`, auto-binding generated
+   functions to the connected runtime when a Gateway is set) and the persona
+   identity is per-tenant (`agentId = <company_id>:<function>`, [§6](#6-multi-tenancy)).
+   Standing up the Gateway *service* is deployment infra, not code.
 6. **Add the human binding** — a UI/channel surface where a person claims and
    reports initiatives for a function (reuses the async lifecycle from step 3 and
    the existing membership/decision machinery). Unlocks mixed teams +
-   import-existing-business.
+   import-existing-business. **✅ Done** — the `human` runtime + the user-authenticated
+   human-worker surface (`api/human_worker.py`) + the org-page "My work" panel.
 7. **Thin the core:** migrate capability tools out to worker-side; keep only
    business-state tools in Galaxia. Retire the in-house discovery/compaction
-   surface.
+   surface. **◻ Surface complete; deletion staged.** The Business-Function surface
+   now exposes the full [§2](#2-the-business-function-mcp-surface) toolset
+   (mandate, initiative lifecycle, `get_business_state`, `record_metric`,
+   `write_institutional_memory`, `post_update`, `request_decision`,
+   `request_budget`) — a connected worker reaches parity with the native loop, the
+   prerequisite to thinning. Per the [non-goals](#non-goals), the native tool
+   surface is **not** ripped out in one step: it stays the default while the
+   connected path is proven, and its capability tools retire *over time*. The
+   **capability split** is now explicit (see below): money-touching capabilities
+   stay Galaxia-brokered; everything else is the worker's own.
 
 Each step is shippable and reversible; no big-bang cutover.
+
+**The capability split (the boundary step 7 draws).** Business-state and
+governance tools live in Galaxia and are exposed over the Business-Function surface
+to *every* worker binding — mandate, initiatives, metrics, institutional memory,
+mission-log updates, and founder escalations (`request_decision` / `request_budget`,
+which only *raise* a decision; Galaxia + the founder resolve it, [§9](#9-security-considerations)).
+Money-touching capabilities (media generation, ads, domains, paid data) stay
+**Galaxia-brokered and metered** via the existing `metered_external` path
+([§4](#4-capability-brokering--the-budget-model-the-load-bearing-decision)).
+Everything else — files, web, generic tools, the think→act loop, tool discovery,
+context compaction — is the **worker's own**, and the native loop's in-house
+versions of those retire as the connected runtime becomes the default.
 
 ## 9. Security considerations
 

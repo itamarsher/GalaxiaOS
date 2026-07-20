@@ -154,6 +154,68 @@ async def test_request_budget_clears_within_and_escalates_over(session_factory):
         assert (await db.get(Task, task_id)).status is TaskStatus.waiting_approval
 
 
+@requires_db
+async def test_request_decision_escalates_and_parks_only_its_own_initiative(session_factory):
+    from app.models import DecisionRequest
+    from app.models.enums import DecisionKind, DecisionStatus
+
+    company_id = await _company(session_factory)
+    async with session_factory() as db:
+        agent = await _agent(db, company_id)
+        other = await _agent(db, company_id, role=AgentRole.product, name="Product")
+        run = await _run(db, company_id)
+        mine = await _task(db, company_id, run, agent.id, status=TaskStatus.running,
+                           goal="ship it", created_at=_T0)
+        theirs = await _task(db, company_id, run, other.id, status=TaskStatus.running,
+                             goal="not mine", created_at=_T0)
+        await db.commit()
+        agent_id, mine_id, theirs_id = agent.id, mine.id, theirs.id
+
+    # A general escalation parks the worker's own initiative and raises a pending decision.
+    async with session_factory() as db:
+        r = await bf.request_decision(db, company_id=company_id, agent_id=agent_id,
+                                      summary="Pivot the ICP?", kind="strategy",
+                                      initiative_id=mine_id)
+        await db.commit()
+        assert r["escalated"] is True and r["kind"] == "strategy" and r["initiative_parked"] is True
+        dec = (await db.scalars(
+            select(DecisionRequest).where(DecisionRequest.company_id == company_id)
+        )).one()
+        assert dec.kind is DecisionKind.strategy and dec.status is DecisionStatus.pending
+        assert (await db.get(Task, mine_id)).status is TaskStatus.waiting_approval
+
+    # An unknown/spend kind falls back to risky_action, and another function's task
+    # is never parked by this worker (scoped like report_result).
+    async with session_factory() as db:
+        r = await bf.request_decision(db, company_id=company_id, agent_id=agent_id,
+                                      summary="hmm", kind="spend_approval", initiative_id=theirs_id)
+        await db.commit()
+        assert r["kind"] == "risky_action" and r["initiative_parked"] is False
+        assert (await db.get(Task, theirs_id)).status is TaskStatus.running
+
+
+@requires_db
+async def test_get_business_state_reports_company_and_workload(session_factory):
+    company_id = await _company(session_factory)
+    async with session_factory() as db:
+        agent = await _agent(db, company_id)
+        run = await _run(db, company_id)
+        await _task(db, company_id, run, agent.id, status=TaskStatus.running,
+                    goal="a", created_at=_T0)
+        await _task(db, company_id, run, agent.id, status=TaskStatus.queued,
+                    goal="b", created_at=_T0)
+        await _task(db, company_id, run, agent.id, status=TaskStatus.queued,
+                    goal="c", created_at=_T0)
+        await db.commit()
+        agent_id = agent.id
+
+    async with session_factory() as db:
+        state = await bf.get_business_state(db, company_id=company_id, agent_id=agent_id)
+        assert state.company_name == "T" and state.company_status == "active"
+        assert state.function == "growth"
+        assert state.initiatives_running == 1 and state.initiatives_queued == 2
+
+
 # ── get_mandate ───────────────────────────────────────────────────────────────
 @requires_db
 async def test_get_mandate_assembles_from_business_state(session_factory):

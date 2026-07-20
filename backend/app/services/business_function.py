@@ -28,18 +28,24 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 from pydantic import BaseModel
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.models import Agent, DecisionRequest, Mission, Task
+from app.models import Agent, Company, DecisionRequest, Mission, Task
 from app.models.enums import DecisionKind, DecisionStatus, TaskStatus
 from app.services import budget as budget_svc
 from app.services import chat as chat_svc
 from app.services import data_policy
 from app.services import metrics as metrics_svc
+from app.services import mission_log as mission_log_svc
 from app.services import objectives as objectives_svc
 from app.services import tasks as task_svc
+
+#: General founder decisions a worker may raise over the surface. Spend goes through
+#: ``request_budget``; plan/hire/external-comm have their own dedicated flows, so a
+#: connected worker can't fabricate one of those out of band.
+_WORKER_DECISION_KINDS = frozenset({"risky_action", "strategy", "user_action"})
 
 #: Currency units mark a metric signal as financial data (revenue, spend, …). When a
 #: mandate is redacted for a non-privileged worker, these are the signals withheld.
@@ -103,6 +109,25 @@ class Initiative(BaseModel):
     status: str
     created_at: str
     budget: BudgetEnvelope
+
+
+class BusinessState(BaseModel):
+    """A read snapshot of the company + this function's current standing (RFC §2).
+
+    A superset of the mandate's live signals plus where the function stands right now
+    (how much work is queued vs in-flight) — what a worker checks to orient before
+    it acts, without re-deriving it from raw services.
+    """
+
+    company_id: uuid.UUID
+    company_name: str
+    company_status: str
+    function: str
+    objectives: str
+    metrics: str
+    budget: BudgetEnvelope
+    initiatives_queued: int
+    initiatives_running: int
 
 
 async def _budget_envelope(
@@ -441,5 +466,115 @@ async def request_budget(
         "escalated": True,
         "decision_id": str(decision.id),
         "shortfall_cents": shortfall,
+        "initiative_parked": parked,
+    }
+
+
+async def get_business_state(
+    db: AsyncSession, *, company_id: uuid.UUID, agent_id: uuid.UUID,
+    redact_for_access: bool = False,
+) -> BusinessState:
+    """Snapshot the company + this function's current standing (RFC 0001 §2).
+
+    Reuses :func:`get_mandate` for the live signals (so segmentation applies
+    identically) and adds the company header + how much work this function has
+    queued vs in-flight. Read-only.
+    """
+    mandate = await get_mandate(
+        db, company_id=company_id, agent_id=agent_id, redact_for_access=redact_for_access
+    )
+    company = await db.get(Company, company_id)
+
+    async def _count(status: TaskStatus) -> int:
+        return int(await db.scalar(
+            select(func.count())
+            .select_from(Task)
+            .where(Task.company_id == company_id, Task.agent_id == agent_id,
+                   Task.status == status)
+        ) or 0)
+
+    return BusinessState(
+        company_id=company_id,
+        company_name=company.name if company is not None else "",
+        company_status=company.status.value if company is not None else "",
+        function=mandate.function,
+        objectives=mandate.objectives,
+        metrics=mandate.metrics,
+        budget=mandate.budget,
+        initiatives_queued=await _count(TaskStatus.queued),
+        initiatives_running=await _count(TaskStatus.running),
+    )
+
+
+async def post_update(
+    db: AsyncSession, *, company_id: uuid.UUID, agent_id: uuid.UUID, text: str
+) -> dict:
+    """Post a milestone to the founder-facing mission log as this function (RFC §2).
+
+    A thin wrapper over ``mission_log.record`` — the same live log the native loop
+    posts to — so a connected worker's progress shows up in the founder's feed. The
+    log is best-effort (Redis-backed, self-trimming), so a failed post is reported,
+    not raised. The caller need not commit (no DB write)."""
+    text = (text or "").strip()
+    if not text:
+        raise ValueError("a mission update needs a short headline")
+    agent = await db.get(Agent, agent_id)
+    if agent is None or agent.company_id != company_id:
+        raise ValueError(f"agent {agent_id} not found for company {company_id}")
+    entry = await mission_log_svc.record(
+        company_id, agent_id=agent_id, agent_name=agent.name,
+        role=agent.role.value, headline=text, kind="update",
+    )
+    return {"posted": entry is not None}
+
+
+async def request_decision(
+    db: AsyncSession,
+    *,
+    company_id: uuid.UUID,
+    agent_id: uuid.UUID,
+    summary: str,
+    kind: str = "risky_action",
+    initiative_id: uuid.UUID | None = None,
+) -> dict:
+    """Escalate a general founder decision (RFC 0001 §2 / §9 — governance stays here).
+
+    The worker-agnostic counterpart to the native loop's ``escalate_to_founder``: it
+    raises a **pending** ``DecisionRequest`` into the founder's inbox (routed like any
+    other decision) but never resolves one — only Galaxia + the founder can. Spend
+    goes through :func:`request_budget`; plan/hire/external-comm have their own flows,
+    so ``kind`` is confined to the general set a worker may raise. When
+    ``initiative_id`` is given the initiative parks (``waiting_approval``, lease
+    released) so it's re-offered once the founder resolves it. The caller commits."""
+    summary = (summary or "").strip()
+    if not summary:
+        raise ValueError("a decision request needs a summary of what the founder must decide")
+    dkind = kind if kind in _WORKER_DECISION_KINDS else "risky_action"
+    decision = DecisionRequest(
+        company_id=company_id,
+        agent_id=agent_id,
+        task_id=initiative_id,
+        kind=DecisionKind(dkind),
+        summary=summary,
+        payload={"tool": "request_decision"},
+        status=DecisionStatus.pending,
+    )
+    db.add(decision)
+    await db.flush()
+    await chat_svc.attach_decision_dm(db, decision=decision)
+
+    parked = False
+    if initiative_id is not None:
+        task = await db.get(Task, initiative_id)
+        # Only the function's own initiative can be parked (scoped like report_result).
+        if task is not None and task.company_id == company_id and task.agent_id == agent_id:
+            task.lease_expires_at = None  # end the claim; re-offered on resolution
+            task.status = TaskStatus.waiting_approval
+            await db.flush()
+            parked = True
+    return {
+        "escalated": True,
+        "decision_id": str(decision.id),
+        "kind": dkind,
         "initiative_parked": parked,
     }
