@@ -13,13 +13,13 @@ service over the business services that already exist (``objectives``, ``budget`
 orchestration layer — *no new business logic* — so that every worker binding drives
 one contract instead of reaching into internals:
 
-- the native loop consumes it directly (migration step 2);
-- an MCP server exposes it to external agents (later);
+- the native loop consumes it directly for its mandate (migration step 2, done —
+  see ``app.runtime.backends.native``);
+- the MCP server (``app.api.bf_mcp``) exposes it to external/connected agents;
 - a UI/channel renders it for a human worker (later).
 
-No transport and no behaviour change live here yet: this defines and implements the
-operations and is covered by unit tests. Wiring the native loop to consume it is a
-separate, follow-up change.
+This module defines and implements the operations (no behaviour change vs. the
+services it composes) and is covered by unit tests; the transports above build on it.
 """
 
 from __future__ import annotations
