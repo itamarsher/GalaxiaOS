@@ -1,0 +1,12 @@
+{
+  "gateway": {
+    "bind": "0.0.0.0",
+    "port": 18789,
+    "auth": { "mode": "token", "token": "${OPENCLAW_GATEWAY_TOKEN}" },
+    "http": { "endpoints": { "chatCompletions": { "enabled": true } } }
+  },
+  "agents": {
+    "defaults": { "model": { "primary": "anthropic/claude-sonnet-4-6" } },
+    "list": [ { "id": "default", "default": true } ]
+  }
+}
