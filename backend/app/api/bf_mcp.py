@@ -107,6 +107,40 @@ _TOOL_SPECS = [
         },
     },
     {
+        "name": "get_business_state",
+        "description": "A read snapshot of the company + your function right now: status, "
+        "objectives, current metrics, budget envelope, and how many initiatives you have "
+        "queued vs in-flight. Orient with this before you act.",
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "post_update",
+        "description": "Post a one-line milestone to the founder-facing mission log as your "
+        "function, so your progress shows up in their live feed. Use for real milestones, "
+        "not routine chatter.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"text": {"type": "string"}},
+            "required": ["text"],
+        },
+    },
+    {
+        "name": "request_decision",
+        "description": "Escalate a non-budget decision to the founder (governance stays with "
+        "Galaxia — you can ask, only the founder resolves). kind is one of "
+        "risky_action|strategy|user_action (default risky_action). Pass initiative_id to park "
+        "the initiative until they decide; use request_budget for spend.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "summary": {"type": "string"},
+                "kind": {"type": "string"},
+                "initiative_id": {"type": "string"},
+            },
+            "required": ["summary"],
+        },
+    },
+    {
         "name": "request_budget",
         "description": "Ask whether you may spend an amount (cents). A spend within the "
         "founder's remaining budget clears immediately ({cleared:true}) — proceed. Over "
@@ -278,6 +312,29 @@ async def _call_tool(db, company_id, agent_id, mid, params: dict) -> dict:
             )
             await db.commit()
             return _ok(mid, _content({"ok": True, "memory_id": str(entry.id)}))
+
+        if name == "get_business_state":
+            state = await business_function.get_business_state(
+                db, company_id=company_id, agent_id=agent_id, redact_for_access=True
+            )
+            return _ok(mid, _content(state.model_dump(mode="json")))
+
+        if name == "post_update":
+            result = await business_function.post_update(
+                db, company_id=company_id, agent_id=agent_id, text=str(args["text"])
+            )
+            return _ok(mid, _content(result))
+
+        if name == "request_decision":
+            iid = args.get("initiative_id")
+            result = await business_function.request_decision(
+                db, company_id=company_id, agent_id=agent_id,
+                summary=str(args["summary"]),
+                kind=str(args.get("kind") or "risky_action"),
+                initiative_id=uuid.UUID(str(iid)) if iid else None,
+            )
+            await db.commit()
+            return _ok(mid, _content(result))
 
         if name == "request_budget":
             iid = args.get("initiative_id")

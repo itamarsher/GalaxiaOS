@@ -152,7 +152,8 @@ async def test_mcp_endpoint_full_lifecycle(session_factory, monkeypatch):
         # Discovery.
         tools = {t["name"] for t in _rpc(client, token, "tools/list").json()["result"]["tools"]}
         assert {"get_mandate", "get_next_initiative", "claim_initiative", "report_result",
-                "record_metric", "write_memory", "request_budget"} <= tools
+                "record_metric", "write_memory", "request_budget",
+                "get_business_state", "post_update", "request_decision"} <= tools
 
         # A within-budget spend clears synchronously (the $100 monthly budget covers $10).
         cleared, _ = _tool(client, token, "request_budget", {"amount_cents": 1000, "reason": "a tool"})
@@ -172,6 +173,16 @@ async def test_mcp_endpoint_full_lifecycle(session_factory, monkeypatch):
         rec, _ = _tool(client, token, "record_metric",
                        {"name": "signups", "value": 12, "unit": "users", "note": "launch day"})
         assert rec["ok"] is True and rec["metric_id"]
+
+        # It can read a full business-state snapshot: it just claimed one initiative.
+        state, _ = _tool(client, token, "get_business_state")
+        assert state["function"] == "growth" and state["company_name"] == "T"
+        assert state["initiatives_running"] == 1
+
+        # It can escalate a non-budget decision to the founder (governance stays here).
+        dec, _ = _tool(client, token, "request_decision",
+                       {"summary": "Pause the paid channel?", "kind": "strategy"})
+        assert dec["escalated"] is True and dec["kind"] == "strategy" and dec["decision_id"]
 
         # Report it done.
         done, _ = _tool(client, token, "report_result",
