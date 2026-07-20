@@ -51,11 +51,45 @@ async def _company(session_factory, *, limit_cents=10_000):
         return company.id
 
 
-async def _agent(db, company_id, *, role=AgentRole.growth, name="Growth Lead", budget=5_000):
-    agent = Agent(company_id=company_id, role=role, name=name, monthly_budget_cents=budget)
+async def _agent(db, company_id, *, role=AgentRole.growth, name="Growth Lead", budget=5_000,
+                 access_labels=None):
+    agent = Agent(company_id=company_id, role=role, name=name, monthly_budget_cents=budget,
+                  access_labels=access_labels)
     db.add(agent)
     await db.flush()
     return agent
+
+
+@requires_db
+async def test_mandate_redacts_financial_metrics_for_uncleared_external_worker(session_factory):
+    """redact_for_access withholds money-denominated signals from a worker lacking the
+    financial label; native (unredacted) and financial-cleared workers get them."""
+    from app.models import MetricSignal
+    from app.models.enums import MetricSource
+
+    company_id = await _company(session_factory)
+    async with session_factory() as db:
+        db.add(MetricSignal(company_id=company_id, name="revenue", value=1234.0, unit="USD",
+                            source=MetricSource.agent))
+        db.add(MetricSignal(company_id=company_id, name="signups", value=42.0, unit="users",
+                            source=MetricSource.agent))
+        uncleared = await _agent(db, company_id, access_labels=[])
+        cleared = await _agent(db, company_id, name="Fin", access_labels=["financial"])
+        await db.commit()
+        uncleared_id, cleared_id = uncleared.id, cleared.id
+
+    async with session_factory() as db:
+        # Native / unredacted → full metrics.
+        full = await bf.get_mandate(db, company_id=company_id, agent_id=uncleared_id)
+        assert "revenue" in full.metrics and "signups" in full.metrics
+        # External + uncleared → money signal withheld, ops signal kept.
+        red = await bf.get_mandate(db, company_id=company_id, agent_id=uncleared_id,
+                                   redact_for_access=True)
+        assert "revenue" not in red.metrics and "signups" in red.metrics
+        # External + financial-cleared → money signal kept.
+        ok = await bf.get_mandate(db, company_id=company_id, agent_id=cleared_id,
+                                  redact_for_access=True)
+        assert "revenue" in ok.metrics
 
 
 async def _run(db, company_id):

@@ -36,9 +36,14 @@ from app.models import Agent, Mission, Task
 from app.models.enums import TaskStatus
 from app.services import budget as budget_svc
 from app.services import chat as chat_svc
+from app.services import data_policy
 from app.services import metrics as metrics_svc
 from app.services import objectives as objectives_svc
 from app.services import tasks as task_svc
+
+#: Currency units mark a metric signal as financial data (revenue, spend, …). When a
+#: mandate is redacted for a non-privileged worker, these are the signals withheld.
+_MONEY_UNITS = frozenset({"USD", "EUR", "GBP", "usd", "eur", "gbp", "$", "€", "£"})
 
 # Active task states, in the order a worker cares about: an already-running
 # initiative is the current one; otherwise the oldest queued piece is next.
@@ -127,13 +132,21 @@ async def _budget_envelope(
 
 
 async def get_mandate(
-    db: AsyncSession, *, company_id: uuid.UUID, agent_id: uuid.UUID
+    db: AsyncSession, *, company_id: uuid.UUID, agent_id: uuid.UUID,
+    redact_for_access: bool = False,
 ) -> Mandate:
     """Assemble the function's mandate from the current business state.
 
     Reuses the same services the native loop reads (``objectives``, ``metrics``,
     ``budget``) plus the mission/org rows, so the briefing a worker receives is
     identical to what an in-process agent reasons from.
+
+    ``redact_for_access`` applies data segmentation to the payload — set by the
+    paths that hand the mandate to an EXTERNAL/connected worker (it leaves Galaxia's
+    boundary), so a worker whose agent lacks the ``financial`` label doesn't receive
+    money-denominated metric signals. A native in-process agent gets its full
+    function context (its own briefing), matching the file/CRM/memory gates that
+    fire at the tool boundary, not on the agent's own mandate. RFC 0001.
     """
     agent = await db.get(Agent, agent_id)
     if agent is None:
@@ -149,6 +162,10 @@ async def get_mandate(
     signals = await metrics_svc.latest_signals(
         db, company_id=company_id, limit=settings.metrics_recall_limit
     )
+    if redact_for_access and not data_policy.agent_can_access(agent, ["financial"]):
+        # Withhold money-denominated (financial) signals from a worker not cleared
+        # for them before the mandate leaves the boundary.
+        signals = [s for s in signals if (s.unit or "") not in _MONEY_UNITS]
     return Mandate(
         company_id=company_id,
         function=agent.role.value,

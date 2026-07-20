@@ -5,6 +5,7 @@ from __future__ import annotations
 import uuid
 
 from fastapi import APIRouter, HTTPException, status
+from pydantic import BaseModel
 from sqlalchemy import select
 
 from app.deps import CompanyDep, CurrentUser, DbDep
@@ -19,7 +20,7 @@ from app.models import (
     SiteDomain,
     Task,
 )
-from app.models.enums import AgentStatus, DecisionStatus, TaskStatus
+from app.models.enums import AgentBackendType, AgentRole, AgentStatus, DecisionStatus, TaskStatus
 from app.runtime.prompts import ROLE_DESCRIPTIONS, effective_playbook
 from app.runtime.transcript import transcript_lines
 from app.schemas import (
@@ -48,6 +49,7 @@ from app.schemas import (
 )
 from app.services import company_reset as company_reset_svc
 from app.services import feature_requests as fr_svc
+from app.services import involvement as involvement_svc
 from app.services import memory as memory_svc
 from app.services import runs as runs_svc
 from app.services import sites as sites_svc
@@ -264,6 +266,44 @@ async def pause_agent(company: CompanyDep, agent_id: uuid.UUID, db: DbDep):
 @router.post("/agents/{agent_id}/resume", response_model=AgentOut)
 async def resume_agent(company: CompanyDep, agent_id: uuid.UUID, db: DbDep):
     return await _set_agent_status(db, company.id, agent_id, AgentStatus.active)
+
+
+class AgentBackendUpdate(BaseModel):
+    backend_type: str  # "native" | "external"
+
+
+@router.put("/agents/{agent_id}/backend", response_model=AgentOut)
+async def set_agent_backend(
+    company: CompanyDep, agent_id: uuid.UUID, body: AgentBackendUpdate, db: DbDep, user: CurrentUser
+):
+    """Founder-only: choose an agent's execution runtime — ``native`` (in-process
+    think→act loop) or ``external`` (a connected worker / OpenClaw Gateway that runs
+    the function over the Business-Function surface). The CEO always runs natively
+    (it orchestrates the company), and a marketplace agent's runtime is managed by
+    its listing. An ``external`` agent needs a connected worker bound, else its tasks
+    fail with a clear 'no runtime connected' message (RFC 0001)."""
+    if not await involvement_svc.is_founder(db, company_id=company.id, user_id=user.id):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "only the founder can change an agent's runtime")
+    try:
+        target = AgentBackendType(body.backend_type)
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "backend_type must be 'native' or 'external'") from exc
+    if target not in (AgentBackendType.native, AgentBackendType.external):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "only 'native' or 'external' can be set here")
+    agent = await db.scalar(
+        select(Agent).where(Agent.company_id == company.id, Agent.id == agent_id)
+    )
+    if agent is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Agent not found")
+    if agent.backend_type is AgentBackendType.marketplace:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, "a marketplace agent's runtime is managed by its listing"
+        )
+    if agent.role is AgentRole.ceo and target is AgentBackendType.external:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "the CEO runs natively (it orchestrates the company)")
+    agent.backend_type = target
+    await db.commit()
+    return _agent_out(agent)
 
 
 @router.get("/sites", response_model=list[SiteOut])
