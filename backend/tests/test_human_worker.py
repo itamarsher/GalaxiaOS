@@ -57,6 +57,7 @@ class _Ids:
     human_agent_id: uuid.UUID
     native_agent_id: uuid.UUID
     task_id: uuid.UUID
+    native_task_id: uuid.UUID
 
 
 async def _seed(session_factory, *, backend=AgentBackendType.human) -> _Ids:
@@ -81,9 +82,13 @@ async def _seed(session_factory, *, backend=AgentBackendType.human) -> _Ids:
         run.root_run_id = run.id
         task = Task(company_id=company.id, run_id=run.id, root_run_id=run.id, agent_id=human.id,
                     goal="publish the launch page", status=TaskStatus.queued)
-        db.add(task)
+        # A task owned by the *native* function — must not be reportable via the human one.
+        native_task = Task(company_id=company.id, run_id=run.id, root_run_id=run.id,
+                           agent_id=native.id, goal="ship the API", status=TaskStatus.running)
+        db.add_all([task, native_task])
         await db.commit()
-        return _Ids(member.id, outsider.id, company.id, human.id, native.id, task.id)
+        return _Ids(member.id, outsider.id, company.id, human.id, native.id,
+                    task.id, native_task.id)
 
 
 @requires_db
@@ -124,6 +129,17 @@ async def test_human_worker_guards(session_factory):
 
         # An agent-staffed (non-human) function isn't a person's to work.
         assert client.get(native_base, headers=_auth(ids.member_id)).status_code == 400
+
+        # A human worker on one function can't finalize another function's task by
+        # supplying its UUID — reports are scoped to the owning function.
+        r = client.post(f"{human_base}/report", headers=_auth(ids.member_id),
+                        json={"initiative_id": str(ids.native_task_id), "outcome": "done",
+                              "summary": "not mine"})
+        assert r.status_code == 400
+
+    async with session_factory() as db:
+        # The native function's task is untouched — still running, not finalized.
+        assert (await db.get(Task, ids.native_task_id)).status is TaskStatus.running
 
 
 @requires_db

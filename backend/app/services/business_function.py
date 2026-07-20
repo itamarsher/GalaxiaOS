@@ -298,6 +298,7 @@ async def report_result(
     task_id: uuid.UUID,
     outcome: str,
     output: dict,
+    agent_id: uuid.UUID | None = None,
 ) -> int:
     """Report the outcome of an initiative; returns its realised cost (0 if parked).
 
@@ -311,12 +312,20 @@ async def report_result(
     escalated to the founder's DM (the unified decision inbox) — the transcript is
     kept so the worker can resume once the founder replies. ``output`` must carry a
     ``summary`` describing what the founder must decide. The caller commits.
+
+    ``agent_id`` scopes the report to the function that owns the initiative: a worker
+    (external token, or a human on one function slot) may only finalize *its own*
+    function's task, mirroring :func:`claim_initiative`. Omit it only for a trusted
+    caller that already owns the task (the push backend runs the agent's own task).
     """
     if outcome not in _OUTCOMES:
         raise ValueError(f"unknown outcome {outcome!r}; expected one of {sorted(_OUTCOMES)}")
     task = await db.get(Task, task_id)
     if task is None or task.company_id != company_id:
         raise ValueError(f"task {task_id} not found for company {company_id}")
+    if agent_id is not None and task.agent_id != agent_id:
+        # This initiative belongs to another function — not this worker's to report.
+        raise ValueError(f"initiative {task_id} does not belong to this function")
 
     # Reporting ends the claim: drop any lease so a reported/parked initiative is
     # never reclaimed by release_expired_claims.

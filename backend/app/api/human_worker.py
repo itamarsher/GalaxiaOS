@@ -92,7 +92,7 @@ async def claim_work(company: CompanyDep, agent_id: uuid.UUID, body: ClaimBody, 
 async def report_work(company: CompanyDep, agent_id: uuid.UUID, body: ReportBody, db: DbDep):
     """Report the outcome of an initiative — closes the loop exactly as an agent's
     ``report_result`` does (done/failed/blocked finalize; needs_decision escalates)."""
-    await _human_function(db, company_id=company.id, agent_id=agent_id)  # 404/400 guard
+    agent = await _human_function(db, company_id=company.id, agent_id=agent_id)
     try:
         cost = await business_function.report_result(
             db,
@@ -100,6 +100,7 @@ async def report_work(company: CompanyDep, agent_id: uuid.UUID, body: ReportBody
             task_id=body.initiative_id,
             outcome=body.outcome,
             output={"summary": body.summary},
+            agent_id=agent.id,  # only this function's own initiative is reportable
         )
     except ValueError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc

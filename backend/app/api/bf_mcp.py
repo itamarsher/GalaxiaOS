@@ -245,6 +245,7 @@ async def _call_tool(db, company_id, agent_id, mid, params: dict) -> dict:
                 task_id=uuid.UUID(str(args["initiative_id"])),
                 outcome=str(args["outcome"]),
                 output={"summary": str(args.get("summary") or "")},
+                agent_id=agent_id,  # a token scopes reports to its own function
             )
             await db.commit()
             return _ok(mid, _content({"ok": True, "cost_cents": cost}))
