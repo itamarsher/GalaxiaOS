@@ -79,6 +79,16 @@ export interface Agent {
   system_prompt: string; role_description: string;
   access_labels: string[] | null;
 }
+export interface WorkMandate {
+  function: string; function_title: string; mission: string;
+  objectives: string; metrics: string; constraints: string[];
+  budget: { function_remaining_cents: number | null; company_remaining_cents: number | null };
+}
+export interface WorkInitiative { id: string; goal: string; status: string; created_at: string }
+export interface HumanWork {
+  function: string; function_title: string;
+  mandate: WorkMandate; initiative: WorkInitiative | null;
+}
 export interface DataLabel { key: string; name: string; description: string | null; is_default: boolean }
 export interface Member {
   user_id: string; email: string; name: string | null; role: string;
@@ -576,7 +586,9 @@ export const api = {
     }),
 
   // Connected runtime — switch an agent to an external worker + mint its token.
-  setAgentBackend: (companyId: string, agentId: string, backend_type: "native" | "external") =>
+  setAgentBackend: (
+    companyId: string, agentId: string, backend_type: "native" | "external" | "human",
+  ) =>
     req<Agent>(`/companies/${companyId}/agents/${agentId}/backend`, {
       method: "PUT",
       body: JSON.stringify({ backend_type }),
@@ -585,6 +597,22 @@ export const api = {
     req<{ function: string; token: string; mcp_url: string }>(
       `/companies/${companyId}/functions/${agentId}/connection`,
       { method: "POST" },
+    ),
+
+  // Human worker binding — a member staffs a function slot (RFC 0001 step 6).
+  functionWork: (companyId: string, agentId: string) =>
+    req<HumanWork>(`/companies/${companyId}/functions/${agentId}/work`),
+  claimWork: (companyId: string, agentId: string, initiative_id: string) =>
+    req<{ claimed: boolean; initiative: WorkInitiative | null }>(
+      `/companies/${companyId}/functions/${agentId}/work/claim`,
+      { method: "POST", body: JSON.stringify({ initiative_id }) },
+    ),
+  reportWork: (
+    companyId: string, agentId: string, initiative_id: string, outcome: string, summary: string,
+  ) =>
+    req<{ ok: boolean; cost_cents: number }>(
+      `/companies/${companyId}/functions/${agentId}/work/report`,
+      { method: "POST", body: JSON.stringify({ initiative_id, outcome, summary }) },
     ),
 
   // Team — the roster, email invites, and per-member involvement (founder-only).
