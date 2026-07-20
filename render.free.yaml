@@ -17,6 +17,12 @@
 # instance is awake. For continuous operation, hit `/health` on a schedule
 # (e.g. cron-job.org / UptimeRobot) or graduate to the paid `render.yaml`.
 #
+# The managed OpenClaw Gateway (`abos-openclaw`, RFC 0001 §5) is NOT part of the
+# free tier — a private service that stays warm is a paid resource. On free tier
+# the fleet runs on the native in-process loop (the default); to use the connected
+# runtime, graduate to the paid `render.yaml` or point ABOS_OPENCLAW_BASE_URL at
+# your own Gateway. See `gateway/README.md`.
+#
 # Apply: Render Dashboard → "New +" → "Blueprint" → select this file. After the
 # first apply, set the `sync:false` secrets in the dashboard.
 

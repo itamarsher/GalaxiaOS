@@ -63,5 +63,28 @@ services:
     depends_on:
       - api
 
+  # Managed OpenClaw Gateway — the internal-agent runtime (RFC 0001 §5). Opt-in:
+  # `docker compose --profile gateway up`. There is deliberately NO `ports:`
+  # mapping, so it is NOT published to the host — reachable only from the other
+  # compose services at http://openclaw:8080, mirroring the prod private-service
+  # posture. Point the API/worker at it by setting these in your .env:
+  #   ABOS_OPENCLAW_BASE_URL=http://openclaw:8080
+  #   ABOS_OPENCLAW_API_KEY=${OPENCLAW_GATEWAY_TOKEN}
+  openclaw:
+    profiles: ["gateway"]
+    build:
+      context: ./gateway
+      args:
+        # Override with your pinned OpenClaw image; falls back to the Dockerfile ARG.
+        OPENCLAW_IMAGE: ${OPENCLAW_IMAGE:-ghcr.io/openclaw/openclaw:latest}
+    expose:
+      - "8080"
+    environment:
+      OPENCLAW_PORT: "8080"
+      OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN:-dev-gateway-token}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+
 volumes:
   pgdata:
