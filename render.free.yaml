@@ -17,11 +17,11 @@
 # instance is awake. For continuous operation, hit `/health` on a schedule
 # (e.g. cron-job.org / UptimeRobot) or graduate to the paid `render.yaml`.
 #
-# The managed OpenClaw Gateway (`abos-openclaw`, RFC 0001 §5) is NOT part of the
-# free tier — a private service that stays warm is a paid resource. On free tier
-# the fleet runs on the native in-process loop (the default); to use the connected
-# runtime, graduate to the paid `render.yaml` or point ABOS_OPENCLAW_BASE_URL at
-# your own Gateway. See `gateway/README.md`.
+# The managed OpenClaw Gateway (`abos-openclaw`, RFC 0001 §5) runs here as a normal
+# PUBLIC web service (free tier has no private services), so its security rests on
+# the bearer token every request must carry — not network isolation. For a truly
+# internal-only gateway (no public URL), graduate to the paid `render.yaml`, which
+# runs it as a private service. See `gateway/README.md`.
 #
 # Apply: Render Dashboard → "New +" → "Blueprint" → select this file. After the
 # first apply, set the `sync:false` secrets in the dashboard.
@@ -88,7 +88,46 @@ services:
       # (comma-separated for multiple), e.g. https://abos-web.onrender.com.
       - key: ABOS_CORS_ALLOW_ORIGINS
         sync: false
+      # Connected (OpenClaw) runtime. On free tier the gateway is a normal (public)
+      # web service, so security rests on the bearer token (defense-in-depth), not
+      # network isolation. Set the base URL to the gateway's own https URL after it
+      # deploys (Render can't prepend a scheme to a fromService host); the bearer is
+      # auto-shared from the gateway so the two always match. Empty ⇒ an `external`
+      # agent reports "no runtime connected".
+      - key: ABOS_OPENCLAW_BASE_URL
+        sync: false   # e.g. https://abos-openclaw.onrender.com
+      - key: ABOS_OPENCLAW_API_KEY
+        fromService:
+          type: web
+          name: abos-openclaw
+          envVarKey: OPENCLAW_GATEWAY_TOKEN
       - fromGroup: abos-shared
+
+  # Managed OpenClaw Gateway — the internal-agent runtime (RFC 0001 §5), free-tier
+  # variant. Free tier has no private services, so this is a normal PUBLIC web
+  # service; the security boundary is the bearer token (gateway.auth.token, from
+  # OPENCLAW_GATEWAY_TOKEN) that every request must carry. Built from gateway/, which
+  # bakes the OpenClaw config that enables the OpenAI API + binds 0.0.0.0:18789.
+  # NB: free web services spin down after ~15 min idle — the first agent run after
+  # idle cold-starts the gateway. See gateway/README.md.
+  - type: web
+    name: abos-openclaw
+    runtime: docker
+    plan: free
+    dockerfilePath: ./gateway/Dockerfile
+    dockerContext: ./gateway
+    autoDeploy: false
+    healthCheckPath: /healthz
+    envVars:
+      # Render routes external traffic to this port; the gateway config binds it.
+      - key: PORT
+        value: "18789"
+      # The bearer every request must carry. Generated here + shared to abos-api.
+      - key: OPENCLAW_GATEWAY_TOKEN
+        generateValue: true
+      # BYOK model provider — the LLM the personas reason with (set in dashboard).
+      - key: ANTHROPIC_API_KEY
+        sync: false
 
   # Local neural embedder (fastembed/ONNX) on its own free instance, so its
   # ~150-200MB model sits in a separate 512MB budget instead of the API's. Same

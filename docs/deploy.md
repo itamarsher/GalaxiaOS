@@ -21,7 +21,7 @@ Actions** → tests gate deploys, which fire via **Render Deploy Hooks**.
 | `abos-api` | web (docker) | `backend/Dockerfile` | `/health/ready` healthcheck; `preDeployCommand: alembic upgrade head` |
 | `abos-worker` | worker (docker) | `backend/Dockerfile` | command `arq app.runtime.worker.WorkerSettings` |
 | `abos-web` | web (docker) | `frontend/Dockerfile.prod` | `NEXT_PUBLIC_API_BASE_URL` baked at build |
-| `abos-openclaw` | **private service** (docker) | `gateway/Dockerfile` | internal-agent runtime (RFC 0001 §5); **no public URL** — see below |
+| `abos-openclaw` | **private service** (paid) / web (free) | `gateway/Dockerfile` (FROM `ghcr.io/openclaw/openclaw`) | internal-agent runtime (RFC 0001 §5); private (no public URL) on paid, bearer-protected public web on free — see below |
 
 ## First-time setup
 
@@ -46,36 +46,38 @@ Actions** → tests gate deploys, which fire via **Render Deploy Hooks**.
 ## Managed OpenClaw Gateway (internal-agent runtime)
 
 The `abos-openclaw` service (`gateway/`, RFC 0001 §5) is the batteries-included
-runtime for `external`-bound function slots. It is deployed as a Render **private
-service** (`type: pserv`), which is the security boundary the design turns on:
+runtime for `external`-bound function slots. We build **from the official upstream
+image** (`ghcr.io/openclaw/openclaw`) and bake one config file
+(`gateway/config/openclaw.json`) that enables OpenClaw's OpenAI-compatible API (off
+by default), binds `0.0.0.0:18789`, and requires bearer-token auth. Galaxia's
+`OpenClawWorker` calls `POST /v1/chat/completions` with
+`Authorization: Bearer <OPENCLAW_GATEWAY_TOKEN>`.
 
-- **Not externally accessible.** A private service has **no public URL** and is
-  reachable only from other services in the project over Render's private network.
-  `abos-api` / `abos-worker` reach it at `http://abos-openclaw:8080`; nothing on the
-  internet can. Never attach a custom/public domain to it.
-- **Authenticated even internally.** The Gateway requires
-  `Authorization: Bearer <OPENCLAW_GATEWAY_TOKEN>` on every request; Galaxia sends
-  the same value as `ABOS_OPENCLAW_API_KEY`. The blueprint generates the token on
-  `abos-openclaw` and shares it to the callers via `fromService`, so the secret
-  lives in one place. `gateway/entrypoint.sh` **fails closed** — no token, no boot.
+Two deployment shapes, by tier:
 
-Setup:
+- **Paid (`render.yaml`) — private service (`type: pserv`).** No public URL;
+  reachable only from `abos-api`/`abos-worker` over the private network at
+  `http://abos-openclaw:18789`. Auth is a second layer on top of network isolation.
+  This is the truly internal-only posture.
+- **Free (`render.free.yaml`) — public web service.** Free tier has no private
+  services, so the gateway has a public URL and **the bearer token is the security
+  boundary** (defense-in-depth). Set `ABOS_OPENCLAW_BASE_URL` on `abos-api` to the
+  gateway's `https://…onrender.com` URL after it deploys.
 
-1. **Pin the image.** Set the `OPENCLAW_IMAGE` build ARG (in `gateway/Dockerfile`)
-   to your chosen upstream OpenClaw Gateway image + tag (a digest in prod). This is
-   the one operator input; everything else is fixed in `gateway/`.
-2. **Set the provider secret(s)** on `abos-openclaw` (dashboard, `sync:false`):
-   at least one of `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `OPENROUTER_API_KEY`.
-3. **It's wired automatically.** `ABOS_OPENCLAW_BASE_URL` (`http://abos-openclaw:8080`)
-   and `ABOS_OPENCLAW_API_KEY` are set on `abos-api`/`abos-worker` by the blueprint,
-   so the push worker is bound as soon as `abos-openclaw` is up.
-4. **Make it the default (optional).** Set `ABOS_DEFAULT_AGENT_BACKEND=external` on
-   `abos-api`/`abos-worker` to auto-bind newly generated functions to the Gateway
-   (RFC §5); otherwise it's opt-in per agent via the founder's runtime toggle.
+Common setup:
 
-Verify it's internal-only: the service has no `onrender.com` URL; from inside
-`abos-api`, `curl http://abos-openclaw:8080/v1/models` returns `401` without the
-bearer and `200` with it. Full detail in `gateway/README.md`.
+1. **Pin the image.** Set the `OPENCLAW_IMAGE` build ARG (`gateway/Dockerfile`) to a
+   specific upstream tag/digest in prod (e.g. `ghcr.io/openclaw/openclaw:2026.2.26`).
+2. **Set the provider secret** on `abos-openclaw` (`ANTHROPIC_API_KEY`, `sync:false`).
+   `OPENCLAW_GATEWAY_TOKEN` is generated on the service and shared to `abos-api` as
+   `ABOS_OPENCLAW_API_KEY` — a missing token fails config load, so the gateway never
+   boots unauthenticated.
+3. **Make it the default (optional).** `ABOS_DEFAULT_AGENT_BACKEND=external` (RFC §5);
+   otherwise opt-in per agent via the founder's runtime toggle.
+
+Verify: `GET /healthz` → `200`; `POST /v1/chat/completions` with no bearer → `401`,
+with the bearer → accepted. On paid, the service has no `onrender.com` URL. Full
+detail in `gateway/README.md`.
 
 ## Migrations
 

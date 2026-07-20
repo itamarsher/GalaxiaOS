@@ -82,7 +82,7 @@ services:
       # connected"). Set ABOS_DEFAULT_AGENT_BACKEND=external to make it the default
       # binding for newly generated functions (RFC 0001 §5).
       - key: ABOS_OPENCLAW_BASE_URL
-        value: http://abos-openclaw:8080
+        value: http://abos-openclaw:18789
       - key: ABOS_OPENCLAW_API_KEY
         fromService:
           type: pserv
@@ -127,7 +127,7 @@ services:
       # Gateway binding must be present on the worker too (same private-network
       # address + shared bearer as the API).
       - key: ABOS_OPENCLAW_BASE_URL
-        value: http://abos-openclaw:8080
+        value: http://abos-openclaw:18789
       - key: ABOS_OPENCLAW_API_KEY
         fromService:
           type: pserv
@@ -138,7 +138,7 @@ services:
   # Managed OpenClaw Gateway — the internal-agent runtime for `external`-bound
   # functions (RFC 0001 §5). PRIVATE service: a `pserv` has NO public URL and is
   # reachable only from other services in this project over the private network, at
-  # http://abos-openclaw:8080. It is never exposed to the internet — do not attach a
+  # http://abos-openclaw:18789. It is never exposed to the internet — do not attach a
   # custom/public domain. Bearer auth (below) is a second, independent layer on top
   # of that isolation, so even an unauthenticated request that reached the private
   # network is rejected. See gateway/README.md.
@@ -150,24 +150,20 @@ services:
     dockerContext: ./gateway
     autoDeploy: false
     envVars:
-      # Fixed internal port; the callers below hardcode the matching URL.
-      - key: OPENCLAW_PORT
-        value: "8080"
       # The bearer Galaxia must present. Generated here and shared to the callers
       # as ABOS_OPENCLAW_API_KEY, so the shared secret lives in exactly one place
-      # and no human copies it. entrypoint.sh refuses to boot without it.
+      # and no human copies it. The config interpolates it; a missing token fails
+      # config load, so the gateway never boots unauthenticated.
       - key: OPENCLAW_GATEWAY_TOKEN
         generateValue: true
       # BYOK model provider(s) the personas reason with — set at least one in the
-      # dashboard (entrypoint.sh fails closed if none is present).
+      # dashboard. The gateway binds 0.0.0.0:18789 (from gateway/config/openclaw.json).
       - key: ANTHROPIC_API_KEY
         sync: false
       - key: OPENAI_API_KEY
         sync: false
       - key: OPENROUTER_API_KEY
         sync: false
-      - key: OPENCLAW_DEFAULT_MODEL
-        value: anthropic/claude-sonnet-5
 
   # Next.js frontend.
   - type: web
