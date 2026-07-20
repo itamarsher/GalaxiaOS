@@ -30,6 +30,7 @@ from app.api import (
     events,
     files,
     governance,
+    human_worker,
     integrations,
     invites,
     involvement,
@@ -145,6 +146,7 @@ def create_app() -> FastAPI:
     app.include_router(budget.router)
     app.include_router(governance.router)
     app.include_router(involvement.router)
+    app.include_router(human_worker.router)
     app.include_router(invites.router)
     app.include_router(data_labels.router)
     app.include_router(metrics.router)

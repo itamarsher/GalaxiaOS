@@ -269,7 +269,14 @@ async def resume_agent(company: CompanyDep, agent_id: uuid.UUID, db: DbDep):
 
 
 class AgentBackendUpdate(BaseModel):
-    backend_type: str  # "native" | "external"
+    backend_type: str  # "native" | "external" | "human"
+
+
+_SETTABLE_BACKENDS = (
+    AgentBackendType.native,
+    AgentBackendType.external,
+    AgentBackendType.human,
+)
 
 
 @router.put("/agents/{agent_id}/backend", response_model=AgentOut)
@@ -277,19 +284,25 @@ async def set_agent_backend(
     company: CompanyDep, agent_id: uuid.UUID, body: AgentBackendUpdate, db: DbDep, user: CurrentUser
 ):
     """Founder-only: choose an agent's execution runtime — ``native`` (in-process
-    think→act loop) or ``external`` (a connected worker / OpenClaw Gateway that runs
-    the function over the Business-Function surface). The CEO always runs natively
-    (it orchestrates the company), and a marketplace agent's runtime is managed by
-    its listing. An ``external`` agent needs a connected worker bound, else its tasks
-    fail with a clear 'no runtime connected' message (RFC 0001)."""
+    think→act loop), ``external`` (a connected worker / OpenClaw Gateway that runs
+    the function over the Business-Function surface), or ``human`` (a person on the
+    team staffs the function; its initiatives wait to be claimed and reported through
+    the human-worker surface). The CEO always runs natively (it orchestrates the
+    company), and a marketplace agent's runtime is managed by its listing. An
+    ``external`` agent needs a connected worker bound, else its tasks fail with a
+    clear 'no runtime connected' message (RFC 0001)."""
     if not await involvement_svc.is_founder(db, company_id=company.id, user_id=user.id):
         raise HTTPException(status.HTTP_403_FORBIDDEN, "only the founder can change an agent's runtime")
     try:
         target = AgentBackendType(body.backend_type)
     except ValueError as exc:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "backend_type must be 'native' or 'external'") from exc
-    if target not in (AgentBackendType.native, AgentBackendType.external):
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "only 'native' or 'external' can be set here")
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, "backend_type must be 'native', 'external', or 'human'"
+        ) from exc
+    if target not in _SETTABLE_BACKENDS:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, "only 'native', 'external', or 'human' can be set here"
+        )
     agent = await db.scalar(
         select(Agent).where(Agent.company_id == company.id, Agent.id == agent_id)
     )
@@ -299,7 +312,7 @@ async def set_agent_backend(
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST, "a marketplace agent's runtime is managed by its listing"
         )
-    if agent.role is AgentRole.ceo and target is AgentBackendType.external:
+    if agent.role is AgentRole.ceo and target is not AgentBackendType.native:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "the CEO runs natively (it orchestrates the company)")
     agent.backend_type = target
     await db.commit()

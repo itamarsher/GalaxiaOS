@@ -18,6 +18,7 @@ from app.config import settings
 from app.db import set_tenant
 from app.models import Agent, AgentRun, CircuitBreaker, Company, Task
 from app.models.enums import (
+    AgentBackendType,
     AgentRole,
     AgentStatus,
     BreakerState,
@@ -221,6 +222,13 @@ async def run_task(ctx: RuntimeContext, task_id: uuid.UUID) -> dict:
             await breakers.block_task(db, task, "agent paused")
             await db.commit()
             return {"status": "blocked", "reason": "agent paused"}
+
+        if agent.backend_type is AgentBackendType.human:
+            # A human-staffed function is never push-dispatched (there is no worker
+            # to await): the initiative stays offered (queued) for the person to
+            # pull, claim, and report through the human-worker surface. This is the
+            # async-first lifecycle applied to a human worker (RFC 0001 step 6).
+            return {"status": "awaiting_human"}
 
         task.status = TaskStatus.running
         await event_counters.record(
