@@ -75,6 +75,37 @@ _TOOL_SPECS = [
             "required": ["initiative_id", "outcome"],
         },
     },
+    {
+        "name": "record_metric",
+        "description": "Record a real business metric you observed or produced (e.g. "
+        "revenue, signups). Persists to the company's metrics so it informs the "
+        "mandate and reports — never invent one.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string"},
+                "value": {"type": "number"},
+                "unit": {"type": "string"},
+                "note": {"type": "string"},
+            },
+            "required": ["name", "value"],
+        },
+    },
+    {
+        "name": "write_memory",
+        "description": "Write a durable learning/result/decision into Company Memory so "
+        "it's recalled in future planning. type is one of "
+        "decision|experiment|result|learning|strategy_shift (default learning).",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "title": {"type": "string"},
+                "content": {"type": "string"},
+                "type": {"type": "string"},
+            },
+            "required": ["title", "content"],
+        },
+    },
 ]
 
 
@@ -201,6 +232,35 @@ async def _call_tool(db, company_id, agent_id, mid, params: dict) -> dict:
             )
             await db.commit()
             return _ok(mid, _content({"ok": True, "cost_cents": cost}))
+
+        if name == "record_metric":
+            from app.models.enums import MetricSource
+            from app.services import metrics as metrics_svc
+
+            signal = await metrics_svc.record_signal(
+                db, company_id=company_id, name=str(args["name"]),
+                value=float(args["value"]),
+                unit=(str(args["unit"]) if args.get("unit") else None),
+                source=MetricSource.agent,
+                note=(str(args["note"]) if args.get("note") else None),
+            )
+            await db.commit()
+            return _ok(mid, _content({"ok": True, "metric_id": str(signal.id)}))
+
+        if name == "write_memory":
+            from app.models.enums import MemoryType
+            from app.services import memory as memory_svc
+
+            try:
+                mtype = MemoryType(str(args.get("type") or "learning"))
+            except ValueError:
+                mtype = MemoryType.learning
+            entry = await memory_svc.write(
+                db, company_id=company_id, type=mtype,
+                title=str(args["title"]), content=str(args["content"]),
+            )
+            await db.commit()
+            return _ok(mid, _content({"ok": True, "memory_id": str(entry.id)}))
 
         return _error(mid, -32602, f"unknown tool: {name}")
     except (KeyError, ValueError) as exc:

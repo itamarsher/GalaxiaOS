@@ -14,12 +14,23 @@ from dataclasses import dataclass
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app import main
 from app.config import settings
 from app.db import get_db
-from app.models import Agent, AgentRun, Budget, Company, Membership, Mission, Task, User
+from app.models import (
+    Agent,
+    AgentRun,
+    Budget,
+    Company,
+    Membership,
+    MetricSignal,
+    Mission,
+    Task,
+    User,
+)
 from app.models.enums import (
     AgentRole,
     BudgetPeriod,
@@ -135,7 +146,8 @@ async def test_mcp_endpoint_full_lifecycle(session_factory, monkeypatch):
 
         # Discovery.
         tools = {t["name"] for t in _rpc(client, token, "tools/list").json()["result"]["tools"]}
-        assert {"get_mandate", "get_next_initiative", "claim_initiative", "report_result"} <= tools
+        assert {"get_mandate", "get_next_initiative", "claim_initiative", "report_result",
+                "record_metric", "write_memory"} <= tools
 
         # Mandate is scoped to this function.
         mandate, _ = _tool(client, token, "get_mandate")
@@ -147,6 +159,11 @@ async def test_mcp_endpoint_full_lifecycle(session_factory, monkeypatch):
         claimed, _ = _tool(client, token, "claim_initiative", {"initiative_id": str(ids.task_id)})
         assert claimed["claimed"] is True
 
+        # A worker can record a real metric back over the surface.
+        rec, _ = _tool(client, token, "record_metric",
+                       {"name": "signups", "value": 12, "unit": "users", "note": "launch day"})
+        assert rec["ok"] is True and rec["metric_id"]
+
         # Report it done.
         done, _ = _tool(client, token, "report_result",
                         {"initiative_id": str(ids.task_id), "outcome": "done", "summary": "live"})
@@ -154,6 +171,8 @@ async def test_mcp_endpoint_full_lifecycle(session_factory, monkeypatch):
 
     async with session_factory() as db:
         assert (await db.get(Task, ids.task_id)).status is TaskStatus.done
+        sig = (await db.scalars(select(MetricSignal).where(MetricSignal.name == "signups"))).one()
+        assert sig.value == 12 and sig.source.value == "agent"
 
 
 @requires_db
