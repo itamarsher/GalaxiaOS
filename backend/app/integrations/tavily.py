@@ -51,6 +51,44 @@ class TavilyWebSearch:
             raise WebSearchError("Tavily API key missing (set ABOS_TAVILY_API_KEY).")
         return self._api_key
 
+    @staticmethod
+    def _raise_for_status(resp: httpx.Response) -> None:
+        """Raise :class:`WebSearchError` with Tavily's own error detail on failure.
+
+        ``resp.raise_for_status()`` alone only ever produces a generic "Client
+        error '432 Client Error' for url '...'" message — it never reads the
+        response body, which is where Tavily puts the actual reason. We read the
+        body first (even on non-2xx) and fold any ``detail``/``error`` field into
+        the message. HTTP 432 is Tavily's non-standard "plan/usage limit
+        exceeded" code, so that case gets an actionable hint to self-configure a
+        key instead of a bare status line.
+        """
+        if resp.status_code < 400:
+            return
+        detail = None
+        try:
+            body = resp.json()
+        except ValueError:
+            body = None
+        if isinstance(body, dict):
+            detail = body.get("detail") or body.get("error")
+            if isinstance(detail, dict):
+                detail = detail.get("error") or detail.get("message")
+        if resp.status_code == 432:
+            message = (
+                "Tavily usage limit exceeded (HTTP 432)"
+                + (f": {detail}" if detail else "")
+                + " — self-configure your own Tavily key with `configure_integration` "
+                "if you need web search to keep working."
+            )
+            raise WebSearchError(message)
+        if detail:
+            raise WebSearchError(f"Tavily request failed: HTTP {resp.status_code}: {detail}")
+        try:
+            resp.raise_for_status()
+        except httpx.HTTPError as exc:
+            raise WebSearchError(f"Tavily request failed: {exc}") from exc
+
     async def search(self, query: str, *, max_results: int = 5) -> list[SearchResult]:
         key = self._require_key()
         payload = {
@@ -65,7 +103,7 @@ class TavilyWebSearch:
         try:
             async with httpx.AsyncClient(timeout=self._timeout) as client:
                 resp = await client.post(_ENDPOINT, json=payload)
-                resp.raise_for_status()
+                self._raise_for_status(resp)
                 body = resp.json()
         except httpx.HTTPError as exc:
             raise WebSearchError(f"Tavily request failed: {exc}") from exc
@@ -95,7 +133,7 @@ class TavilyWebSearch:
         try:
             async with httpx.AsyncClient(timeout=self._timeout) as client:
                 resp = await client.post(_EXTRACT_ENDPOINT, json=payload)
-                resp.raise_for_status()
+                self._raise_for_status(resp)
                 body = resp.json()
         except httpx.HTTPError as exc:
             raise WebSearchError(f"Tavily extract failed: {exc}") from exc
