@@ -232,6 +232,49 @@ async def test_report_bug_and_monitor_via_mcp(session_factory, monkeypatch):
 
 
 @requires_db
+async def test_operator_bug_lifecycle_via_mcp_matches_native_gate(session_factory, monkeypatch):
+    """The operator-only bug tools (review_backlog / promote / deliver) are exposed on
+    MCP with the SAME operator gate the native agent tools use — so the lifecycle is
+    agnostic to whether an internal or an MCP agent drives it."""
+    monkeypatch.setattr(settings, "function_connection_secret", _SECRET)
+    ids = await _seed(session_factory)
+    token = function_token.mint(company_id=ids.company_id, agent_id=ids.agent_id)
+
+    with _client() as client:
+        # File a bug (any company can report).
+        filed, _ = _tool(client, token, "report_bug",
+                         {"title": "Cross-cycle race", "details": "next cycle clobbers a claimed task"})
+        fr_id = filed["feature_request_id"]
+
+        # NOT the operator company → operator tools are refused (plain-text error result).
+        monkeypatch.setattr(settings, "platform_company_id", "")
+        res = _rpc(client, token, "tools/call", {"name": "review_backlog", "arguments": {}}).json()["result"]
+        assert res.get("isError") is True and "operator company only" in res["content"][0]["text"]
+        res = _rpc(client, token, "tools/call",
+                   {"name": "deliver_feature_request", "arguments": {"feature_request_id": fr_id}}).json()["result"]
+        assert res.get("isError") is True
+
+        # Designate THIS company as the operator → identical tools now authorized.
+        monkeypatch.setattr(settings, "platform_company_id", str(ids.company_id))
+        backlog, _ = _tool(client, token, "review_backlog", {})
+        assert backlog["count"] >= 1
+        assert any(e["id"] == fr_id for e in backlog["backlog"])
+
+        # promote runs past the gate; with no GitHub tracker configured it reports the
+        # missing-tracker path (same as the native promoter) rather than being denied.
+        res = _rpc(client, token, "tools/call",
+                   {"name": "promote_feature_request", "arguments": {"feature_request_id": fr_id}}
+                   ).json()["result"]
+        assert res.get("isError") is True and "tracker" in res["content"][0]["text"].lower()
+
+    # Still open (promotion couldn't file without a tracker) — the entry is intact.
+    from app.models import FeatureRequest
+    async with session_factory() as db:
+        fr = await db.get(FeatureRequest, uuid.UUID(fr_id))
+        assert fr.status.value == "open"
+
+
+@requires_db
 async def test_mcp_endpoint_rejects_bad_or_missing_token(session_factory, monkeypatch):
     monkeypatch.setattr(settings, "function_connection_secret", _SECRET)
     with _client() as client:

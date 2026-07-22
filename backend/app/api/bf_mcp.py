@@ -179,6 +179,41 @@ _TOOL_SPECS = [
         "you reported has been picked up and fixed.",
         "inputSchema": {"type": "object", "properties": {"limit": {"type": "integer"}}},
     },
+    {
+        "name": "review_backlog",
+        "description": "OPERATOR ONLY. Review the cross-company demand backlog (open bugs + "
+        "capability requests, most-demanded first) to decide what to file as a tracker issue. "
+        "Available only to the deployment's operator company.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "kind": {"type": "string"},
+                "min_votes": {"type": "integer"},
+                "limit": {"type": "integer"},
+            },
+        },
+    },
+    {
+        "name": "promote_feature_request",
+        "description": "OPERATOR ONLY. File a backlog entry as a GitHub tracker issue (idempotent; "
+        "same issue body/labels as the automatic promoter). Operator company only.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"feature_request_id": {"type": "string"}},
+            "required": ["feature_request_id"],
+        },
+    },
+    {
+        "name": "deliver_feature_request",
+        "description": "OPERATOR ONLY. Mark a backlog entry delivered (its fix merged) and notify "
+        "the companies that requested it, resuming any work that was blocked on it. Operator "
+        "company only.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"feature_request_id": {"type": "string"}},
+            "required": ["feature_request_id"],
+        },
+    },
 ]
 
 
@@ -408,6 +443,64 @@ async def _call_tool(db, company_id, agent_id, mid, params: dict) -> dict:
                 for r in rows
             ]
             return _ok(mid, _content({"requests": items, "count": len(items)}))
+
+        # ── operator-only bug lifecycle (parity with the native platform tools) ──
+        # Same services + the same operator gate the native agent tools use, so the
+        # promote/deliver behaviour is identical whether an internal agent or an
+        # MCP-connected agent drives it.
+        if name in ("review_backlog", "promote_feature_request", "deliver_feature_request"):
+            from app.services import feature_requests as fr_svc
+            from app.services import platform_company
+
+            if not platform_company.is_platform_company(company_id):
+                return _ok(mid, {"content": [{"type": "text",
+                    "text": "not authorized: operator company only"}], "isError": True})
+
+            if name == "review_backlog":
+                kind = fr_svc.coerce_kind(args["kind"]) if args.get("kind") else None
+                entries = await fr_svc.list_open(
+                    db, kind=kind, min_votes=int(args.get("min_votes") or 1),
+                    limit=int(args.get("limit") or 25),
+                )
+                items = [{"id": str(fr.id), "kind": fr.kind.value, "title": fr.title,
+                          "demand": fr.vote_count, "status": fr.status.value} for fr in entries]
+                return _ok(mid, _content({"backlog": items, "count": len(items)}))
+
+            from app.models.enums import FeatureRequestStatus
+            from app.services import promoter
+
+            fr = await fr_svc.get(db, uuid.UUID(str(args["feature_request_id"])))
+            if fr is None:
+                return _ok(mid, {"content": [{"type": "text",
+                    "text": "no backlog entry with that id"}], "isError": True})
+
+            if name == "promote_feature_request":
+                if fr.status is not FeatureRequestStatus.open:
+                    return _ok(mid, _content({"ok": True, "status": fr.status.value,
+                        "issue_url": fr.github_issue_url, "note": "already promoted/delivered"}))
+                tracker = await promoter.resolve_issue_tracker(db, company_id)
+                if tracker is None:
+                    return _ok(mid, {"content": [{"type": "text",
+                        "text": "no issue tracker connected (set a GitHub token / ABOS_GITHUB_TOKEN)"}],
+                        "isError": True})
+                from app.integrations.issues import IssueTrackerError
+                try:
+                    result = await promoter.promote_request(
+                        db, fr=fr, tracker=tracker, company_id=company_id, source_task_id=None
+                    )
+                except IssueTrackerError as exc:
+                    return _ok(mid, {"content": [{"type": "text",
+                        "text": f"could not file issue: {exc}"}], "isError": True})
+                await db.commit()
+                return _ok(mid, _content({"ok": True, "created": result.created,
+                    "issue_number": result.number, "issue_url": result.url, "demand": result.demand}))
+
+            # deliver_feature_request
+            if fr.status is FeatureRequestStatus.delivered:
+                return _ok(mid, _content({"ok": True, "status": "delivered", "note": "already delivered"}))
+            notified = await promoter.deliver_request(db, fr)
+            await db.commit()
+            return _ok(mid, _content({"ok": True, "status": "delivered", "notified_companies": notified}))
 
         return _error(mid, -32602, f"unknown tool: {name}")
     except (KeyError, ValueError) as exc:
