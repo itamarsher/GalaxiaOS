@@ -101,6 +101,14 @@ services:
           type: web
           name: abos-openclaw
           envVarKey: OPENCLAW_GATEWAY_TOKEN
+      # Route every function to the gateway's configured agent. OpenClaw only serves
+      # agents defined in its config (gateway/config/openclaw.json → "default") and
+      # does NOT auto-create one per `openclaw/<company_id>:<function>` id, so pin the
+      # route here. The mandate still carries the company/function context. (Trade-off:
+      # all functions share one persona/workspace — fine single-tenant; for true §6
+      # per-tenant isolation, register a gateway agent per (company, function).)
+      - key: ABOS_OPENCLAW_MODEL
+        value: openclaw/default
       - fromGroup: abos-shared
 
   # Managed OpenClaw Gateway — the internal-agent runtime (RFC 0001 §5), free-tier
