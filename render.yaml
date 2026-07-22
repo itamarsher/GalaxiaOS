@@ -88,11 +88,12 @@ services:
           type: pserv
           name: abos-openclaw
           envVarKey: OPENCLAW_GATEWAY_TOKEN
-      # Route every function to the gateway's configured agent — OpenClaw only serves
-      # agents defined in its config and doesn't auto-create per-tenant ids. See the
-      # note in render.free.yaml / gateway/README.md (§6 trade-off).
-      - key: ABOS_OPENCLAW_MODEL
-        value: openclaw/default
+      # Route each function to its own persona (openclaw/<function>) — the gateway
+      # registers one isolated agent per function, so leave ABOS_OPENCLAW_MODEL empty.
+      # Make the managed gateway the DEFAULT binding for newly generated functions
+      # (RFC 0001 §5); worker_binding falls back to native if no gateway is configured.
+      - key: ABOS_DEFAULT_AGENT_BACKEND
+        value: external
       - fromGroup: abos-shared
 
   # arq worker (agent runtime + scheduled jobs). Same image, different command.
@@ -138,11 +139,12 @@ services:
           type: pserv
           name: abos-openclaw
           envVarKey: OPENCLAW_GATEWAY_TOKEN
-      # Route every function to the gateway's configured agent — OpenClaw only serves
-      # agents defined in its config and doesn't auto-create per-tenant ids. See the
-      # note in render.free.yaml / gateway/README.md (§6 trade-off).
-      - key: ABOS_OPENCLAW_MODEL
-        value: openclaw/default
+      # Route each function to its own persona (openclaw/<function>) — the gateway
+      # registers one isolated agent per function, so leave ABOS_OPENCLAW_MODEL empty.
+      # Make the managed gateway the DEFAULT binding for newly generated functions
+      # (RFC 0001 §5); worker_binding falls back to native if no gateway is configured.
+      - key: ABOS_DEFAULT_AGENT_BACKEND
+        value: external
       - fromGroup: abos-shared
 
   # Managed OpenClaw Gateway — the internal-agent runtime for `external`-bound
