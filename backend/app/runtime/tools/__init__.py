@@ -61,6 +61,7 @@ CORE_TOOL_NAMES: frozenset[str] = frozenset(
         # escalation to the founder / CEO
         "request_decision",
         "request_budget",
+        "request_secret",
         "request_user_action",
         # live, ephemeral founder-facing milestone updates
         "post_mission_update",
