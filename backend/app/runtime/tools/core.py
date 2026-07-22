@@ -85,6 +85,43 @@ SPECS: list[ToolSpec] = [
         },
     ),
     ToolSpec(
+        name="request_secret",
+        description=(
+            "Request a secret you need to do your work but must never see — a "
+            "third-party API key, a password, an access token. This escalates to the "
+            "founder, who provides the value through a secure channel; it is encrypted "
+            "at rest and you are NEVER given the raw value. Once provided, use it by "
+            "putting the placeholder {{secret:NAME}} in the relevant tool argument (a "
+            "request header, URL, or body) — it is substituted at the network boundary "
+            "and redacted from logs. Call this when a capability needs a credential the "
+            "company hasn't supplied yet. The task pauses until the founder responds."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "description": (
+                        "A short handle for the secret, referenced later as "
+                        "{{secret:NAME}} — e.g. 'stripe_api_key', 'smtp_password'."
+                    ),
+                },
+                "reason": {
+                    "type": "string",
+                    "description": "What you need it for, so the founder knows what they're providing.",
+                },
+                "allowed_host": {
+                    "type": "string",
+                    "description": (
+                        "Optional. The hostname this secret is allowed to be sent to "
+                        "(e.g. 'api.stripe.com'), binding it to that destination."
+                    ),
+                },
+            },
+            "required": ["name", "reason"],
+        },
+    ),
+    ToolSpec(
         name="dispatch_task",
         description="Delegate a sub-task to another functional agent by role.",
         input_schema={
@@ -687,6 +724,73 @@ async def _request_budget(db, ctx, *, agent: Agent, task: Task, args: dict) -> T
     )
 
 
+async def _request_secret(db, ctx, *, agent: Agent, task: Task, args: dict) -> ToolOutcome:
+    from app.services import secrets as secrets_svc
+
+    name = secrets_svc.normalize_name(str(args.get("name") or ""))
+    reason = str(args.get("reason") or "").strip()
+    allowed_host = str(args.get("allowed_host") or "").strip() or None
+    if not name:
+        return ToolOutcome(
+            observation="A secret request needs a name (a short handle like 'stripe_api_key').",
+            is_error=True,
+        )
+    if not reason:
+        return ToolOutcome(
+            observation="Tell the founder what the secret is for (the 'reason').", is_error=True
+        )
+
+    # Already have it? Then the agent can just reference the placeholder — no need to
+    # bother the founder again.
+    if await secrets_svc.has_secret(db, company_id=task.company_id, name=name):
+        return ToolOutcome(
+            observation=(
+                f"The secret `{name}` is already stored. Use it by putting "
+                f"{{{{secret:{name}}}}} in the relevant tool argument — it is substituted "
+                "securely at the network boundary. You never see the raw value."
+            )
+        )
+
+    host_line = f"\n\nIt will be bound to **{allowed_host}**." if allowed_host else ""
+    decision = DecisionRequest(
+        company_id=task.company_id,
+        agent_id=agent.id,
+        task_id=task.id,
+        kind=DecisionKind.secret_request,
+        summary=(
+            f"**Secret requested — `{name}`**\n\n"
+            f"{agent.name} needs this to proceed: {reason}{host_line}\n\n"
+            "Provide it from the secure secrets panel (or reply from the app's secret "
+            "form) — it is encrypted at rest and never shown to the agents. **Do not "
+            "paste the value into chat.**"
+        ),
+        # The value is NEVER placed here — only the request metadata. Fulfilment seals
+        # the value straight into the secret store (see secrets.fulfill_request).
+        payload={
+            "tool": "request_secret",
+            "name": name,
+            "reason": reason,
+            "allowed_host": allowed_host,
+        },
+        status=DecisionStatus.pending,
+    )
+    db.add(decision)
+    await db.flush()
+    await chat.attach_decision_dm(db, decision=decision)
+    row = await db.get(Task, task.id)
+    if row is not None:
+        row.status = TaskStatus.waiting_approval
+    task.status = TaskStatus.waiting_approval
+    await db.flush()
+    return ToolOutcome(
+        observation=(
+            f"Requested the secret `{name}` from the founder. The task will resume once "
+            "they provide it; then reference it as {{secret:" + name + "}}."
+        ),
+        park=True,
+    )
+
+
 async def _write_memory(db, ctx, *, agent: Agent, task: Task, args: dict) -> ToolOutcome:
     from app.services import memory as memory_svc
 
@@ -1159,6 +1263,7 @@ HANDLERS = {
     "dispatch_tasks": _dispatch_tasks,
     "submit_plan": _submit_plan,
     "request_budget": _request_budget,
+    "request_secret": _request_secret,
     "write_memory": _write_memory,
     "register_domain": _register_domain,
     "send_email": _send_email,

@@ -39,6 +39,7 @@ from app.api import (
     metrics,
     onboarding,
     public,
+    secrets,
     stripe_webhooks,
     webhooks_telegram,
 )
@@ -58,11 +59,11 @@ async def _lifespan(app: FastAPI):
     ``ABOS_RUN_WORKER_IN_PROCESS`` is set, the think→act loop and cron jobs run
     as a background task alongside the API so the whole app fits on one host.
     """
-    # The dogfooding company is no longer synthesized at startup. It is a real
-    # company the founder onboards: the first company created in a deployment is
-    # flagged as the platform company (services/platform_company.py), which is what
-    # authorizes the Platform agent's promoter tools and drives the demand→issue
-    # loop. The promoter/render/cron gates all key off that flag.
+    # The dogfooding company is a normal company the founder onboards; a deployment
+    # names it as the operator via ABOS_PLATFORM_COMPANY_ID
+    # (services/platform_company.py), which is what authorizes the Platform agent's
+    # promoter tools and drives the demand→issue loop. The promoter/render/cron gates
+    # all key off that config.
     # Point the shared Telegram bot at our inbound webhook so founders' connect
     # deep links resolve. Best-effort and idempotent; no-op without a bot token.
     if settings.telegram_bot_token and settings.public_api_base_url:
@@ -133,6 +134,8 @@ def create_app() -> FastAPI:
     app.include_router(stripe_webhooks.router)
     app.include_router(onboarding.router)
     app.include_router(apikeys.router)
+    app.include_router(secrets.router)
+    app.include_router(secrets.decisions_router)
     app.include_router(integrations.router)
     app.include_router(integrations.callback_router)
     app.include_router(files.router)

@@ -375,6 +375,11 @@ async def post_message(
     Only waits in the *same* scope (``thread_id``) are satisfied, so a reply in one
     sub-initiative doesn't wake an agent parked in another.
     """
+    # Defence in depth: a stored secret's value must never persist into a chat body
+    # (e.g. an agent echoing one it used). No-ops when the company has no secrets.
+    from app.services import secrets as secrets_svc
+
+    body = await secrets_svc.redact_text(db, company_id=company_id, text=body)
     message = ChatMessage(
         company_id=company_id,
         channel_id=channel_id,

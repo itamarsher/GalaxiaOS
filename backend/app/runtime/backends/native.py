@@ -799,12 +799,28 @@ class NativeBackend:
                     "result": {"status": "waiting_approval", "tool": call.name},
                 }
 
+            # Secret broker: splice any {{secret:name}} placeholder into a COPY of the
+            # arguments used only for execution. The real value reaches the tool /
+            # network, but the stored arguments, transcript, decision payload, and
+            # external-comms index (all built from ``call.arguments``) keep the
+            # placeholder — the plaintext never lands in durable, agent-visible state.
+            # Scoped to the outbound boundary (external comms + MCP): secrets are for
+            # sending to third parties, so an internal tool (a report, a file, a memory
+            # note) never receives a real value it could persist un-redacted.
+            from app.services import secrets as secrets_svc
+
+            exec_args, used_secrets = call.arguments, set()
+            if is_external or is_mcp:
+                exec_args, used_secrets = await secrets_svc.resolve_placeholders(
+                    db, company_id=task.company_id, args=call.arguments
+                )
+
             try:
                 if is_mcp:
-                    outcome = await self._call_mcp(db, task, call, mcp_routing)
+                    outcome = await self._call_mcp(db, task, call, mcp_routing, exec_args=exec_args)
                 else:
                     outcome = await execute_tool(
-                        db, ctx, agent=agent, task=task, name=call.name, args=call.arguments
+                        db, ctx, agent=agent, task=task, name=call.name, args=exec_args
                     )
             except BudgetExceeded as exc:
                 # The action would blow the budget. Rather than fail the task
@@ -850,6 +866,15 @@ class NativeBackend:
                     "result": {"status": "waiting_approval", "tool": call.name},
                 }
 
+            # If a secret value was spliced outbound, redact it from the observation
+            # before that text is indexed or returned to the model — a remote can echo
+            # a submitted value back, and that must not survive into the transcript.
+            safe_observation = outcome.observation
+            if used_secrets and safe_observation:
+                safe_observation = await secrets_svc.redact_text(
+                    db, company_id=task.company_id, text=safe_observation
+                )
+
             # Index the outbound communication's outcome. On an approved resume this
             # flips the parked ``pending_approval`` row to its terminal state; on the
             # unguarded path it inserts a fresh ``sent``/``failed`` record.
@@ -862,7 +887,7 @@ class NativeBackend:
                     tool=call.name,
                     args=call.arguments,
                     sent=not outcome.is_error,
-                    detail=outcome.observation,
+                    detail=safe_observation,
                 )
                 if not outcome.is_error:
                     await event_counters.record(
@@ -884,11 +909,13 @@ class NativeBackend:
             return {"terminal": True, "result": {"status": "waiting_approval"}}
         return {
             "terminal": False,
-            "observation": outcome.observation,
+            "observation": safe_observation,
             "is_error": outcome.is_error,
         }
 
-    async def _call_mcp(self, db, task: Task, call, mcp_routing: dict) -> ToolOutcome:
+    async def _call_mcp(
+        self, db, task: Task, call, mcp_routing: dict, *, exec_args: dict | None = None
+    ) -> ToolOutcome:
         """Invoke a connected MCP server's tool, honestly surfacing any failure.
 
         Consistent with the rest of the platform: an unreachable or erroring server
@@ -901,7 +928,7 @@ class NativeBackend:
                 company_id=task.company_id,
                 server_id=route["server_id"],
                 remote_tool=route["remote_tool"],
-                arguments=call.arguments,
+                arguments=exec_args if exec_args is not None else call.arguments,
             )
         except mcp_svc.McpError as exc:
             return ToolOutcome(
