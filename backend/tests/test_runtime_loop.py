@@ -9,7 +9,9 @@ from __future__ import annotations
 import pytest
 
 from app.config import settings
+from app.providers.base import LLMResponse, ToolCall
 from app.runtime.backends import native
+from app.runtime.backends.native import _truncated_tool_calls
 from app.runtime.prompts import (
     AGENT_LOOP_SYSTEM,
     DEFAULT_COMPANY_PLAYBOOK,
@@ -146,6 +148,39 @@ def test_clip_flags_only_when_actually_truncated() -> None:
     # A non-positive limit disables the cap (returns content unchanged, unflagged).
     assert clip("a" * 100, 0) == "a" * 100
     assert clip("a" * 100, -1) == "a" * 100
+
+
+# ── _truncated_tool_calls: don't execute a tool call cut off mid-generation ──
+def _tool_call_response(stop_reason: str, arguments: dict | None = None) -> LLMResponse:
+    return LLMResponse(
+        text="",
+        tool_calls=[ToolCall(id="t1", name="save_file", arguments=arguments or {})],
+        stop_reason=stop_reason,
+    )
+
+
+def test_truncated_tool_calls_flags_anthropic_max_tokens() -> None:
+    # Anthropic reports "max_tokens" when generation hit the output cap mid tool_use
+    # (issue #239: a large save_file content got cut, corrupting its arguments).
+    assert _truncated_tool_calls(_tool_call_response("max_tokens")) is True
+
+
+def test_truncated_tool_calls_flags_openai_length() -> None:
+    # The OpenAI-compatible providers (and their OSS subclasses) report "length".
+    assert _truncated_tool_calls(_tool_call_response("length")) is True
+
+
+def test_truncated_tool_calls_false_for_a_clean_stop() -> None:
+    assert _truncated_tool_calls(_tool_call_response("end_turn")) is False
+    assert _truncated_tool_calls(_tool_call_response("tool_use")) is False
+    assert _truncated_tool_calls(_tool_call_response("stop")) is False
+
+
+def test_truncated_tool_calls_false_when_no_tool_calls() -> None:
+    # A truncated plain-text reply has nowhere corrupted to hide — only a
+    # cut-off tool call risks silently executing on bad arguments.
+    resp = LLMResponse(text="partial answer...", tool_calls=[], stop_reason="max_tokens")
+    assert _truncated_tool_calls(resp) is False
 
 
 def test_effective_playbook_falls_back_to_default() -> None:
