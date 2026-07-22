@@ -116,7 +116,7 @@ async def promote_feature_backlog(ctx: dict) -> dict:
     from app.services import platform_company, promoter
 
     async with SessionLocal() as db:
-        company_id = await platform_company.platform_company_id(db)
+        company_id = platform_company.platform_company_id()
         if company_id is None:
             return {"skipped": "no_platform_company"}
         result = await promoter.promote_backlog(
@@ -141,7 +141,7 @@ async def reconcile_delivered_requests(ctx: dict) -> dict:
     from app.services import platform_company, promoter
 
     async with SessionLocal() as db:
-        company_id = await platform_company.platform_company_id(db)
+        company_id = platform_company.platform_company_id()
         if company_id is None:
             return {"skipped": "no_platform_company"}
         result = await promoter.reconcile_delivered(
@@ -234,7 +234,7 @@ async def monitor_failed_tasks(ctx: dict) -> dict:
     from app.services import platform_company, reliability
 
     async with SessionLocal() as db:
-        company_id = await platform_company.platform_company_id(db)
+        company_id = platform_company.platform_company_id()
         if company_id is None:
             return {"skipped": "no_platform_company"}
         result = await reliability.review_failed_tasks(
@@ -263,8 +263,7 @@ async def monitor_render_platform(ctx: dict) -> dict:
         from app.models.enums import EventType
         from app.services import event_counters, platform_company
 
-        async with SessionLocal() as db:
-            company_id = await platform_company.platform_company_id(db)
+        company_id = platform_company.platform_company_id()
         if company_id is not None:
             await event_counters.record_standalone(
                 company_id=company_id, event_type=EventType.error_escalated, n=filed
@@ -286,7 +285,7 @@ async def optimize_skills(ctx: dict) -> dict:
     from app.services import platform_company
 
     async with SessionLocal() as db:
-        company_id = await platform_company.platform_company_id(db)
+        company_id = platform_company.platform_company_id()
         if company_id is None:
             return {"skipped": "no_platform_company"}
         await set_tenant(db, company_id)

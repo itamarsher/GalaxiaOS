@@ -192,7 +192,6 @@ async def reset_company(
     company_id = company.id
     owner_id = company.owner_user_id
     name = company.name
-    is_platform = company.is_platform
 
     mission = await db.scalar(select(Mission).where(Mission.company_id == company_id))
     existing_text = mission.raw_text if mission else ""
@@ -224,9 +223,6 @@ async def reset_company(
         owner_user_id=owner_id,
         name=name,
         status=CompanyStatus.draft,
-        # Preserve the platform designation across the reset (the flag is identity,
-        # not operational state).
-        is_platform=is_platform,
     )
     db.add(fresh)
     await db.flush()
