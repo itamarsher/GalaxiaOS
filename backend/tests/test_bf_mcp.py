@@ -196,6 +196,42 @@ async def test_mcp_endpoint_full_lifecycle(session_factory, monkeypatch):
 
 
 @requires_db
+async def test_report_bug_and_monitor_via_mcp(session_factory, monkeypatch):
+    """A connected operator can file a bug into the backlog and monitor its status
+    over the MCP surface (report_bug + list_feature_requests)."""
+    monkeypatch.setattr(settings, "function_connection_secret", _SECRET)
+    ids = await _seed(session_factory)
+    token = function_token.mint(company_id=ids.company_id, agent_id=ids.agent_id)
+
+    with _client() as client:
+        tools = {t["name"] for t in _rpc(client, token, "tools/list").json()["result"]["tools"]}
+        assert {"report_bug", "list_feature_requests"} <= tools
+
+        filed, _ = _tool(client, token, "report_bug", {
+            "title": "Company name is set to the mission sentence",
+            "details": "Onboarding names the company with the full tagline instead of a short name.",
+        })
+        assert filed["ok"] is True
+        assert filed["status"] == "open"
+        assert filed["new_entry"] is True
+        fr_id = filed["feature_request_id"]
+
+        listing, _ = _tool(client, token, "list_feature_requests")
+        assert listing["count"] == 1
+        entry = listing["requests"][0]
+        assert entry["id"] == fr_id
+        assert entry["kind"] == "bug"
+        assert entry["status"] == "open"
+        assert entry["issue_url"] is None
+
+    # The bug is a real backlog row attributed to this company.
+    from app.models import FeatureRequest
+    async with session_factory() as db:
+        fr = await db.get(FeatureRequest, uuid.UUID(fr_id))
+        assert fr is not None and fr.kind.value == "bug"
+
+
+@requires_db
 async def test_mcp_endpoint_rejects_bad_or_missing_token(session_factory, monkeypatch):
     monkeypatch.setattr(settings, "function_connection_secret", _SECRET)
     with _client() as client:
