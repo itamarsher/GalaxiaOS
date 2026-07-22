@@ -425,7 +425,13 @@ class NativeBackend:
             # tool_result), so a restart can pick the task back up here.
             await self._save_transcript(ctx, task, messages)
 
-        return await self._finish_or_audit(ctx, agent, task, {"summary": "step cap reached"})
+        summary = await self._summarize_step_cap(
+            ctx, task, provider, api_key, model, messages, funding_user_id
+        )
+        # Bypass ``_finish_or_audit``: this is a timeout, not a delegated result the
+        # CEO should audit or the critic should second-guess — it goes straight to
+        # ``needs_continuation`` so it's never folded into ``done``.
+        return await self._finish(ctx, task, TaskStatus.needs_continuation, {"summary": summary})
 
     async def _still_waiting_for_reply(self, ctx: RuntimeContext, task: Task) -> bool:
         """Re-park a resumed task that still holds a pending reply-wait.
@@ -553,6 +559,49 @@ class NativeBackend:
         compacted = [recap, *tail]
         await self._save_transcript(ctx, task, compacted)
         return compacted
+
+    async def _summarize_step_cap(
+        self,
+        ctx: RuntimeContext,
+        task: Task,
+        provider: LLMProvider,
+        api_key: str,
+        model: str,
+        messages: list[Message],
+        funding_user_id: uuid.UUID | None = None,
+    ) -> str:
+        """Recap what the agent actually did when the step cap ends the loop.
+
+        Reuses the same cheap-model dense-recap approach as ``_maybe_compact`` so a
+        task that runs out of steps reports honest partial progress instead of the
+        bare "step cap reached" placeholder that used to stand in for a result.
+        """
+        blob = "\n".join(transcript_lines(dump_messages(messages), limit=0))
+        if not blob.strip():
+            return "Ran out of steps before making any progress."
+        try:
+            resp = await ctx.cost_meter.run_llm(
+                provider,
+                api_key=api_key,
+                company_id=task.company_id,
+                agent_id=task.agent_id,
+                task_id=task.id,
+                model=provider.default_models.get("cheap", model),
+                funding_user_id=funding_user_id,
+                system=(
+                    "An AI agent ran out of its step budget before finishing this task. "
+                    "From its working log below, summarize what it actually accomplished "
+                    "(decisions made, tools used and their key results, facts learned), "
+                    "and what remains unfinished. Be specific and terse; this is reported "
+                    "as an honest account of partial progress, not a success. Output plain "
+                    "text, no preamble."
+                ),
+                messages=[Message(role="user", content=blob)],
+                max_tokens=700,
+            )
+        except BudgetExceeded:
+            return "Ran out of steps; unable to summarize partial progress (budget exhausted)."
+        return resp.text
 
     @staticmethod
     def _append_user_note(messages: list[Message], text: str) -> None:
