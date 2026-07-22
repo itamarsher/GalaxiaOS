@@ -14,7 +14,13 @@ import pytest
 
 from app.config import settings
 from app.integrations import gdrive_oauth
-from app.integrations.files import FileProvider, FileProviderError, FolderRef, StoredFile
+from app.integrations.files import (
+    FileProvider,
+    FileProviderAuthError,
+    FileProviderError,
+    FolderRef,
+    StoredFile,
+)
 from app.integrations.gdrive import _DRIVE_API, GoogleDriveFileProvider, _escape_query_value
 from app.models.enums import FileCategory
 from app.runtime.tools import TOOL_SPECS
@@ -47,6 +53,26 @@ def test_parse_token_error_raises():
 def test_parse_token_missing_access_token_raises():
     with pytest.raises(FileProviderError):
         GoogleDriveFileProvider._parse_token(200, {"expires_in": 10})
+
+
+def test_parse_token_invalid_grant_raises_auth_error():
+    # Google's response for a dead (expired/revoked) refresh token — distinguished
+    # from a generic failure so callers can clear the credential instead of
+    # repeating the same opaque error on every subsequent call.
+    with pytest.raises(FileProviderAuthError) as exc:
+        GoogleDriveFileProvider._parse_token(
+            400,
+            {"error": "invalid_grant", "error_description": "Token has been expired or revoked."},
+        )
+    assert "Token has been expired or revoked." in str(exc.value)
+
+
+def test_parse_token_other_4xx_is_not_an_auth_error():
+    # A non-invalid_grant failure (e.g. a transient server error) must stay the
+    # generic FileProviderError so it isn't mistaken for "reconnect required".
+    with pytest.raises(FileProviderError) as exc:
+        GoogleDriveFileProvider._parse_token(500, {"error": "internal_error"})
+    assert not isinstance(exc.value, FileProviderAuthError)
 
 
 def test_escape_query_value_escapes_quotes_and_backslashes():
@@ -243,6 +269,65 @@ async def test_resolve_file_provider_none_when_founder_has_no_drive(monkeypatch)
     monkeypatch.setattr(user_drive, "get_user_drive_for_company", _none)
     monkeypatch.setattr(integrations_svc, "_owner_google_drive", _none)
     assert await integrations_svc.resolve_file_provider(object(), company_id=uuid.uuid4()) is None
+
+
+@pytest.mark.asyncio
+async def test_clear_file_provider_credential_clears_companys_own_bundle_first(monkeypatch):
+    from app.services import integrations as integrations_svc
+
+    async def _clear_company(db, *, company_id):
+        return True
+
+    def _boom():
+        raise AssertionError("should not fall through to the account-wide clear")
+
+    monkeypatch.setattr(integrations_svc, "clear_google_drive", _clear_company)
+    monkeypatch.setattr("app.db.SessionLocal", _boom)
+    cleared = await integrations_svc.clear_file_provider_credential(
+        object(), company_id=uuid.uuid4()
+    )
+    assert cleared is True
+
+
+@pytest.mark.asyncio
+async def test_clear_file_provider_credential_falls_back_to_owner_account_wide(monkeypatch):
+    # No per-company bundle to clear, but the founder's account-wide Drive is what
+    # `resolve_file_provider` actually used → that's the one that must be cleared.
+    from app.services import integrations as integrations_svc
+    from app.services import user_drive
+
+    owner_id = uuid.uuid4()
+
+    async def _no_company_bundle(db, *, company_id):
+        return False
+
+    class _FakeScalarSession:
+        async def scalar(self, *a, **k):
+            return owner_id
+
+        async def commit(self):
+            self.committed = True
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+    cleared_for = {}
+
+    async def _clear_user(db, *, user_id):
+        cleared_for["user_id"] = user_id
+        return True
+
+    monkeypatch.setattr(integrations_svc, "clear_google_drive", _no_company_bundle)
+    monkeypatch.setattr("app.db.SessionLocal", lambda: _FakeScalarSession())
+    monkeypatch.setattr(user_drive, "clear_user_drive", _clear_user)
+    cleared = await integrations_svc.clear_file_provider_credential(
+        object(), company_id=uuid.uuid4()
+    )
+    assert cleared is True
+    assert cleared_for["user_id"] == owner_id
 
 
 def test_oauth_state_round_trip():
@@ -535,3 +620,93 @@ async def test_safe_archive_files_when_provider_present(monkeypatch):
     )
     assert out is not None
     assert out.folder_path == f".galaxia/{files_svc.company_folder_name(company)}/Communications"
+
+
+# ─────────────────── tool handlers: dead-credential auth errors ───────────────────
+
+
+class _Task:
+    def __init__(self, company_id):
+        self.company_id = company_id
+        self.id = uuid.uuid4()
+
+
+@pytest.mark.asyncio
+async def test_save_file_auth_error_clears_credential_and_reports_disconnected(monkeypatch):
+    from app.runtime.tools import files as files_mod
+
+    company = _Company("Acme")
+    task = _Task(company.id)
+
+    async def _resolve(db, *, company_id):
+        return object()  # any non-None provider; the failure comes from archive()
+
+    async def _boom_archive(db, provider, **kwargs):
+        raise FileProviderAuthError("Google token refresh failed: invalid_grant")
+
+    cleared_for = {}
+
+    async def _clear(db, *, company_id):
+        cleared_for["company_id"] = company_id
+        return True
+
+    monkeypatch.setattr(files_mod, "resolve_file_provider", _resolve)
+    monkeypatch.setattr(files_mod.files_svc, "archive", _boom_archive)
+    monkeypatch.setattr(files_mod, "clear_file_provider_credential", _clear)
+
+    out = await files_mod.HANDLERS["save_file"](
+        _FakeDB(company),
+        None,
+        agent=None,
+        task=task,
+        args={"category": "artifact", "name": "brief.md", "content": "hello"},
+    )
+    assert out.is_error is True
+    assert "reconnect" in out.observation.lower()
+    assert "Google Drive disconnected" in out.observation
+    assert cleared_for["company_id"] == company.id
+
+
+@pytest.mark.asyncio
+async def test_read_company_file_auth_error_clears_credential_and_reports_disconnected(monkeypatch):
+    from types import SimpleNamespace
+
+    from app.runtime.tools import files as files_mod
+
+    company = _Company("Acme")
+    task = _Task(company.id)
+    row = SimpleNamespace(
+        name="brief.md",
+        labels=None,
+        external_id="file-1",
+        size_bytes=10,
+        mime_type="text/markdown",
+    )
+
+    class _Provider:
+        async def download_file(self, file_id):
+            raise FileProviderAuthError("Google token refresh failed: invalid_grant")
+
+    async def _find_file(db, *, company_id, name):
+        return row
+
+    async def _resolve(db, *, company_id):
+        return _Provider()
+
+    cleared_for = {}
+
+    async def _clear(db, *, company_id):
+        cleared_for["company_id"] = company_id
+        return True
+
+    monkeypatch.setattr(files_mod.files_svc, "find_file", _find_file)
+    monkeypatch.setattr(files_mod.data_policy, "agent_can_access", lambda agent, labels: True)
+    monkeypatch.setattr(files_mod, "resolve_file_provider", _resolve)
+    monkeypatch.setattr(files_mod, "clear_file_provider_credential", _clear)
+
+    out = await files_mod.HANDLERS["read_company_file"](
+        _FakeDB(company), None, agent=None, task=task, args={"name": "brief.md"}
+    )
+    assert out.is_error is True
+    assert "Google Drive disconnected" in out.observation
+    assert cleared_for["company_id"] == company.id

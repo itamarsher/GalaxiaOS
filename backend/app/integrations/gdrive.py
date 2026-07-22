@@ -30,7 +30,7 @@ from typing import Any
 import httpx
 
 from app.config import settings
-from app.integrations.files import FileProviderError, FolderRef, StoredFile
+from app.integrations.files import FileProviderAuthError, FileProviderError, FolderRef, StoredFile
 
 _TOKEN_URL = "https://oauth2.googleapis.com/token"
 _DRIVE_API = "https://www.googleapis.com/drive/v3/files"
@@ -89,9 +89,20 @@ class GoogleDriveFileProvider:
 
     @staticmethod
     def _parse_token(status_code: int, body: dict) -> tuple[str, int]:
-        """Map Google's token response to ``(access_token, expires_in_seconds)``."""
+        """Map Google's token response to ``(access_token, expires_in_seconds)``.
+
+        Google reports a refresh token it will never honor again — revoked by the
+        user, unused for 6+ months, or (in a Testing-status OAuth client) simply
+        past its 7-day hard expiry — as ``error: "invalid_grant"``. That case is
+        raised as :class:`FileProviderAuthError` (rather than the generic
+        :class:`FileProviderError`) so callers can tell "reconnect required" apart
+        from a transient failure and clear the dead credential instead of
+        repeating the same opaque error forever.
+        """
         if status_code >= 400 or "access_token" not in body:
             detail = body.get("error_description") or body.get("error") or f"HTTP {status_code}"
+            if body.get("error") == "invalid_grant":
+                raise FileProviderAuthError(f"Google token refresh failed: {detail}")
             raise FileProviderError(f"Google token refresh failed: {detail}")
         return str(body["access_token"]), int(body.get("expires_in", 3600))
 

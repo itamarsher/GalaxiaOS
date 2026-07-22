@@ -53,6 +53,14 @@ class FileProviderError(RuntimeError):
     """Raised when a file operation fails (missing creds, vendor/API error)."""
 
 
+class FileProviderAuthError(FileProviderError):
+    """Raised when the *stored credential itself* is dead (expired/revoked),
+    as opposed to a transient network or API failure. Google, for instance,
+    returns this for a refresh token it will keep rejecting forever — so a
+    caller catching this specifically can clear the dead credential instead of
+    surfacing the same opaque error on every subsequent call."""
+
+
 @runtime_checkable
 class FileProvider(Protocol):
     async def ensure_folder(self, path: list[str]) -> FolderRef:
