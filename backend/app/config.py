@@ -154,6 +154,14 @@ class Settings(BaseSettings):
     # an always-on instance (a separate worker service, or a paid plan).
     keep_warm_enabled: bool = False
 
+    # Safety net for a task parked in ``waiting_approval`` with nothing that can
+    # resume it (no pending decision and no pending chat-wait) — an orphan that both
+    # blocks its objective and, because waiting_approval counts as "active", stops the
+    # continuous business cycle from ever winding down (a silent company deadlock).
+    # The reaper fails such a task once it has sat orphaned longer than this grace
+    # window (long enough that a just-created decision/wait is never raced).
+    orphaned_approval_grace_minutes: int = 15
+
     # Runtime safety caps (circuit breakers)
     max_task_depth: int = 4
     max_tasks_per_run: int = 200

@@ -17,6 +17,7 @@ from app.jobs.scheduled import (
     monitor_render_platform,
     optimize_skills,
     promote_feature_backlog,
+    reap_orphaned_approvals,
     reclaim_expired_initiatives,
     recompute_runway,
     reconcile_delivered_requests,
@@ -102,6 +103,10 @@ class WorkerSettings:
         # pull worker), so they're re-offered instead of stuck running. Every 5
         # minutes; no-op unless a lease has actually lapsed.
         cron(reclaim_expired_initiatives, minute=set(range(2, 60, 5))),
+        # Reap tasks orphaned in waiting_approval (no decision + no reply-wait) so a
+        # park-without-a-decision can't silently deadlock the whole company. Every 5
+        # minutes; only acts on tasks past the grace window.
+        cron(reap_orphaned_approvals, minute=set(range(4, 60, 5))),
         # Push in-flight domain connections forward (zone activation + HTTPS take
         # minutes and happen out-of-band); every 5 minutes is plenty.
         cron(reconcile_site_domains, minute=set(range(0, 60, 5))),
