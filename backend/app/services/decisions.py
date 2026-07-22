@@ -26,7 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import SessionLocal
 from app.models import DecisionRequest, Task
-from app.models.enums import DecisionStatus, MemoryType, TaskStatus
+from app.models.enums import DecisionKind, DecisionStatus, MemoryType, TaskStatus
 from app.providers.base import Message
 from app.runtime.cost_meter import CostMeter
 from app.services import apikeys
@@ -312,6 +312,30 @@ async def _post_clarification(db: AsyncSession, decision: DecisionRequest) -> No
     )
 
 
+async def _post_secret_reply_warning(db: AsyncSession, decision: DecisionRequest) -> None:
+    """Tell the founder to provide a requested secret through the secure form.
+
+    A secret's value must never be pasted into chat (it would be persisted in the DM
+    and, via the generic resolution, in memory). The decision stays pending until the
+    value is submitted through the dedicated fulfil endpoint.
+    """
+    if decision.channel_id is None or decision.agent_id is None:
+        return
+    body = (
+        "For your security, please don't paste that value into chat — provide the "
+        "requested secret through the **secure secret form** (the request card in the "
+        "app). It's encrypted at rest and never shown to the agents. This request is "
+        "still waiting."
+    )
+    await chat_svc.post_message(
+        db,
+        company_id=decision.company_id,
+        channel_id=decision.channel_id,
+        sender_agent_id=decision.agent_id,
+        body=body,
+    )
+
+
 async def try_resolve_from_reply(
     db: AsyncSession,
     *,
@@ -347,6 +371,13 @@ async def try_resolve_from_reply(
     )
     if decision is None or decision.task_id is None:
         return None, "none"
+    # A secret_request must NEVER be resolved from a chat reply: the generic path
+    # writes the founder's reply to memory (_apply_note), which for a secret IS the
+    # value. Refuse it here and steer the founder to the secure secret form — the
+    # value is only ever accepted (and sealed) through secrets.fulfill_request.
+    if decision.kind == DecisionKind.secret_request:
+        await _post_secret_reply_warning(db, decision)
+        return None, "unclear"
     verdict = await _classify_reply(
         db, company_id=company_id, summary=decision.summary, reply=reply
     )

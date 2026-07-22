@@ -171,6 +171,7 @@ class DecisionKind(str, enum.Enum):
     hire_approval = "hire_approval"
     user_action = "user_action"
     external_comm = "external_comm"  # an outbound external message awaiting sign-off
+    secret_request = "secret_request"  # an agent needs a secret (api key/password) the founder holds
 
 
 class ExternalMessageStatus(str, enum.Enum):
@@ -247,6 +248,18 @@ class SiteConnectStatus(str, enum.Enum):
 
 
 class ApiKeyStatus(str, enum.Enum):
+    active = "active"
+    revoked = "revoked"
+
+
+class SecretStatus(str, enum.Enum):
+    """Lifecycle of a stored :class:`~app.models.secret.Secret`.
+
+    A secret only ever exists once a value has been sealed (there is no
+    "requested-but-empty" row — an outstanding request lives on the
+    ``secret_request`` :class:`DecisionRequest` until the founder fulfils it).
+    """
+
     active = "active"
     revoked = "revoked"
 

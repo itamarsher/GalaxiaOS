@@ -320,6 +320,29 @@ class ApiKeyOut(ORMModel):
     status: str
 
 
+# ── Secrets (generic encrypted values: API keys, passwords, tokens) ───────────
+class SecretCreateRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    value: str = Field(min_length=1)
+    description: str | None = None
+    allowed_host: str | None = None
+
+
+class SecretFulfillRequest(BaseModel):
+    """The value a founder provides for an agent's ``secret_request`` decision."""
+
+    value: str = Field(min_length=1)
+
+
+class SecretOut(ORMModel):
+    id: uuid.UUID
+    name: str
+    description: str | None = None
+    fingerprint: str
+    allowed_host: str | None = None
+    status: str
+
+
 # ── Integrations (Cloudflare site host + DNS) ────────────────────────────────
 class CloudflareCredsRequest(BaseModel):
     api_token: str = Field(min_length=8)

@@ -31,6 +31,12 @@ async def write(
     structured: dict | None = None,
     labels: list[str] | None = None,
 ) -> MemoryEntry:
+    # Defence in depth: never let a stored secret's value land in durable memory,
+    # even if one slipped into the title/content upstream.
+    from app.services import secrets as secrets_svc
+
+    title = await secrets_svc.redact_text(db, company_id=company_id, text=title)
+    content = await secrets_svc.redact_text(db, company_id=company_id, text=content)
     entry = MemoryEntry(
         company_id=company_id,
         type=type,
