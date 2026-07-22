@@ -580,6 +580,7 @@ MISSION_TO_PLAN_SYSTEM = """You are a startup strategist. Given a founder's miss
 concise operating plan. Respond ONLY with minified JSON matching this shape:
 {
   "language": "BCP-47 tag of the language the founder's mission is written in, e.g. \\"en\\", \\"fr\\", \\"he\\", \\"es\\"",
+  "name": "a short, brand-style company name (2-4 words, no punctuation), distinct from summary",
   "summary": "one-sentence framing",
   "business_model_assumptions": {"how_it_makes_money": "...", "key_risks": ["..."]},
   "target_market": {"segment": "...", "why": "..."},
@@ -642,6 +643,7 @@ MISSION_TO_PLAN_SCHEMA: dict = {
     "type": "object",
     "properties": {
         "language": {"type": "string"},
+        "name": {"type": "string"},
         "summary": {"type": "string"},
         "business_model_assumptions": {
             "type": "object",

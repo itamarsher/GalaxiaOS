@@ -252,6 +252,20 @@ def _as_int(value: object, default: int | None) -> int | None:
         return default
 
 
+def _clean_company_name(name: object, fallback: str) -> str:
+    """Trim a model-provided company name to brand-name length.
+
+    ``name`` is expected to be a short brand-style string, but a misbehaving
+    model could still hand back a full sentence — strip trailing punctuation
+    and cap well below the ``Company.name`` column limit so a stray long
+    string never re-creates the mission-as-name bug.
+    """
+    cleaned = str(name or "").strip().rstrip(".!?,;:").strip()
+    if not cleaned:
+        return fallback
+    return cleaned[:80]
+
+
 # A sensible default fleet, used to backfill whatever the org-design LLM omits so
 # the company is never left without a working org (it must at least have a CEO to
 # plan/dispatch and a Governance agent to oversee).
@@ -641,7 +655,7 @@ async def generate(db: AsyncSession, *, company: Company) -> dict:
     mission.generated_summary = plan.get("summary")
     mission.business_model_assumptions = plan.get("business_model_assumptions")
     mission.target_market = plan.get("target_market")
-    company.name = str(plan.get("summary") or company.name)[:120]
+    company.name = _clean_company_name(plan.get("name"), company.name)
 
     # Language detected once here (from the raw mission — the strongest signal) and
     # reused by every later stage so the whole company speaks the founder's language
