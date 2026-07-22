@@ -133,6 +133,7 @@ SPECS: list[ToolSpec] = [
                         "growth",
                         "research",
                         "product",
+                        "design",
                         "finance",
                         "governance",
                         "auditor",
@@ -173,6 +174,7 @@ SPECS: list[ToolSpec] = [
                                     "growth",
                                     "research",
                                     "product",
+                                    "design",
                                     "finance",
                                     "governance",
                                     "auditor",
@@ -407,7 +409,13 @@ async def _spawn_child(
     role: str,
     goal: str,
     objective_id: uuid.UUID | None = None,
-) -> None:
+) -> bool:
+    """Enqueue a sub-task for the earliest active agent of ``role``.
+
+    Returns False (dispatching nothing) when the company has no active agent
+    of that role — callers surface this as a loud error rather than silently
+    dropping the initiative.
+    """
     # Prefer an active agent of the role: paused agents are parked (their work is
     # blocked anyway), and after the CEO hires extra capacity there may be more
     # than one — dispatch to the earliest-created active one for determinism.
@@ -422,7 +430,7 @@ async def _spawn_child(
         .limit(1)
     )
     if child_agent is None:
-        return
+        return False
     child = Task(
         company_id=parent.company_id,
         run_id=parent.run_id,
@@ -440,6 +448,7 @@ async def _spawn_child(
     db.add(child)
     await db.flush()
     await ctx.enqueue_task(child.id)
+    return True
 
 
 # Sentinel: a dispatch that must be objective-tagged but resolved to nothing.
@@ -517,7 +526,16 @@ async def _dispatch_task(db, ctx, *, agent: Agent, task: Task, args: dict) -> To
     objective_id = await _resolve_dispatch_objective(db, task, args.get("objective"))
     if objective_id is _MISSING_OBJECTIVE:
         return ToolOutcome(observation=_OBJECTIVE_REQUIRED, is_error=True)
-    await _spawn_child(db, ctx, task, agent, args["role"], args["goal"], objective_id)
+    dispatched = await _spawn_child(db, ctx, task, agent, args["role"], args["goal"], objective_id)
+    if not dispatched:
+        return ToolOutcome(
+            observation=(
+                f"No active '{args['role']}' agent exists in this company — the "
+                "initiative was NOT dispatched. Call list_team to see the roles "
+                "actually available, then replan against your real roster."
+            ),
+            is_error=True,
+        )
     return ToolOutcome(observation=f"dispatched {args['role']}: {args['goal'][:80]}")
 
 
@@ -561,11 +579,25 @@ async def _dispatch_tasks(db, ctx, *, agent: Agent, task: Task, args: dict) -> T
             is_error=True,
         )
     dispatched: list[str] = []
+    missing_roles: set[str] = set()
     for entry, objective_id in resolved:
-        await _spawn_child(db, ctx, task, agent, entry["role"], entry["goal"], objective_id)
-        dispatched.append(f"{entry['role']}: {str(entry['goal'])[:60]}")
-    body = "\n".join(f"- {d}" for d in dispatched)
-    return ToolOutcome(observation=f"dispatched {len(dispatched)} sub-tasks in parallel:\n{body}")
+        ok = await _spawn_child(db, ctx, task, agent, entry["role"], entry["goal"], objective_id)
+        if ok:
+            dispatched.append(f"{entry['role']}: {str(entry['goal'])[:60]}")
+        else:
+            missing_roles.add(entry["role"])
+    lines = []
+    if dispatched:
+        body = "\n".join(f"- {d}" for d in dispatched)
+        lines.append(f"dispatched {len(dispatched)} sub-tasks in parallel:\n{body}")
+    if missing_roles:
+        roles = ", ".join(sorted(missing_roles))
+        lines.append(
+            f"No active agent for role(s): {roles} — those initiatives were NOT "
+            "dispatched. Call list_team to see the roles actually available, then "
+            "replan against your real roster."
+        )
+    return ToolOutcome(observation="\n\n".join(lines), is_error=bool(missing_roles))
 
 
 async def _submit_plan(db, ctx, *, agent: Agent, task: Task, args: dict) -> ToolOutcome:
