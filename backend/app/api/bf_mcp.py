@@ -156,6 +156,29 @@ _TOOL_SPECS = [
             "required": ["amount_cents"],
         },
     },
+    {
+        "name": "report_bug",
+        "description": "Report a bug in GalaxiaOS itself — something in the platform is broken "
+        "or behaving wrong — into the shared feature-request backlog. Use a short, specific "
+        "title (it dedupes/aggregates demand by title) and put the reproduction, expected vs "
+        "actual, and impact in details. The platform reviews demand and files tracker issues; "
+        "track status with list_feature_requests.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "title": {"type": "string"},
+                "details": {"type": "string"},
+            },
+            "required": ["title", "details"],
+        },
+    },
+    {
+        "name": "list_feature_requests",
+        "description": "List the bugs and capability requests YOUR company has filed, each with "
+        "its lifecycle status (open -> promoted -> delivered), so you can monitor whether a bug "
+        "you reported has been picked up and fixed.",
+        "inputSchema": {"type": "object", "properties": {"limit": {"type": "integer"}}},
+    },
 ]
 
 
@@ -346,6 +369,45 @@ async def _call_tool(db, company_id, agent_id, mid, params: dict) -> dict:
             )
             await db.commit()
             return _ok(mid, _content(result))
+
+        if name == "report_bug":
+            from app.services import feature_requests as fr_svc
+
+            outcome = await fr_svc.record_request(
+                db,
+                kind="bug",
+                title=str(args["title"]).strip(),
+                details=str(args["details"]).strip(),
+                company_id=company_id,
+                agent_id=agent_id,
+            )
+            await db.commit()
+            if outcome is None:
+                return _ok(mid, {"content": [{"type": "text", "text": "empty title"}], "isError": True})
+            return _ok(mid, _content({
+                "ok": True,
+                "feature_request_id": str(outcome.feature_id),
+                "status": outcome.status.value,
+                "demand": outcome.votes,
+                "new_entry": outcome.is_new_feature,
+            }))
+
+        if name == "list_feature_requests":
+            from app.services import feature_requests as fr_svc
+
+            limit = int(args.get("limit") or 50)
+            rows = await fr_svc.list_for_company(db, company_id=company_id, limit=limit)
+            items = [
+                {
+                    "id": str(r.feature_request.id),
+                    "kind": r.feature_request.kind.value,
+                    "title": r.feature_request.title,
+                    "status": r.feature_request.status.value,
+                    "issue_url": r.feature_request.github_issue_url,
+                }
+                for r in rows
+            ]
+            return _ok(mid, _content({"requests": items, "count": len(items)}))
 
         return _error(mid, -32602, f"unknown tool: {name}")
     except (KeyError, ValueError) as exc:
