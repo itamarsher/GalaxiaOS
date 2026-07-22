@@ -12,6 +12,7 @@ from app.jobs.recovery import recover_pending_work
 from app.jobs.scheduled import (
     backfill_memory_embeddings,
     generate_digests,
+    keep_warm,
     monitor_failed_tasks,
     monitor_render_platform,
     optimize_skills,
@@ -93,6 +94,10 @@ class WorkerSettings:
         # no delegate configured, and entirely off via ABOS_DELEGATE_ENABLED.
         cron(triage_founder_decisions, minute=set(range(0, 60))),
         cron(run_business_cycle, hour=settings.business_cycle_hour_utc, minute=0),
+        # Keep-warm self-ping (every 3 min, well under a 15-min idle window) so a
+        # free-tier host doesn't spin the in-process worker down. Opt-in + no-op
+        # without a public URL (ABOS_KEEP_WARM_ENABLED); harmless on always-on hosts.
+        cron(keep_warm, minute=set(range(0, 60, 3))),
         # Reclaim initiatives whose connected-worker lease expired (crashed/stalled
         # pull worker), so they're re-offered instead of stuck running. Every 5
         # minutes; no-op unless a lease has actually lapsed.

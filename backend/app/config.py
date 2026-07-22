@@ -147,6 +147,12 @@ class Settings(BaseSettings):
     # worker service. Lets the whole app run on a single free-tier web instance;
     # leave false in production, where API and worker scale independently.
     run_worker_in_process: bool = False
+    # Free-tier keep-warm: when the worker runs in-process on a host that idles
+    # web services out after inactivity (e.g. Render free), a periodic self-ping to
+    # the public URL keeps inbound traffic flowing so the worker isn't spun down and
+    # agent cycles keep running. Opt-in; a no-op without a public URL. Leave false on
+    # an always-on instance (a separate worker service, or a paid plan).
+    keep_warm_enabled: bool = False
 
     # Runtime safety caps (circuit breakers)
     max_task_depth: int = 4
