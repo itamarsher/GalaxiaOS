@@ -88,6 +88,10 @@ class TaskStatus(str, enum.Enum):
     done = "done"
     failed = "failed"
     blocked = "blocked"
+    # The step budget ran out before the agent produced a final answer or a
+    # terminal tool call. Distinct from ``done`` so a step-cap timeout is never
+    # reported to the founder — or scored in reputation — as a real result.
+    needs_continuation = "needs_continuation"
 
 
 class SpendCategory(str, enum.Enum):

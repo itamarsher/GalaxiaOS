@@ -48,7 +48,9 @@ async def finalize(
         company_id=row.company_id,
         agent_id=row.agent_id,
         success=status is TaskStatus.done,
-        blocked=status is TaskStatus.blocked,
+        # A step-cap timeout made some progress but didn't finish — scored like
+        # ``blocked`` (partial credit), not a full failure and not a success.
+        blocked=status in (TaskStatus.blocked, TaskStatus.needs_continuation),
         cost_cents=row.cost_cents,
     )
     if status is TaskStatus.done and row.parent_task_id is not None:

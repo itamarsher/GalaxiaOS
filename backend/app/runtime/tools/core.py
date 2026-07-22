@@ -1200,6 +1200,7 @@ async def _collect_results(db, ctx, *, agent: Agent, task: Task, args: dict) -> 
     done = [c for c in rows if c.status is TaskStatus.done]
     pending = [c for c in rows if c.status in _IN_FLIGHT]
     failed = [c for c in rows if c.status in (TaskStatus.failed, TaskStatus.blocked)]
+    incomplete = [c for c in rows if c.status is TaskStatus.needs_continuation]
     lines: list[str] = []
     if done:
         lines.append("Completed sub-task results:")
@@ -1211,6 +1212,12 @@ async def _collect_results(db, ctx, *, agent: Agent, task: Task, args: dict) -> 
         lines.append(
             f"Failed/blocked sub-tasks ({len(failed)}): " + ", ".join(c.goal[:50] for c in failed)
         )
+    if incomplete:
+        lines.append(f"Ran out of steps before finishing ({len(incomplete)}):")
+        for child in incomplete:
+            summary = (child.output or {}).get("summary", "") if child.output else ""
+            clipped = clip(summary, settings.collect_results_summary_chars)
+            lines.append(f"- {child.goal[:80]}: {clipped or '(no partial summary)'}")
     if pending:
         # Tell the parent to wait rather than synthesize half the picture.
         lines.append(
