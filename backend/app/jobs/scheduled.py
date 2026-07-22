@@ -15,6 +15,31 @@ from app.services import runway as runway_svc
 from app.services import sites as sites_svc
 
 
+async def keep_warm(ctx: dict) -> dict:
+    """Self-ping the public URL so a free-tier host doesn't idle the in-process worker.
+
+    On a host that spins a web service down after inactivity (Render free), the
+    in-process think→act worker dies with it and agent cycles stop. A periodic GET to
+    the service's own public ``/health`` counts as inbound traffic and resets the idle
+    timer, keeping the worker alive. Opt-in via ``ABOS_KEEP_WARM_ENABLED``; a no-op
+    without a public URL. Best-effort — a failed ping never raises.
+    """
+    if not settings.keep_warm_enabled:
+        return {"skipped": True}
+    base = (settings.public_api_base_url or "").rstrip("/")
+    if not base:
+        return {"skipped": "no_public_url"}
+    import httpx
+
+    url = f"{base}/health"
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(url)
+        return {"pinged": url, "status": resp.status_code}
+    except Exception:  # noqa: BLE001 — a keep-warm ping must never break the worker
+        return {"pinged": url, "error": True}
+
+
 async def _active_company_ids() -> list:
     async with SessionLocal() as db:
         rows = await db.scalars(
