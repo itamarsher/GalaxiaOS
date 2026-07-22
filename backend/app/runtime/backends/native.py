@@ -161,6 +161,19 @@ def _absorb_use_tool(active: set[str], tool_calls) -> None:
             active.update(_names_from_use_tool_call(call.arguments))
 
 
+# Provider-reported stop reasons meaning generation was cut off before the model
+# finished, rather than stopping on its own. Anthropic reports "max_tokens"
+# (`AnthropicProvider.complete`); the OpenAI-compatible providers report
+# "length" via `finish_reason` (`OpenAIProvider.complete`, and its OSS-compatible
+# subclasses in `app.providers.oss`).
+_TRUNCATED_STOP_REASONS = frozenset({"max_tokens", "length"})
+
+
+def _truncated_tool_calls(resp) -> bool:
+    """True when the model emitted tool call(s) but was cut off before finishing."""
+    return bool(resp.tool_calls) and resp.stop_reason in _TRUNCATED_STOP_REASONS
+
+
 class NativeBackend:
     async def run(self, ctx: RuntimeContext, agent: Agent, task: Task) -> dict:
         # A task that parked to wait for a teammate's (or the founder's) reply must
@@ -381,32 +394,57 @@ class NativeBackend:
                     {"summary": clip(resp.text, settings.max_result_summary_chars)},
                 )
 
-            # Hot-load any tools the agent asked for, so they're offered next step.
-            _absorb_use_tool(active_tools, resp.tool_calls)
-
-            results: list[ToolResultBlock] = []
-            for call in resp.tool_calls:
-                verdict = await self._handle_call(ctx, agent, task, call, mcp_routing)
-                if verdict["terminal"]:
-                    return verdict["result"]
-                results.append(
+            if _truncated_tool_calls(resp):
+                # The model's own output was cut off before these tool call(s)
+                # finished, so `call.arguments` may be incomplete — or, on the
+                # OpenAI-compatible path, silently coerced to `{}` when the cut
+                # JSON fails to parse (see ``OpenAIProvider.complete``). Running
+                # the tool against corrupted/missing args produces a misleading
+                # failure (e.g. a truncated ``save_file`` content lands as
+                # "File content is empty") with no signal that it was the
+                # agent's own truncation, not a bad call — so it never learns to
+                # shorten the payload. Skip execution and tell it plainly.
+                results = [
                     ToolResultBlock(
                         tool_use_id=call.id,
-                        content=verdict["observation"],
-                        is_error=verdict.get("is_error", False),
+                        content=(
+                            f"Your last response was cut off (hit the per-step output "
+                            f"limit) before the `{call.name}` call finished, so its "
+                            "arguments may be incomplete or corrupted. It was NOT "
+                            "executed. Retry with a shorter payload — e.g. split a "
+                            "large document across multiple tool calls."
+                        ),
+                        is_error=True,
                     )
-                )
+                    for call in resp.tool_calls
+                ]
+            else:
+                # Hot-load any tools the agent asked for, so they're offered next step.
+                _absorb_use_tool(active_tools, resp.tool_calls)
 
-            # If the agent connected a new service this step, re-resolve the MCP
-            # tools so the freshly registered server's tools are offered on the next
-            # step — that's what makes self-service tool acquisition usable within
-            # the same run rather than only on the next task.
-            if any(c.name == "connect_service" for c in resp.tool_calls):
-                async with ctx.session_factory() as db:
-                    await set_tenant(db, task.company_id)
-                    mcp_specs, mcp_routing = await mcp_svc.tool_specs_for_company(
-                        db, company_id=task.company_id
+                results = []
+                for call in resp.tool_calls:
+                    verdict = await self._handle_call(ctx, agent, task, call, mcp_routing)
+                    if verdict["terminal"]:
+                        return verdict["result"]
+                    results.append(
+                        ToolResultBlock(
+                            tool_use_id=call.id,
+                            content=verdict["observation"],
+                            is_error=verdict.get("is_error", False),
+                        )
                     )
+
+                # If the agent connected a new service this step, re-resolve the MCP
+                # tools so the freshly registered server's tools are offered on the next
+                # step — that's what makes self-service tool acquisition usable within
+                # the same run rather than only on the next task.
+                if any(c.name == "connect_service" for c in resp.tool_calls):
+                    async with ctx.session_factory() as db:
+                        await set_tenant(db, task.company_id)
+                        mcp_specs, mcp_routing = await mcp_svc.tool_specs_for_company(
+                            db, company_id=task.company_id
+                        )
 
             # Assistant turn: echo the model's tool_use blocks (ids preserved),
             # prefixed with any leading text the model emitted.
