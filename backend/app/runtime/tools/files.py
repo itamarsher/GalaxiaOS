@@ -15,7 +15,7 @@ and indexing live in :mod:`app.services.files`.
 from __future__ import annotations
 
 from app.config import settings
-from app.integrations.files import FileProviderError
+from app.integrations.files import FileProviderAuthError, FileProviderError
 from app.models import Agent, Company, Task
 from app.models.enums import FileCategory, MemoryType
 from app.providers.base import ToolSpec
@@ -29,7 +29,7 @@ from app.runtime.tools.base import (
 from app.services import data_policy
 from app.services import files as files_svc
 from app.services import memory as memory_svc
-from app.services.integrations import resolve_file_provider
+from app.services.integrations import clear_file_provider_credential, resolve_file_provider
 
 #: Category enum values exposed to the model, with what each folder is for.
 _CATEGORY_HELP = (
@@ -104,6 +104,20 @@ _UNSUPPORTED_HINT = (
     "No file store is connected. Ask the founder to connect Google Drive in "
     "Settings (or call `request_capability`)."
 )
+_DISCONNECTED_OBSERVATION = (
+    "Google Drive disconnected — the stored credential has expired or been "
+    "revoked. Ask the founder to reconnect it in Settings."
+)
+
+
+async def _handle_auth_error(db, *, company_id) -> ToolOutcome:
+    """A stored Drive credential just failed with an unrecoverable auth error.
+
+    Clears it so status flips back to "not connected" instead of every later
+    call hitting the same dead token and repeating Google's opaque error.
+    """
+    await clear_file_provider_credential(db, company_id=company_id)
+    return ToolOutcome(observation=_DISCONNECTED_OBSERVATION, is_error=True)
 
 
 def _parse_category(raw: object) -> FileCategory | None:
@@ -145,6 +159,8 @@ async def _save_file(db, ctx, *, agent: Agent, task: Task, args: dict) -> ToolOu
             source_task_id=task.id,
             description=str(args.get("description") or "").strip() or None,
         )
+    except FileProviderAuthError:
+        return await _handle_auth_error(db, company_id=task.company_id)
     except FileProviderError as exc:
         return ToolOutcome(observation=f"saving the file failed: {exc}", is_error=True)
 
@@ -215,6 +231,8 @@ async def _read_company_file(db, ctx, *, agent: Agent, task: Task, args: dict) -
         )
     try:
         data = await provider.download_file(row.external_id)
+    except FileProviderAuthError:
+        return await _handle_auth_error(db, company_id=task.company_id)
     except FileProviderError as exc:
         return ToolOutcome(observation=f"reading the file failed: {exc}", is_error=True)
     try:

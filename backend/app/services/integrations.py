@@ -267,6 +267,38 @@ async def _owner_google_drive(company_id: uuid.UUID) -> dict | None:
     return data if data.get("refresh_token") else None
 
 
+async def clear_file_provider_credential(db: AsyncSession, *, company_id: uuid.UUID) -> bool:
+    """Disconnect whichever Drive bundle is actually powering this company's files.
+
+    Mirrors :func:`resolve_file_provider`'s resolution order (company's own bundle,
+    then the owner's account-wide Drive) so the credential that Google just
+    rejected is the one cleared — flipping status back to "not connected" instead
+    of leaving a dead token to keep failing silently. Called when a file tool call
+    hits :class:`~app.integrations.files.FileProviderAuthError`.
+
+    The legacy sibling-company fallback (:func:`_owner_google_drive`) is left
+    alone: it belongs to a *different* company than the one calling here, and
+    clearing it would affect that other company's own connection.
+    """
+    if await clear_google_drive(db, company_id=company_id):
+        return True
+
+    from sqlalchemy import select
+
+    from app.db import SessionLocal
+    from app.models import Company
+    from app.services import user_drive
+
+    async with SessionLocal() as s:
+        owner_id = await s.scalar(select(Company.owner_user_id).where(Company.id == company_id))
+        if owner_id is None:
+            return False
+        cleared = await user_drive.clear_user_drive(s, user_id=owner_id)
+        if cleared:
+            await s.commit()
+        return cleared
+
+
 async def resolve_file_provider(db: AsyncSession, *, company_id: uuid.UUID) -> FileProvider | None:
     """The company's file store — enabled when the founder has connected Google Drive.
 
