@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import httpx
 import pytest
 
 from app.integrations.tavily import TavilyWebSearch
@@ -11,6 +12,11 @@ from app.integrations.websearch import (
     WebSearchError,
     get_web_search,
 )
+
+
+def _response(status_code: int, json_body: object = None) -> httpx.Response:
+    request = httpx.Request("POST", "https://api.tavily.com/search")
+    return httpx.Response(status_code, json=json_body, request=request)
 
 
 def test_parse_maps_results():
@@ -102,3 +108,57 @@ async def test_verify_credentials_rejects_empty_key_without_network():
 
     with pytest.raises(WebSearchError):
         await verify_credentials("")
+
+
+# ── error-body surfacing (HTTP 432 and friends) ─────────────────────────────────
+def test_raise_for_status_ok_is_a_noop():
+    TavilyWebSearch._raise_for_status(_response(200, {"results": []}))
+
+
+def test_raise_for_status_432_gives_actionable_message():
+    resp = _response(432, {"detail": "Usage limit exceeded"})
+    with pytest.raises(WebSearchError) as exc_info:
+        TavilyWebSearch._raise_for_status(resp)
+    message = str(exc_info.value)
+    assert "432" in message
+    assert "Usage limit exceeded" in message
+    assert "configure_integration" in message
+
+
+def test_raise_for_status_432_without_body_still_actionable():
+    resp = _response(432, None)
+    with pytest.raises(WebSearchError) as exc_info:
+        TavilyWebSearch._raise_for_status(resp)
+    message = str(exc_info.value)
+    assert "432" in message
+    assert "configure_integration" in message
+
+
+def test_raise_for_status_surfaces_error_detail_for_other_codes():
+    resp = _response(401, {"error": "invalid api key"})
+    with pytest.raises(WebSearchError) as exc_info:
+        TavilyWebSearch._raise_for_status(resp)
+    message = str(exc_info.value)
+    assert "401" in message
+    assert "invalid api key" in message
+
+
+def test_raise_for_status_falls_back_to_generic_message_without_body():
+    resp = _response(500, "not-json-and-not-a-dict")
+    with pytest.raises(WebSearchError) as exc_info:
+        TavilyWebSearch._raise_for_status(resp)
+    assert "Tavily request failed" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_search_432_raises_actionable_websearcherror(monkeypatch):
+    async def fake_post(self, url, json=None):
+        return _response(432, {"detail": "Usage limit exceeded"})
+
+    monkeypatch.setattr(httpx.AsyncClient, "post", fake_post)
+    client = TavilyWebSearch(api_key="k")
+    with pytest.raises(WebSearchError) as exc_info:
+        await client.search("anything")
+    message = str(exc_info.value)
+    assert "432" in message
+    assert "configure_integration" in message
