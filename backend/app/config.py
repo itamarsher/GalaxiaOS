@@ -478,6 +478,11 @@ class Settings(BaseSettings):
     nano_banana_image_model: str = "gemini-2.5-flash-image"
     nano_banana_video_model: str = "veo-3.0-generate-001"
     media_gen_timeout_seconds: float = 60.0
+    # Bounded retry-with-backoff for transient HTTP 429s on the initiating call
+    # (generateContent / predictLongRunning). Honors a Retry-After header when Google
+    # sends one, otherwise backs off exponentially from this base.
+    media_gen_max_retries: int = 2
+    media_gen_retry_backoff_seconds: float = 1.0
     # Veo generation is a long-running operation; poll it on this cadence up to the
     # max wait before giving up.
     media_gen_video_poll_seconds: float = 8.0

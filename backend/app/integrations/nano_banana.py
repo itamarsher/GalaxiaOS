@@ -29,14 +29,18 @@ from app.integrations.mediagen import GeneratedMedia, MediaGenError
 _API_ROOT = "https://generativelanguage.googleapis.com/v1beta"
 
 
-def _explain_http_error(exc: httpx.HTTPError, *, what: str) -> MediaGenError:
+def _explain_http_error(exc: httpx.HTTPError, *, what: str, retries: int = 0) -> MediaGenError:
     """Turn a raw Google API HTTP error into an actionable :class:`MediaGenError`.
 
     The bare httpx message (e.g. "Client error '429 Too Many Requests'") hides the
-    reason, and 429 on the image model almost always means the key's project has no
-    image quota — the Gemini **free tier allows 0 image-generation requests**, so it
-    needs billing enabled rather than a retry. Surface that so the agent (and the
-    founder) know the concrete fix instead of silently treating it as transient.
+    reason. A 429 on the image model can mean two different things: the key's project
+    has genuinely no image quota — the Gemini **free tier allows 0 image-generation
+    requests**, so it needs billing enabled rather than a retry — or it's ordinary
+    transient per-minute rate limiting on a paid project, which a short backoff clears.
+    Only the former is diagnosed from Google's error detail (a ``free_tier`` marker or
+    a ``limit: 0``-style quota); anything else after retries are exhausted is reported
+    as genuine rate-limiting instead, so the agent doesn't chase a billing fix that
+    won't help.
     """
     resp = getattr(exc, "response", None)
     status = getattr(resp, "status_code", None)
@@ -48,11 +52,19 @@ def _explain_http_error(exc: httpx.HTTPError, *, what: str) -> MediaGenError:
             detail = (getattr(resp, "text", "") or "")[:300]
     said = f" Google said: {detail[:220]}" if detail else ""
     if status == 429:
+        lowered = detail.lower()
+        if "free_tier" in lowered or "limit: 0" in lowered or "limit:0" in lowered:
+            return MediaGenError(
+                f"{what} was refused for lack of quota (HTTP 429). Image/video generation "
+                "is not available on the Gemini free tier — enable billing on the Google AI "
+                "(Gemini API) project behind this key, or use a key from a paid project."
+                + said
+            )
+        retried_note = f" after {retries} retr{'y' if retries == 1 else 'ies'}" if retries else ""
         return MediaGenError(
-            f"{what} was refused for lack of quota (HTTP 429). Image/video generation "
-            "is not available on the Gemini free tier — enable billing on the Google AI "
-            "(Gemini API) project behind this key, or use a key from a paid project."
-            + said
+            f"{what} is still rate-limited (HTTP 429){retried_note} — this looks like "
+            "transient per-minute throttling rather than a quota block. Check the "
+            "project's Generative Language API quota, or try again shortly." + said
         )
     if status in (401, 403):
         return MediaGenError(
@@ -60,6 +72,42 @@ def _explain_http_error(exc: httpx.HTTPError, *, what: str) -> MediaGenError:
             "access to this model." + said
         )
     return MediaGenError(f"{what} failed: {exc}")
+
+
+def _retry_delay(resp: httpx.Response, attempt: int, backoff_seconds: float) -> float:
+    """Delay before the next attempt: honor ``Retry-After`` if present, else backoff."""
+    retry_after = resp.headers.get("Retry-After")
+    if retry_after:
+        try:
+            return max(0.0, float(retry_after))
+        except ValueError:
+            pass
+    return backoff_seconds * (2**attempt)
+
+
+async def _post_json_with_retry(
+    client: httpx.AsyncClient, url: str, body: dict, *, what: str
+) -> dict:
+    """POST expecting a JSON body, retrying a bounded number of times on HTTP 429.
+
+    Other statuses fail fast via :func:`_explain_http_error`; only 429 is retried,
+    since it's the sole status that can mean transient rate-limiting rather than a
+    permanent problem with the request or key.
+    """
+    max_retries = settings.media_gen_max_retries
+    backoff = settings.media_gen_retry_backoff_seconds
+    attempt = 0
+    while True:
+        resp = await client.post(url, json=body)
+        if resp.status_code == 429 and attempt < max_retries:
+            await asyncio.sleep(_retry_delay(resp, attempt, backoff))
+            attempt += 1
+            continue
+        try:
+            resp.raise_for_status()
+        except httpx.HTTPError as exc:
+            raise _explain_http_error(exc, what=what, retries=attempt) from exc
+        return resp.json()
 
 
 class NanoBananaMediaGen:
@@ -96,11 +144,9 @@ class NanoBananaMediaGen:
         body = {"contents": [{"parts": [{"text": full_prompt}]}]}
         try:
             async with httpx.AsyncClient(timeout=self._timeout) as client:
-                resp = await client.post(url, json=body)
-                resp.raise_for_status()
-                data = resp.json()
-        except httpx.HTTPError as exc:
-            raise _explain_http_error(exc, what="Nano Banana image generation") from exc
+                data = await _post_json_with_retry(
+                    client, url, body, what="Nano Banana image generation"
+                )
         except ValueError as exc:  # non-JSON body
             raise MediaGenError(f"Nano Banana returned non-JSON: {exc}") from exc
         return self._parse_image(data)
@@ -116,9 +162,9 @@ class NanoBananaMediaGen:
             body["parameters"] = params
         try:
             async with httpx.AsyncClient(timeout=self._timeout) as client:
-                resp = await client.post(start_url, json=body)
-                resp.raise_for_status()
-                op = resp.json()
+                op = await _post_json_with_retry(
+                    client, start_url, body, what="Veo video generation"
+                )
                 op_name = op.get("name")
                 if not op_name:
                     raise MediaGenError("Veo did not return an operation to poll.")
