@@ -102,8 +102,8 @@ async def test_execute_posts_briefing_and_routes_by_function():
     assert report.outcome == "done"
     assert seen["url"].endswith("/v1/chat/completions")
     assert seen["auth"] == "Bearer secret"
-    # Routes to the per-tenant function persona (RFC 0001 §6): <company_id>:<function>.
-    assert seen["body"]["model"] == f"openclaw/{mandate.company_id}:growth"
+    # Routes to the per-function persona (RFC 0001 §6, function-level isolation).
+    assert seen["body"]["model"] == "openclaw/growth"
     assert "Growth Lead" in seen["body"]["messages"][0]["content"]  # mandate briefing
     assert "No paid ads" in seen["body"]["messages"][0]["content"]  # constraints
     assert "publish the launch page" in seen["body"]["messages"][1]["content"]  # initiative

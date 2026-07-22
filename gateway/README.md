@@ -57,12 +57,15 @@ start.
    `ABOS_DEFAULT_AGENT_BACKEND=external` (RFC §5). Otherwise it's opt-in per agent
    via the founder's runtime toggle.
 
-**Note on persona routing:** Galaxia routes each function with
-`model=openclaw/<company_id>:<function>` (§6 per-tenant isolation). If your OpenClaw
-version doesn't auto-materialize agents for unlisted ids, set
-`ABOS_OPENCLAW_MODEL=openclaw/default` to route every call to the single configured
-agent (the mandate still carries the company/function context) until per-tenant
-personas are registered.
+**Persona routing (§6 isolation):** the config registers **one isolated agent per
+function** (`growth`, `product`, finance`, … each with its own workspace), and
+Galaxia routes `model=openclaw/<function>` — so functions never share a
+workspace/memory. OpenClaw serves only statically-defined agents and rejects `:`/`/`
+in an id, so routing is function-level. **Full per-`(company, function)` isolation
+across many companies** needs the Gateway's agent roster generated from Galaxia's
+org (add an entry per external-bound agent) — a follow-up; a single-company
+deployment already gets full per-function isolation. To instead pin every function
+to one agent, set `ABOS_OPENCLAW_MODEL=openclaw/default`.
 
 ## Verify
 

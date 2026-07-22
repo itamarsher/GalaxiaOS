@@ -8,6 +8,18 @@
   },
   "agents": {
     "defaults": { "model": { "primary": "anthropic/claude-sonnet-4-6" } },
-    "list": [ { "id": "default", "default": true } ]
+    "list": [
+      { "id": "default", "default": true, "workspace": "~/.openclaw/ws/default" },
+      { "id": "growth", "workspace": "~/.openclaw/ws/growth" },
+      { "id": "research", "workspace": "~/.openclaw/ws/research" },
+      { "id": "product", "workspace": "~/.openclaw/ws/product" },
+      { "id": "design", "workspace": "~/.openclaw/ws/design" },
+      { "id": "finance", "workspace": "~/.openclaw/ws/finance" },
+      { "id": "governance", "workspace": "~/.openclaw/ws/governance" },
+      { "id": "auditor", "workspace": "~/.openclaw/ws/auditor" },
+      { "id": "data", "workspace": "~/.openclaw/ws/data" },
+      { "id": "platform", "workspace": "~/.openclaw/ws/platform" },
+      { "id": "custom", "workspace": "~/.openclaw/ws/custom" }
+    ]
   }
 }

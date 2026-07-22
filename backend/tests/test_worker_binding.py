@@ -43,14 +43,14 @@ def test_default_external_falls_back_to_native_without_a_gateway(monkeypatch):
     assert worker_binding.default_backend_for(AgentRole.growth) is AgentBackendType.native
 
 
-def test_persona_route_is_scoped_per_tenant():
-    # The same role in two companies routes to two DISTINCT personas (no leak).
+def test_persona_route_is_per_function():
+    # Each function routes to its own persona (isolated workspace in the gateway);
+    # a different function => a different persona. (Ids are colon/slash-free so
+    # OpenClaw accepts them; per-(company,function) isolation across many companies
+    # is a follow-up needing a Galaxia-generated roster.)
     worker = OpenClawWorker(base_url="https://gw", api_key="k")
-    c1, c2 = uuid.uuid4(), uuid.uuid4()
-    r1 = worker._route(_mandate(c1))
-    r2 = worker._route(_mandate(c2))
-    assert r1 == f"openclaw/{c1}:growth"
-    assert r1 != r2  # same "growth" role, different companies => different personas
+    assert worker._route(_mandate(uuid.uuid4(), function="growth")) == "openclaw/growth"
+    assert worker._route(_mandate(uuid.uuid4(), function="finance")) == "openclaw/finance"
 
 
 def test_explicit_model_overrides_the_route():
