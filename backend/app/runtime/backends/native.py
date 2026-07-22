@@ -91,6 +91,12 @@ def _escalate_tier(tier: str, trust: float | None) -> str:
 _DOMAIN_PRICE_HINT_CENTS = 4000
 _COST_HINTS = {"register_domain": _DOMAIN_PRICE_HINT_CENTS}
 
+# ``stop_reason``/``finish_reason`` values meaning the model's response was cut
+# off by the output token budget rather than finishing naturally: Anthropic
+# reports "max_tokens", OpenAI-compatible providers (and the OSS providers,
+# which subclass ``OpenAIProvider``) report "length".
+_TRUNCATED_STOP_REASONS = {"max_tokens", "length"}
+
 
 def _summarize_memory(entries) -> str:
     """Render recalled memory entries as a compact bullet list.
@@ -159,6 +165,41 @@ def _absorb_use_tool(active: set[str], tool_calls) -> None:
     for call in tool_calls:
         if call.name == "use_tool":
             active.update(_names_from_use_tool_call(call.arguments))
+
+
+def _truncated_tool_result_messages(resp) -> tuple[Message, Message]:
+    """Build the assistant/user turn pair for a step whose ``tool_calls`` were cut
+    off by the output token limit (see ``_TRUNCATED_STOP_REASONS``).
+
+    The model's arguments (e.g. a large ``save_file`` ``content`` string) may have
+    been truncated mid-JSON, so the calls are echoed back but answered with an
+    explicit error rather than dispatched — dispatching a call with truncated/
+    missing arguments reads to the agent as if it had omitted the field itself
+    (see issue #240), which it can't act on.
+    """
+    assistant_blocks: list = []
+    if resp.text:
+        assistant_blocks.append(TextBlock(text=resp.text))
+    assistant_blocks.extend(
+        ToolUseBlock(id=c.id, name=c.name, input=c.arguments) for c in resp.tool_calls
+    )
+    results = [
+        ToolResultBlock(
+            tool_use_id=call.id,
+            content=(
+                "Your previous response was cut off by the output token limit "
+                "before this tool call's arguments finished, so it was not "
+                "executed. Retry the call with a shorter payload, or split "
+                "large content across multiple calls."
+            ),
+            is_error=True,
+        )
+        for call in resp.tool_calls
+    ]
+    return (
+        Message(role="assistant", content=assistant_blocks),
+        Message(role="user", content=results),
+    )
 
 
 class NativeBackend:
@@ -380,6 +421,13 @@ class NativeBackend:
                     task,
                     {"summary": clip(resp.text, settings.max_result_summary_chars)},
                 )
+
+            if resp.stop_reason in _TRUNCATED_STOP_REASONS:
+                assistant_msg, user_msg = _truncated_tool_result_messages(resp)
+                messages.append(assistant_msg)
+                messages.append(user_msg)
+                await self._save_transcript(ctx, task, messages)
+                continue
 
             # Hot-load any tools the agent asked for, so they're offered next step.
             _absorb_use_tool(active_tools, resp.tool_calls)
