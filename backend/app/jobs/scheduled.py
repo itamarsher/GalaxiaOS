@@ -15,6 +15,74 @@ from app.services import runway as runway_svc
 from app.services import sites as sites_svc
 
 
+async def reap_orphaned_approvals_for_company(db, company_id) -> int:
+    """Fail the tenant's tasks stuck in ``waiting_approval`` with nothing to resume them.
+
+    A task parks in ``waiting_approval`` when it raises a founder decision OR waits
+    for a chat reply. If it lands there with NEITHER a linked ``DecisionRequest`` nor
+    a pending ``ChatWait``, it is orphaned: it can never be resolved, its objective is
+    blocked, and — because ``waiting_approval`` is an active status — the continuous
+    business cycle never winds down, so the whole company silently deadlocks (0 files,
+    0 metrics, yet "active"). This fails such tasks (only after a grace window, so a
+    just-created decision/wait is never raced), letting the run wind down and the next
+    cycle start. The root-cause park-without-a-decision should still be fixed at its
+    source; this is the safety net that keeps a company from freezing.
+
+    Operates on the passed (tenant-scoped) session and does NOT commit — the cron
+    wrapper owns the transaction. Returns how many tasks it reaped.
+    """
+    from datetime import UTC, datetime, timedelta
+
+    from app.models import DecisionRequest, Task
+    from app.models.enums import TaskStatus
+    from app.services import chat as chat_svc
+
+    cutoff = datetime.now(UTC) - timedelta(minutes=settings.orphaned_approval_grace_minutes)
+    stuck = (
+        await db.scalars(
+            select(Task).where(
+                Task.company_id == company_id,
+                Task.status == TaskStatus.waiting_approval,
+                Task.updated_at < cutoff,
+            )
+        )
+    ).all()
+    reaped = 0
+    for task in stuck:
+        # A single linked decision (any status) means this parked to a real decision —
+        # leave it (a stuck-after-resolution case is a different bug, and we must not
+        # discard approved work). Only a task with NO decision at all AND no pending
+        # reply-wait is the orphan we reap.
+        has_decision = await db.scalar(
+            select(DecisionRequest.id).where(DecisionRequest.task_id == task.id).limit(1)
+        )
+        if has_decision is not None:
+            continue
+        if await chat_svc.pending_reply_wait_for_task(db, task_id=task.id) is not None:
+            continue
+        task.status = TaskStatus.failed
+        task.output = {
+            **(task.output or {}),
+            "error": (
+                "Reaped: parked in waiting_approval with no decision or reply-wait "
+                "to resume it (would deadlock the company)."
+            ),
+        }
+        reaped += 1
+    return reaped
+
+
+async def reap_orphaned_approvals(ctx: dict) -> dict:
+    """Cron: reap orphaned ``waiting_approval`` tasks across every active company."""
+    reaped = 0
+    for company_id in await _active_company_ids():
+        async with SessionLocal() as db:
+            await set_tenant(db, company_id)
+            reaped += await reap_orphaned_approvals_for_company(db, company_id)
+            await db.commit()
+    return {"reaped": reaped}
+
+
 async def keep_warm(ctx: dict) -> dict:
     """Self-ping the public URL so a free-tier host doesn't idle the in-process worker.
 
