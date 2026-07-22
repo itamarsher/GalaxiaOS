@@ -31,12 +31,16 @@ async def _make_company(session_factory, *, is_platform: bool = False):
         db.add(user)
         await db.flush()
         company = Company(
-            owner_user_id=user.id, name="T", status=CompanyStatus.active, is_platform=is_platform
+            owner_user_id=user.id, name="T", status=CompanyStatus.active
         )
         db.add(company)
         await db.flush()
         db.add(Budget(company_id=company.id, period=BudgetPeriod.monthly, limit_cents=10_000))
         await db.commit()
+        if is_platform:
+            from app.config import settings as app_settings
+
+            app_settings.platform_company_id = str(company.id)
         return company.id, user.id
 
 
@@ -188,29 +192,26 @@ async def test_paid_managed_allowed_beyond_free_allowance(session_factory, monke
     assert resolved.source == "platform"
 
 
-async def test_platform_company_is_unlimited_and_unmetered(session_factory, monkeypatch):
-    """The platform (dogfooding) company is never capped, and its spend isn't
-    metered against the free-tier ledger — even blown far past the free allowance."""
+async def test_operator_company_is_metered_like_any_tenant(session_factory, monkeypatch):
+    """The operator (dogfooding) company is now a normal company: no unlimited/
+    unmetered carve-out — its spend IS recorded and the free-allowance cap applies."""
     _set_master_key()
     _managed_on(monkeypatch, free=100, daily=50)
     cid, uid = await _make_company(session_factory, is_platform=True)
-    from app.services import apikeys, billing
+    from app.services import billing
 
-    # Spend well past both caps; for the platform company this must NOT be recorded.
+    # Spend within the daily cap: recorded to the ledger (no house-account bypass).
     async with session_factory() as db:
-        await billing.record_platform_spend(db, user_id=uid, company_id=cid, cents=500, kind="llm")
+        await billing.record_platform_spend(db, user_id=uid, company_id=cid, cents=40, kind="llm")
         await db.commit()
 
     async with session_factory() as db:
-        # Ledger stayed at zero (house account — unmetered).
         acct = await billing.get_or_create_account(db, user_id=uid)
-        assert acct.platform_spent_cents == 0
-        # Funding is allowed for the platform company regardless of the caps.
+        assert acct.platform_spent_cents == 40  # metered, not zero
+        # Eligibility follows the ordinary allowance, not an operator bypass.
         elig = await billing.platform_available(db, company_id=cid)
-        assert elig.allowed is True
-        resolved = await apikeys.resolve_active_provider(db, company_id=cid)
-    assert resolved is not None
-    assert resolved.source == "platform"
+        assert elig.allowed is True  # still within the $1.00 free allowance
+
 
 
 async def test_non_platform_company_still_capped(session_factory, monkeypatch):

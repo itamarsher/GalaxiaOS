@@ -549,17 +549,13 @@ async def start(
 ) -> Company:
     """Create the draft company, budget, and mission. No LLM call yet.
 
-    The first company created in a deployment is designated the platform
-    (dogfooding) company — the one that runs GalaxiaOS on itself and drives the
-    demand→issue loop — replacing the old startup bootstrap of a synthetic founder.
+    Every company is an ordinary tenant; there is no special "first company" — the
+    operator (dogfooding) company, if any, is named explicitly via
+    ``ABOS_PLATFORM_COMPANY_ID`` (services/platform_company.py).
     """
     company = Company(owner_user_id=user.id, name="Untitled Company", status=CompanyStatus.draft)
     db.add(company)
     await db.flush()
-
-    from app.services import platform_company
-
-    await platform_company.designate_if_first(db, company)
 
     db.add(
         Membership(

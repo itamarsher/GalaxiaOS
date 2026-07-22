@@ -11,7 +11,7 @@ companies becomes one entry with a running demand count.
 A gated promoter — the Platform agent inside the **platform** company (we dogfood
 our own product) — reads that backlog with ``list_feature_requests`` and turns
 accrued demand into real tracker issues with ``promote_feature_request``. Both
-promoter tools are authorized against the acting company's ``is_platform`` flag, so
+promoter tools are authorized against the configured operator company, so
 only the platform company's agent can file from the cross-company backlog.
 Promotion routes through the :mod:`app.integrations.issues` seam
 (``report_issue``), which keeps GitHub-side dedup/"+1" voting intact and records an
@@ -43,10 +43,9 @@ GITHUB_PROVIDER = promoter.GITHUB_PROVIDER
 
 # ── platform promoter gate ────────────────────────────────────────────────────
 # The promoter tools (``list_feature_requests`` / ``promote_feature_request``)
-# only work inside the platform company (the one flagged ``is_platform``). We
-# authorize by that flag, so a tool call from any other tenant's Platform agent is
-# refused. The flag lives on the company, so it survives an ownership transfer —
-# unlike the old fixed founder-user gate it replaces.
+# only work inside the configured operator company (``ABOS_PLATFORM_COMPANY_ID``).
+# A tool call from any other tenant's Platform agent is refused. When no operator
+# company is configured, no company can promote the shared backlog.
 
 
 async def _resolve_issue_tracker(db, company_id):
@@ -60,9 +59,9 @@ async def _resolve_issue_tracker(db, company_id):
     return await promoter.resolve_issue_tracker(db, company_id)
 
 
-async def _is_abos_admin_company(db, company_id) -> bool:
-    """True if the acting company is the platform company (gate for the promoter)."""
-    return await platform_company.is_platform_company(db, company_id)
+def _is_abos_admin_company(company_id) -> bool:
+    """True if the acting company is the configured operator company (promoter gate)."""
+    return platform_company.is_platform_company(company_id)
 
 
 SPECS: list[ToolSpec] = [
@@ -281,7 +280,7 @@ async def _request_capability(db, ctx, *, agent: Agent, task: Task, args: dict) 
 
 
 async def _list_feature_requests(db, ctx, *, agent: Agent, task: Task, args: dict) -> ToolOutcome:
-    if not await _is_abos_admin_company(db, task.company_id):
+    if not _is_abos_admin_company(task.company_id):
         return ToolOutcome(
             observation=(
                 "Not authorized: the feature-request backlog can only be reviewed from the "
@@ -322,7 +321,7 @@ async def _list_feature_requests(db, ctx, *, agent: Agent, task: Task, args: dic
 
 
 async def _promote_feature_request(db, ctx, *, agent: Agent, task: Task, args: dict) -> ToolOutcome:
-    if not await _is_abos_admin_company(db, task.company_id):
+    if not _is_abos_admin_company(task.company_id):
         return ToolOutcome(
             observation=(
                 "Not authorized: only the abos company can promote backlog entries into "
@@ -376,7 +375,7 @@ async def _promote_feature_request(db, ctx, *, agent: Agent, task: Task, args: d
 
 
 async def _deliver_feature_request(db, ctx, *, agent: Agent, task: Task, args: dict) -> ToolOutcome:
-    if not await _is_abos_admin_company(db, task.company_id):
+    if not _is_abos_admin_company(task.company_id):
         return ToolOutcome(
             observation=(
                 "Not authorized: only the abos company can mark backlog entries delivered."

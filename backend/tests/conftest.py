@@ -39,10 +39,14 @@ async def make_company_with_fleet(db, *, is_platform: bool = True):
         owner_user_id=user.id,
         name="Platform Co" if is_platform else "T",
         status=CompanyStatus.active,
-        is_platform=is_platform,
     )
     db.add(company)
     await db.flush()
+    if is_platform:
+        # Designate this company as the operator via config (no more magic flag).
+        from app.config import settings
+
+        settings.platform_company_id = str(company.id)
     db.add(Membership(user_id=user.id, company_id=company.id, role=MembershipRole.founder))
     db.add(Budget(company_id=company.id, period=BudgetPeriod.monthly, limit_cents=50_000))
     mission = Mission(company_id=company.id, raw_text="Dogfood the product", constraints=[])
@@ -54,6 +58,15 @@ async def make_company_with_fleet(db, *, is_platform: bool = True):
     )
     await db.flush()
     return company.id
+
+
+@pytest.fixture(autouse=True)
+def _reset_operator_company():
+    """No operator company by default — each test that wants one designates it
+    (helpers set ``settings.platform_company_id`` when ``is_platform=True``)."""
+    from app.config import settings
+
+    settings.platform_company_id = ""
 
 
 @pytest.fixture(autouse=True)

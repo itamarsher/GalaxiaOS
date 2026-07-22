@@ -510,15 +510,15 @@ class Settings(BaseSettings):
     # ``ABOS_GITHUB_REPO``; empty by default so no repository is assumed.
     github_repo: str = ""
 
-    # ── Platform (dogfooding) company: GalaxiaOS running on itself ────────────
-    # One real company carries ``is_platform=True`` (services/platform_company.py):
-    # the reference business ABOS operates on its own product. Its agents' unmet
-    # needs (report_bug / request_capability) accrue in the shared feature-request
-    # backlog, and its Platform agent is the ONLY actor authorized to promote that
-    # backlog into real tracker issues (see runtime/tools/platform.py). It is no
-    # longer synthesized at startup from a fixed founder id — the first company a
-    # founder onboards is designated automatically, so the dogfooding company is a
-    # real, founder-owned company.
+    # ── Operator (dogfooding) company: GalaxiaOS running on itself ────────────
+    # A deployment may name ONE ordinary company as the operator company (the
+    # reference business ABOS dogfoods on). It's the only actor authorized to promote
+    # the shared feature-request backlog into tracker issues (runtime/tools/platform.py)
+    # and to use the deployment's global Render key (runtime/tools/render_ops.py), and
+    # the operator crons below run on its behalf. This is EXPLICIT config pointing at a
+    # normal, normally-onboarded, normally-funded company — not a magic flag. Empty =>
+    # no operator company (crons no-op, global Render fallback off).
+    platform_company_id: str = ""
 
     # Scheduled promoter: a cron drains the shared feature-request backlog into
     # real tracker issues on the platform company's behalf, so accrued demand

@@ -103,12 +103,12 @@ async def _resolve_client(db, company_id) -> RenderClient | None:
     )
     if token:
         return RenderClient(token)
-    # The global key is the dogfooding Render account — only the platform company
-    # may use it, so a tenant company never reaches our infra with a key it didn't
-    # provide.
+    # The global key is the dogfooding Render account — only the configured operator
+    # company may use it, so a tenant company never reaches our infra with a key it
+    # didn't provide.
     from app.services import platform_company
 
-    if await platform_company.is_platform_company(db, company_id):
+    if platform_company.is_platform_company(company_id):
         return get_render_client()
     return None
 

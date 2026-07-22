@@ -43,17 +43,19 @@ async def _make_company(
 ) -> tuple[uuid.UUID, uuid.UUID]:
     """Create a company (+ owner user, optionally a membership). Returns (company, user).
 
-    ``is_platform`` marks it as the platform (dogfooding) company — the only one the
-    promoter gate authorizes.
+    ``is_platform`` designates it as the operator (dogfooding) company — the only one
+    the promoter gate authorizes.
     """
     user = User(email=f"{uuid.uuid4()}@t.io", hashed_password="x")
     db.add(user)
     await db.flush()
-    company = Company(
-        owner_user_id=user.id, name="C", status=CompanyStatus.active, is_platform=is_platform
-    )
+    company = Company(owner_user_id=user.id, name="C", status=CompanyStatus.active)
     db.add(company)
     await db.flush()
+    if is_platform:
+        from app.config import settings
+
+        settings.platform_company_id = str(company.id)
     if with_member:
         db.add(
             Membership(user_id=user.id, company_id=company.id, role=MembershipRole.founder)

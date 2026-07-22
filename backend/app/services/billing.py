@@ -117,22 +117,13 @@ async def platform_llm_configured() -> bool:
 async def platform_available(db: AsyncSession, *, company_id: uuid.UUID) -> Eligibility:
     """Eligibility for a company, resolved via its owner (the founder account).
 
-    The platform (dogfooding) company runs GalaxiaOS on itself continuously, so it
-    must never be cut off by the managed free allowance or the daily burst cap — it
-    is unlimited on the house account. Its spend is also not metered against the
-    free-tier ledger (see :func:`record_platform_spend`), so it never consumes the
-    allowance nor starves the owner's other companies.
+    Every company — including the operator (dogfooding) company — is metered like any
+    tenant: the operator company is a normal, normally-funded company, not an
+    unlimited house account.
     """
-    from app.services import platform_company
-
     owner_id = await db.scalar(select(Company.owner_user_id).where(Company.id == company_id))
     if owner_id is None:
         return Eligibility(False, ManagedTier.blocked, "Company has no owner.")
-    if settings.managed_mode_enabled and await platform_company.is_platform_company(
-        db, company_id
-    ):
-        account = await get_or_create_account(db, user_id=owner_id)
-        return Eligibility(True, account.tier)
     return await eligibility(db, user_id=owner_id)
 
 
@@ -179,13 +170,6 @@ async def record_platform_spend(
     """
     if cents <= 0:
         return
-    # The platform (dogfooding) company is unlimited on the house account: don't
-    # meter its spend against the free-tier ledger (nor report it as paid usage).
-    if company_id is not None:
-        from app.services import platform_company
-
-        if await platform_company.is_platform_company(db, company_id):
-            return
     account = await get_or_create_account(db, user_id=user_id)
     account.platform_spent_cents += cents
     billed = account.tier == ManagedTier.paid_managed
