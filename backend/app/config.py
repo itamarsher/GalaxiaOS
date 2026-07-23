@@ -448,6 +448,14 @@ class Settings(BaseSettings):
     # worker service.
     worker_max_jobs: int = 10
 
+    # arq hard-cancels any job still running past this many seconds (its default
+    # is 300s). A single ``run_task`` job drives a full agent loop of sequential
+    # LLM calls and tool invocations, which routinely exceeds 5 minutes for
+    # non-trivial work — so the default left legitimate long-running tasks
+    # cancelled mid-flight. Generous enough that only a genuinely stuck task
+    # should ever hit it.
+    worker_job_timeout_seconds: int = 1800
+
     # Defensive cap on how many bytes an agent's ``read_company_file`` will pull
     # into memory. A file is materialized whole to decode it as text, so without
     # a bound a runaway agent reading a large attachment could OOM the box. 0

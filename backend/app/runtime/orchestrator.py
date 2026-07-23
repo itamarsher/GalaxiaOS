@@ -8,6 +8,7 @@ on every tool call (see :mod:`app.services.governance`).
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from datetime import UTC, datetime
 
@@ -240,13 +241,17 @@ async def run_task(ctx: RuntimeContext, task_id: uuid.UUID) -> dict:
     backend = get_backend(backend_type)
     try:
         result = await backend.run(ctx, agent, task)
-    except Exception as exc:  # noqa: BLE001
+    except (Exception, asyncio.CancelledError) as exc:  # noqa: BLE001
         # A task is flipped to ``running`` before dispatch; if the backend raises
         # (provider/network error, a bug, …) we must not leave it orphaned in
         # ``running`` — the run gate skips anything that isn't queued/waiting, so
         # it could never recover. For a task the CEO delegated, hand the failure to
         # the CEO to decide whether it's transient (re-run) or persistent (abandon);
-        # otherwise mark it failed (visible, terminal).
+        # otherwise mark it failed (visible, terminal). This also covers
+        # ``asyncio.CancelledError`` from arq's job-timeout cancellation (it is a
+        # ``BaseException``, not caught by a bare ``except Exception``) — without
+        # this, a job that gets cancelled mid-flight leaves its task wedged in
+        # ``running`` forever, since only a worker restart re-scans for orphans.
         # Keep the failure detail the CEO needs to judge transient-vs-persistent,
         # but flag it when an unusually large error gets clipped (so it's never
         # silently half-shown).

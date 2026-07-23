@@ -140,6 +140,7 @@ class WorkerSettings:
     on_startup = startup
     redis_settings = redis_settings()
     max_jobs = settings.worker_max_jobs
+    job_timeout = settings.worker_job_timeout_seconds
 
 
 def build_worker(handle_signals: bool = True):
