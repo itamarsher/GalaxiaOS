@@ -219,6 +219,27 @@ async def reclaim_expired_initiatives(ctx: dict) -> dict:
     return {"released": released}
 
 
+async def reap_expired_web_search_memory(ctx: dict) -> dict:
+    """Delete web-search memories past their TTL so the fleet isn't fed stale facts.
+
+    Web findings (prices, usage stats, adoption numbers) are filed to shared memory
+    so agents don't re-search, but they age out; this prunes the ones older than
+    ``web_search_memory_ttl_days`` daily. Only web_search-tagged entries are touched
+    — real work memory is untouched. No-op when the TTL is 0.
+    """
+    if settings.web_search_memory_ttl_days <= 0:
+        return {"deleted": 0}
+    deleted = 0
+    for company_id in await _active_company_ids():
+        async with SessionLocal() as db:
+            await set_tenant(db, company_id)
+            deleted += await memory_svc.purge_expired_web_search(
+                db, company_id=company_id, older_than_days=settings.web_search_memory_ttl_days
+            )
+            await db.commit()
+    return {"deleted": deleted}
+
+
 async def generate_digests(ctx: dict) -> dict:
     count = 0
     for company_id in await _active_company_ids():

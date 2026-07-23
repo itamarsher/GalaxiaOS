@@ -1109,6 +1109,9 @@ async def _persist_search_to_memory(db, *, company_id, task, query: str, results
                 title=f"Web research: {query}",
                 content=content,
                 source_task_id=task.id,
+                # Tagged so the TTL reaper can expire stale web findings (prices,
+                # stats, adoption numbers drift) without touching real work memory.
+                structured={"source": "web_search"},
             )
     except Exception:
         pass

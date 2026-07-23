@@ -415,6 +415,11 @@ class Settings(BaseSettings):
     # declined page gets re-submitted (and re-rejected) in a loop. 0 disables.
     founder_rejection_cooldown_minutes: int = 180
 
+    # Web-search results are filed to shared memory so the fleet doesn't re-search,
+    # but they go stale (prices, stats, adoption numbers drift). A daily reaper
+    # deletes web-search memories older than this. 0 disables (keep forever).
+    web_search_memory_ttl_days: int = 30
+
     # Floor for a functional agent's per-agent budget slice, so a lean weighted
     # split never leaves an agent with too little to take a single metered step
     # (an LLM call + a web search or two). Drawn from the reserve pool; scaled back

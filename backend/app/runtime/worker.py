@@ -17,6 +17,7 @@ from app.jobs.scheduled import (
     monitor_render_platform,
     optimize_skills,
     promote_feature_backlog,
+    reap_expired_web_search_memory,
     reap_orphaned_approvals,
     reap_stale_chat_waits,
     reclaim_expired_initiatives,
@@ -112,6 +113,8 @@ class WorkerSettings:
         # crashed) so silence can't deadlock a task forever — resumes it with a
         # "proceed or escalate" note. Every 5 minutes (offset :03); only past grace.
         cron(reap_stale_chat_waits, minute=set(range(3, 60, 5))),
+        # Expire stale web-search memories (findings age out) once a day, off-peak.
+        cron(reap_expired_web_search_memory, hour=4, minute=17),
         # Push in-flight domain connections forward (zone activation + HTTPS take
         # minutes and happen out-of-band); every 5 minutes is plenty.
         cron(reconcile_site_domains, minute=set(range(0, 60, 5))),

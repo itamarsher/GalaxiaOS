@@ -45,7 +45,8 @@ async def test_web_search_files_results_to_memory(session_factory, monkeypatch, 
     calls = {}
 
     async def _fake_write(db, *, company_id, type, title, content, source_task_id=None, **kw):
-        calls.update(title=title, content=content, type=type, company_id=company_id)
+        calls.update(title=title, content=content, type=type, company_id=company_id,
+                     structured=kw.get("structured"))
         return SimpleNamespace(id=uuid.uuid4())
 
     monkeypatch.setattr(memory_svc, "write", _fake_write)
@@ -54,9 +55,19 @@ async def test_web_search_files_results_to_memory(session_factory, monkeypatch, 
         out = await core._web_search(db, None, agent=agent, task=task, args={"query": "mcp usage"})
 
     assert "MCP Registry" in out.observation and not out.is_error
-    # The findings were filed as a recallable memory titled by the query.
+    # The findings were filed as a recallable memory titled by the query...
     assert calls["title"] == "Web research: mcp usage"
     assert "MCP Registry" in calls["content"] and calls["company_id"] == task.company_id
+    # ...tagged so the TTL reaper can expire stale web findings.
+    assert calls["structured"] == {"source": "web_search"}
+
+
+async def test_purge_ttl_zero_is_a_noop(monkeypatch):
+    """TTL 0 disables expiry without touching the DB (guard returns before querying)."""
+    deleted = await memory_svc.purge_expired_web_search(
+        None, company_id=uuid.uuid4(), older_than_days=0
+    )
+    assert deleted == 0
 
 
 @requires_db
