@@ -44,12 +44,15 @@ _ESCALATION_SKIP_PREFIXES = ("abos.error_monitor", "abos.events", "httpx", "http
 
 
 class ErrorEscalationHandler(logging.Handler):
-    """Forward every ``ERROR``+ log record carrying a traceback to the error monitor.
+    """Forward ``ERROR``+ log records carrying a traceback to the error monitor.
 
     This is the single, system-wide capture point for code errors: because the
     request-500 handler, the worker loop, and the cron jobs all log their failures
     with ``exc_info`` through the standard logging tree, attaching this one handler
     to the root logger escalates all of them without touching each call site.
+    Already-typed "expected" exceptions (``ProviderError``, ``BudgetExceeded``) are
+    skipped — they're provider/billing conditions, not code bugs, and are already
+    surfaced to callers via their own handling elsewhere (see ``app/main.py``).
 
     Emission is fire-and-forget on the running event loop and fully guarded, so it
     never blocks or breaks the logging call. When no loop is running (a purely
@@ -68,6 +71,11 @@ class ErrorEscalationHandler(logging.Handler):
             exc_type, exc_value, _tb = record.exc_info
             if exc_type is None:
                 return
+            from app.providers.base import ProviderError
+            from app.services.budget import BudgetExceeded
+
+            if issubclass(exc_type, (ProviderError, BudgetExceeded)):
+                return  # expected condition (provider/billing), not a code bug
             try:
                 loop = asyncio.get_running_loop()
             except RuntimeError:
