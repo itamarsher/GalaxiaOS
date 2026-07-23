@@ -1086,6 +1086,34 @@ async def _resolve_web_search(
     return provider, settings.web_search_cost_cents * multiplier, funding_user_id, None
 
 
+async def _persist_search_to_memory(db, *, company_id, task, query: str, results) -> None:
+    """File web-search results into shared company memory so the *fleet* keeps them.
+
+    Search results otherwise live only in the searching agent's transcript, so a
+    sibling agent (or the next cycle) can't recall them and re-runs the same query —
+    the re-search loop seen in dogfooding. Persisting them as a recallable ``result``
+    memory makes each search shared knowledge. Best-effort and savepoint-isolated: a
+    write failure (e.g. embeddings unavailable, or the pgvector table absent in a
+    reduced schema) must never fail or poison the search itself.
+    """
+    from app.services import memory as memory_svc
+
+    lines = [f"- {r.title} ({r.url}): {r.snippet}" for r in results]
+    content = clip("\n".join(lines), settings.web_search_max_chars)
+    try:
+        async with db.begin_nested():
+            await memory_svc.write(
+                db,
+                company_id=company_id,
+                type=MemoryType.result,
+                title=f"Web research: {query}",
+                content=content,
+                source_task_id=task.id,
+            )
+    except Exception:
+        pass
+
+
 async def _web_search(db, ctx, *, agent: Agent, task: Task, args: dict) -> ToolOutcome:
     query = args["query"]
     search, cost_cents, funding_user_id, reason = await _resolve_web_search(db, task.company_id)
@@ -1158,6 +1186,11 @@ async def _web_search(db, ctx, *, agent: Agent, task: Task, args: dict) -> ToolO
         return ToolOutcome(observation=f"web search failed: {exc}", is_error=True)
     if not results:
         return ToolOutcome(observation=f"no web results for {query!r}")
+    # Share the findings with the whole fleet (recallable memory), not just this
+    # agent's transcript — so nobody re-runs the same search.
+    await _persist_search_to_memory(
+        db, company_id=task.company_id, task=task, query=query, results=results
+    )
     lines = [f"- {r.title} ({r.url})\n  {r.snippet}" for r in results]
     observation = f"Web results for {query!r}:\n" + "\n".join(lines)
     return ToolOutcome(observation=clip(observation, settings.web_search_max_chars))
