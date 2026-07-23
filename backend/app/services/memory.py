@@ -9,8 +9,9 @@ recency when there's no query text or no usable embeddings.
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
+from sqlalchemy import delete as sa_delete
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -52,6 +53,29 @@ async def write(
     db.add(entry)
     await db.flush()
     return entry
+
+
+async def purge_expired_web_search(
+    db: AsyncSession, *, company_id: uuid.UUID, older_than_days: int
+) -> int:
+    """Delete web-search memories older than the TTL; returns the count removed.
+
+    Web findings (prices, usage stats, adoption numbers) go stale, so unlike real
+    work memory they shouldn't linger and feed the fleet outdated facts. Only
+    entries tagged ``structured.source == "web_search"`` (written by the web_search
+    tool) are touched. ``older_than_days <= 0`` disables it (no query).
+    """
+    if older_than_days <= 0:
+        return 0
+    cutoff = datetime.now(timezone.utc) - timedelta(days=older_than_days)
+    result = await db.execute(
+        sa_delete(MemoryEntry).where(
+            MemoryEntry.company_id == company_id,
+            MemoryEntry.structured["source"].astext == "web_search",
+            MemoryEntry.created_at < cutoff,
+        )
+    )
+    return result.rowcount or 0
 
 
 async def backfill_embeddings(
