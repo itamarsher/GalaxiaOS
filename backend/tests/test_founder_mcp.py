@@ -14,6 +14,7 @@ from app.api import founder_mcp as fm
 from app.models import Agent, AgentRun, Company, DecisionRequest, Membership, Task, User
 from app.models.enums import (
     AgentRole,
+    AgentStatus,
     CompanyStatus,
     DecisionKind,
     DecisionStatus,
@@ -25,6 +26,17 @@ from app.models.enums import (
 from tests.conftest import requires_db
 
 pytestmark = requires_db
+
+
+async def _active_company_with_founder(db):
+    u = User(email=f"{uuid.uuid4()}@t.io", hashed_password="x")
+    db.add(u)
+    await db.flush()
+    company = Company(owner_user_id=u.id, name="C", status=CompanyStatus.active)
+    db.add(company)
+    await db.flush()
+    db.add(Membership(user_id=u.id, company_id=company.id, role=MembershipRole.founder))
+    return u, company
 
 
 def _payload(rpc: dict) -> dict:
@@ -183,3 +195,86 @@ async def test_approve_decision_over_mcp(session_factory, monkeypatch):
     async with session_factory() as db:
         assert (await db.get(DecisionRequest, did)).status is DecisionStatus.approved
     assert tid in enqueued  # the parked task was resumed + enqueued
+
+
+@requires_db
+async def test_steering_tools(session_factory, monkeypatch):
+    enqueued: list = []
+
+    async def _capture(task_id):
+        enqueued.append(task_id)
+
+    monkeypatch.setattr(fm, "enqueue_task", _capture)
+
+    async with session_factory() as db:
+        u, company = await _active_company_with_founder(db)
+        ceo = Agent(company_id=company.id, role=AgentRole.ceo, name="CEO")
+        growth = Agent(company_id=company.id, role=AgentRole.growth, name="Growth")
+        db.add_all([ceo, growth])
+        await db.commit()
+        uid, cid, growth_id = u.id, str(company.id), growth.id
+
+    # list_agents
+    async with session_factory() as db:
+        r = await fm._call_tool(
+            db, uid, 1, {"name": "list_agents", "arguments": {"company_id": cid}}
+        )
+        roles = {a["role"] for a in _payload(r)["agents"]}
+        assert {"ceo", "growth"} <= roles
+
+    # send_founder_message to the CEO → idle agent, so a handler task is spawned + enqueued
+    async with session_factory() as db:
+        r = await fm._call_tool(
+            db,
+            uid,
+            2,
+            {
+                "name": "send_founder_message",
+                "arguments": {
+                    "company_id": cid,
+                    "agent_role": "ceo",
+                    "message": "Focus on the launch.",
+                },
+            },
+        )
+        out = _payload(r)
+        assert out["delivered_to"] == "ceo" and out["spawned"] is True
+    assert len(enqueued) == 1  # the spawned handler task was enqueued
+
+    # pause then resume the growth agent
+    async with session_factory() as db:
+        r = await fm._call_tool(
+            db,
+            uid,
+            3,
+            {"name": "pause_agent", "arguments": {"company_id": cid, "agent_id": str(growth_id)}},
+        )
+        assert _payload(r)["status"] == "paused"
+    async with session_factory() as db:
+        assert (await db.get(Agent, growth_id)).status is AgentStatus.paused
+        r = await fm._call_tool(
+            db,
+            uid,
+            4,
+            {"name": "resume_agent", "arguments": {"company_id": cid, "agent_id": str(growth_id)}},
+        )
+        assert _payload(r)["status"] == "active"
+
+
+@requires_db
+async def test_send_message_unknown_role_errors(session_factory):
+    async with session_factory() as db:
+        u, company = await _active_company_with_founder(db)
+        await db.commit()
+        uid, cid = u.id, str(company.id)
+    async with session_factory() as db:
+        r = await fm._call_tool(
+            db,
+            uid,
+            1,
+            {
+                "name": "send_founder_message",
+                "arguments": {"company_id": cid, "agent_role": "ceo", "message": "hi"},
+            },
+        )
+        assert "error" in r  # no active ceo agent exists → error, not a silent drop

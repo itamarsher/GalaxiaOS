@@ -37,8 +37,15 @@ from app.models import (
     Task,
     User,
 )
-from app.models.enums import CompanyStatus, DecisionStatus, TaskStatus
+from app.models.enums import (
+    AgentRole,
+    AgentStatus,
+    CompanyStatus,
+    DecisionStatus,
+    TaskStatus,
+)
 from app.runtime.queue import enqueue_task
+from app.services import chat as chat_svc
 from app.services import founder_token, involvement, onboarding
 from app.services import runs as runs_svc
 from app.services.decisions import resolve_decision
@@ -189,6 +196,54 @@ _TOOL_SPECS = [
                 "playbook": {"type": "string"},
             },
             "required": ["company_id", "playbook"],
+        },
+    },
+    {
+        "name": "list_agents",
+        "description": "List the company's agents (the fleet): id, role, name, and status "
+        "(active/paused). Use the ids to pause/resume, and the roles to send_founder_message.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"company_id": {"type": "string"}},
+            "required": ["company_id"],
+        },
+    },
+    {
+        "name": "send_founder_message",
+        "description": "Send a founder message to one agent (by role) to steer it live — adjust its "
+        "priorities, hand it information (e.g. web-research findings), or redirect its work. If the "
+        "agent is idle a task is spawned to act on it; if it's waiting on your reply, this resumes "
+        "it. This is how you steer without waiting for a decision.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "company_id": {"type": "string"},
+                "agent_role": {
+                    "type": "string",
+                    "description": "Which agent to message, e.g. 'ceo', 'growth', 'product', 'design'.",
+                },
+                "message": {"type": "string"},
+            },
+            "required": ["company_id", "agent_role", "message"],
+        },
+    },
+    {
+        "name": "pause_agent",
+        "description": "Pause an agent (by id): it stops taking on work until resumed. Use to hold "
+        "a function while you redirect the company.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"company_id": {"type": "string"}, "agent_id": {"type": "string"}},
+            "required": ["company_id", "agent_id"],
+        },
+    },
+    {
+        "name": "resume_agent",
+        "description": "Resume a paused agent (by id) so it takes on work again.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"company_id": {"type": "string"}, "agent_id": {"type": "string"}},
+            "required": ["company_id", "agent_id"],
         },
     },
 ]
@@ -466,6 +521,93 @@ async def _call_tool(db, user_id: uuid.UUID, mid, params: dict) -> dict:
             company.playbook = str(args.get("playbook") or "").strip()
             await db.commit()
             return _ok(mid, _content({"ok": True, "customized": bool(company.playbook)}))
+
+        if name == "list_agents":
+            company = await _founder_company(db, user_id, args.get("company_id"))
+            agents = (
+                await db.scalars(
+                    select(Agent).where(Agent.company_id == company.id).order_by(Agent.created_at)
+                )
+            ).all()
+            return _ok(
+                mid,
+                _content(
+                    {
+                        "agents": [
+                            {
+                                "id": str(a.id),
+                                "role": a.role.value,
+                                "name": a.name,
+                                "status": a.status.value,
+                            }
+                            for a in agents
+                        ]
+                    }
+                ),
+            )
+
+        if name == "send_founder_message":
+            company = await _founder_company(db, user_id, args.get("company_id"))
+            try:
+                role = AgentRole(str(args["agent_role"]))
+            except ValueError:
+                return _error(mid, -32602, f"unknown agent_role: {args.get('agent_role')}")
+            agent = await db.scalar(
+                select(Agent)
+                .where(
+                    Agent.company_id == company.id,
+                    Agent.role == role,
+                    Agent.status == AgentStatus.active,
+                )
+                .order_by(Agent.created_at)
+            )
+            if agent is None:
+                return _error(mid, -32000, f"no active '{role.value}' agent in this company")
+            channel = await chat_svc.founder_dm(db, company_id=company.id, agent_id=agent.id)
+            _, woken = await chat_svc.post_message(
+                db,
+                company_id=company.id,
+                channel_id=channel.id,
+                sender_agent_id=None,
+                body=str(args["message"]),
+            )
+            spawned = None
+            if not woken:
+                spawned = await chat_svc.spawn_dm_handler_task(
+                    db,
+                    company_id=company.id,
+                    channel=channel,
+                    agent_id=agent.id,
+                    founder_message=str(args["message"]),
+                )
+            await db.commit()
+            for tid in woken:
+                await enqueue_task(tid)
+            if spawned is not None:
+                await enqueue_task(spawned)
+            return _ok(
+                mid,
+                _content(
+                    {
+                        "delivered_to": role.value,
+                        "resumed": bool(woken),
+                        "spawned": spawned is not None,
+                    }
+                ),
+            )
+
+        if name in ("pause_agent", "resume_agent"):
+            company = await _founder_company(db, user_id, args.get("company_id"))
+            try:
+                agent_id = uuid.UUID(str(args["agent_id"]))
+            except (ValueError, TypeError):
+                return _error(mid, -32602, "invalid agent_id")
+            agent = await db.get(Agent, agent_id)
+            if agent is None or agent.company_id != company.id:
+                return _error(mid, -32000, "agent not found")
+            agent.status = AgentStatus.paused if name == "pause_agent" else AgentStatus.active
+            await db.commit()
+            return _ok(mid, _content({"agent_id": str(agent.id), "status": agent.status.value}))
 
         return _error(mid, -32601, f"unknown tool: {name}")
     except OnboardingError as exc:
