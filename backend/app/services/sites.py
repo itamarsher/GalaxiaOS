@@ -338,7 +338,9 @@ async def capture_lead(
     """
     company_id = site.company_id
     await set_tenant(db, company_id)
-    source = f"landing_page:{site.slug}"
+    # Generic label: the site's channel (landing_page vs blog) isn't tracked on the
+    # row, and a hardcoded "landing_page:" prefix would mislabel blog-captured leads.
+    source = f"site:{site.slug}"
     lead = SiteLead(
         company_id=company_id,
         site_id=site.id,
