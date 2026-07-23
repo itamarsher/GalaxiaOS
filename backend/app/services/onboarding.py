@@ -1002,7 +1002,29 @@ async def refine(db: AsyncSession, *, company: Company, message: str) -> dict:
 
 
 async def launch(db: AsyncSession, *, company: Company) -> uuid.UUID | None:
-    """Seed governance, activate the company, and create the root CEO run."""
+    """Seed governance, activate the company, and create the root CEO run.
+
+    A company can't operate without a file store — agents file every report and
+    artifact there — so launch requires a connected storage provider (Google
+    Drive), for an AI operator driving onboarding over the Founder MCP just as for
+    a human founder. The check only bites where storage *can* be connected (the
+    Drive OAuth app is configured); deployments/tests without it skip the guard so
+    the requirement never becomes an un-satisfiable dead end.
+    """
+    if settings.require_storage_to_launch:
+        from app.integrations import gdrive_oauth
+        from app.services.integrations import resolve_file_provider
+
+        if gdrive_oauth.connect_configured() and (
+            await resolve_file_provider(db, company_id=company.id) is None
+        ):
+            raise OnboardingError(
+                "Connect a storage provider before launching: this company has no file "
+                "store, and its agents can't persist reports, artifacts, or saved "
+                "documents without one. Connect Google Drive (Settings → Integrations, "
+                "or the account-wide grant at /auth/google/drive/connect), then launch."
+            )
+
     for spec in gov.default_policies():
         db.add(
             Policy(

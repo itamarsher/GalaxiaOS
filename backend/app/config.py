@@ -401,6 +401,14 @@ class Settings(BaseSettings):
     # tripped BudgetExceeded constantly; 0.4 gives the working fleet a usable slice.)
     launch_budget_reserve_fraction: float = 0.4
 
+    # A company can't function without a working file store — its agents file every
+    # report, artifact, and saved document there, and a fleet that can't persist its
+    # work is dead on arrival. So launching requires a connected storage provider
+    # (Google Drive today), for AI-agent-driven onboarding (Founder MCP) just as for
+    # a human founder. Enforced only where storage *can* be connected (the Drive
+    # OAuth app is configured on the deployment); off deployments/tests skip it.
+    require_storage_to_launch: bool = True
+
     # Floor for a functional agent's per-agent budget slice, so a lean weighted
     # split never leaves an agent with too little to take a single metered step
     # (an LLM call + a web search or two). Drawn from the reserve pool; scaled back
