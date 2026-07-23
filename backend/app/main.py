@@ -29,6 +29,7 @@ from app.api import (
     domains,
     events,
     files,
+    founder_mcp,
     governance,
     human_worker,
     integrations,
@@ -142,6 +143,8 @@ def create_app() -> FastAPI:
     app.include_router(mcp.router)
     app.include_router(bf_mcp.router)
     app.include_router(bf_mcp.mint_router)
+    app.include_router(founder_mcp.router)
+    app.include_router(founder_mcp.mint_router)
     app.include_router(artifacts.router)
     app.include_router(companies.router)
     app.include_router(companies.mine_router)
