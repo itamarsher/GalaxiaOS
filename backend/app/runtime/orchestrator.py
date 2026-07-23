@@ -31,6 +31,7 @@ from app.models.enums import (
     TaskStatus,
 )
 from app.observability import get_logger
+from app.providers.base import ProviderError
 from app.runtime import breakers, prompts
 from app.runtime.backends import get_backend
 from app.runtime.context import RuntimeContext
@@ -256,14 +257,21 @@ async def run_task(ctx: RuntimeContext, task_id: uuid.UUID) -> dict:
         # but flag it when an unusually large error gets clipped (so it's never
         # silently half-shown).
         error_text = clip(f"{type(exc).__name__}: {exc}", DEFAULT_MAX_OBSERVATION_CHARS)
+        # A billing/quota rejection can't be resolved by a CEO failure review:
+        # that review is itself an LLM call funded by the same exhausted
+        # key/balance, so it fails too, stranding the task in ``auditing``
+        # with nothing left to advance it. Skip straight to ``failed``.
+        is_billing_failure = isinstance(exc, ProviderError) and exc.kind == "billing"
         review_task_id: uuid.UUID | None = None
         async with ctx.session_factory() as db:
             await set_tenant(db, task.company_id)
             row = await db.get(Task, task.id)
             if row is not None and row.status is TaskStatus.running:
                 agent_row = await db.get(Agent, row.agent_id) if row.agent_id else None
-                if agent_row is not None and await task_svc.should_review_failure(
-                    db, agent=agent_row, task=row
+                if (
+                    not is_billing_failure
+                    and agent_row is not None
+                    and await task_svc.should_review_failure(db, agent=agent_row, task=row)
                 ):
                     review_task_id = await task_svc.begin_failure_review(
                         db, child_id=row.id, output={"error": error_text}
