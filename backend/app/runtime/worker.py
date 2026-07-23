@@ -18,6 +18,7 @@ from app.jobs.scheduled import (
     optimize_skills,
     promote_feature_backlog,
     reap_orphaned_approvals,
+    reap_stale_chat_waits,
     reclaim_expired_initiatives,
     recompute_runway,
     reconcile_delivered_requests,
@@ -107,6 +108,10 @@ class WorkerSettings:
         # park-without-a-decision can't silently deadlock the whole company. Every 5
         # minutes; only acts on tasks past the grace window.
         cron(reap_orphaned_approvals, minute=set(range(4, 60, 5))),
+        # Time out chat reply-waits that never got an answer (founder away, teammate
+        # crashed) so silence can't deadlock a task forever — resumes it with a
+        # "proceed or escalate" note. Every 5 minutes (offset :03); only past grace.
+        cron(reap_stale_chat_waits, minute=set(range(3, 60, 5))),
         # Push in-flight domain connections forward (zone activation + HTTPS take
         # minutes and happen out-of-band); every 5 minutes is plenty.
         cron(reconcile_site_domains, minute=set(range(0, 60, 5))),
