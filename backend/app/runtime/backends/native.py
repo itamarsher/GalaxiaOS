@@ -841,6 +841,36 @@ class NativeBackend:
                         ),
                         "is_error": True,
                     }
+                # Company-scoped rejection memory: the per-task grant above only
+                # stops the SAME task from re-sending, so a fresh task or the next
+                # cycle would re-escalate an identical outbound the founder already
+                # declined — asking them to reject the same landing page over and
+                # over. If they declined this (channel, recipient) recently, decline
+                # the re-attempt here instead of parking another identical decision.
+                if is_external:
+                    prior = await ext.recently_rejected_outbound(
+                        db,
+                        company_id=task.company_id,
+                        tool=call.name,
+                        args=call.arguments,
+                        within_minutes=settings.founder_rejection_cooldown_minutes,
+                    )
+                    if prior is not None:
+                        await db.commit()
+                        reason = (prior.payload or {}).get("founder_note")
+                        return {
+                            "terminal": False,
+                            "observation": (
+                                f"The founder recently DECLINED this {call.name} outbound and it "
+                                "will NOT be re-sent to them for approval."
+                                + (f' Their reason: "{reason}".' if reason else "")
+                                + " Do NOT resubmit it — take the feedback into a different "
+                                "initiative, or ask the founder directly before trying this "
+                                "channel again."
+                            ),
+                            "is_error": True,
+                        }
+
                 # No standing approval for this action — park the task and ask the
                 # founder. (If a grant existed, it was just consumed and we fall
                 # through to execute, so an approved action isn't re-escalated.)

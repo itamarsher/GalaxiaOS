@@ -14,12 +14,13 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Callable
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import ExternalMessage
-from app.models.enums import ExternalMessageStatus
+from app.models import DecisionRequest, ExternalMessage
+from app.models.enums import DecisionKind, DecisionStatus, ExternalMessageStatus
 
 
 def _truncate(value: object | None, limit: int) -> str | None:
@@ -97,6 +98,59 @@ def describe(tool: str, args: dict | None) -> dict:
     """Normalize a tool call into ``{channel, recipient, subject, body}``."""
     extractor = _EXTRACTORS.get(tool)
     return extractor(args or {}) if extractor else {"channel": "other"}
+
+
+def _outbound_target(tool: str, args: dict | None) -> tuple[str | None, str | None]:
+    """A coarse identity for an outbound message: (channel, recipient).
+
+    Two landing-page publishes share ``("landing_page", None)``; two emails to the
+    same address share ``("email", addr)`` — but emails to different people don't.
+    Used to tell "the founder already declined *this*" from a genuinely new send.
+    """
+    d = describe(tool, args or {})
+    return d.get("channel"), d.get("recipient")
+
+
+async def recently_rejected_outbound(
+    db: AsyncSession,
+    *,
+    company_id: uuid.UUID,
+    tool: str,
+    args: dict | None,
+    within_minutes: int,
+) -> DecisionRequest | None:
+    """The most recent founder-REJECTED outbound of the same target, within the window.
+
+    The per-task rejection grant only stops the *same task* from re-sending; a fresh
+    task or the next business cycle would re-escalate the identical message, so a
+    founder who declines a landing page gets asked again and again. This is the
+    company-scoped memory: if the founder declined an outbound to the same
+    (channel, recipient) recently, the gate can decline a re-attempt itself instead
+    of parking another identical decision. Returns the decision (carrying
+    ``payload.founder_note``) or ``None``.
+    """
+    if within_minutes <= 0:
+        return None
+    target = _outbound_target(tool, args)
+    cutoff = datetime.now(UTC) - timedelta(minutes=within_minutes)
+    rows = (
+        await db.scalars(
+            select(DecisionRequest)
+            .where(
+                DecisionRequest.company_id == company_id,
+                DecisionRequest.kind == DecisionKind.external_comm,
+                DecisionRequest.status == DecisionStatus.rejected,
+                DecisionRequest.created_at >= cutoff,
+            )
+            .order_by(DecisionRequest.created_at.desc())
+            .limit(20)
+        )
+    ).all()
+    for d in rows:
+        payload = d.payload or {}
+        if _outbound_target(payload.get("tool", ""), payload.get("args")) == target:
+            return d
+    return None
 
 
 def summarize(tool: str, args: dict | None) -> str:
