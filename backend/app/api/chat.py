@@ -234,18 +234,22 @@ async def post_message(
             user_id=user.id,
         )
 
-    # If this is a 1:1 DM with an agent and the founder's message neither resumed a
-    # parked agent nor resolved a decision, wake that agent with a fresh task so it
+    # If this is a 1:1 DM with an agent and the founder's message didn't resume a
+    # parked agent or settle a decision, wake that agent with a fresh task so it
     # reads and acts on the message — e.g. the founder steering the CEO live. The
-    # spawn coalesces if a task is already handling the DM. A reply that was aimed at
-    # a pending decision but read as ``"unclear"`` is NOT fresh steering: the
-    # decision stays open (a clarification was posted), so we must not fork a
-    # duplicate re-planning task — only spawn when there was no pending decision.
+    # spawn coalesces if a task is already handling the DM. This also fires when
+    # ``decision_verdict == "unclear"``: the reply didn't clearly approve/reject the
+    # channel's pending decision (a clarification was already posted), but it may
+    # still be the founder steering the agent directly on something unrelated — e.g.
+    # a functional agent that has an old pending decision sitting in its DM. Without
+    # this, that message is silently dropped: no decision gets resolved (stays
+    # pending) and no task reads it either. Spawning lets the agent read the full
+    # channel — including the still-open decision — and act on both.
     spawned: uuid.UUID | None = None
     if (
         not woken
         and resumed_decision_task is None
-        and decision_verdict == "none"
+        and decision_verdict in ("none", "unclear")
         and channel.kind == ChatChannelKind.direct
         and body.thread_id is None
     ):
