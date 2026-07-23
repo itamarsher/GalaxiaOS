@@ -7,6 +7,7 @@ import base64
 import httpx
 import pytest
 
+from app.config import settings
 from app.integrations.mediagen import GeneratedMedia, MediaGenError, get_media_gen
 from app.integrations.nano_banana import NanoBananaMediaGen, _explain_http_error
 
@@ -42,6 +43,76 @@ def test_explain_http_error_falls_back_for_other_errors():
     exc = httpx.ConnectError("boom")
     msg = str(_explain_http_error(exc, what="Nano Banana image generation"))
     assert "failed:" in msg
+
+
+def test_explain_http_error_429_without_free_tier_marker_is_rate_limit_not_billing():
+    # No "free_tier"/"limit: 0" marker -> ordinary transient throttling on a paid
+    # project, not the zero-quota free-tier case.
+    exc = _http_status_error(429, {"error": {"message": "Resource exhausted, retry later"}})
+    msg = str(_explain_http_error(exc, what="Nano Banana image generation", retries=2))
+    assert "429" in msg and "rate-limited" in msg
+    assert "free tier" not in msg and "billing" not in msg
+    assert "after 2 retries" in msg
+
+
+@pytest.mark.asyncio
+async def test_generate_image_retries_on_429_then_succeeds(monkeypatch):
+    monkeypatch.setattr(settings, "media_gen_max_retries", 2)
+    monkeypatch.setattr(settings, "media_gen_retry_backoff_seconds", 0.0)
+    calls = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        if calls["n"] < 2:
+            return httpx.Response(429, json={"error": {"message": "Resource exhausted"}})
+        body = {
+            "candidates": [
+                {"content": {"parts": [{"inlineData": {"mimeType": "image/png", "data": _B64}}]}}
+            ]
+        }
+        return httpx.Response(200, json=body)
+
+    transport = httpx.MockTransport(handler)
+    orig_client = httpx.AsyncClient
+
+    def client_factory(*args, **kwargs):
+        kwargs["transport"] = transport
+        return orig_client(*args, **kwargs)
+
+    monkeypatch.setattr(httpx, "AsyncClient", client_factory)
+
+    gen = NanoBananaMediaGen(api_key="test-key")
+    media = await gen.generate_image("a logo")
+    assert media.data == _PNG
+    assert calls["n"] == 2
+
+
+@pytest.mark.asyncio
+async def test_generate_image_raises_rate_limit_after_exhausting_retries(monkeypatch):
+    monkeypatch.setattr(settings, "media_gen_max_retries", 2)
+    monkeypatch.setattr(settings, "media_gen_retry_backoff_seconds", 0.0)
+    calls = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        return httpx.Response(429, json={"error": {"message": "Resource exhausted"}})
+
+    transport = httpx.MockTransport(handler)
+    orig_client = httpx.AsyncClient
+
+    def client_factory(*args, **kwargs):
+        kwargs["transport"] = transport
+        return orig_client(*args, **kwargs)
+
+    monkeypatch.setattr(httpx, "AsyncClient", client_factory)
+
+    gen = NanoBananaMediaGen(api_key="test-key")
+    with pytest.raises(MediaGenError) as exc_info:
+        await gen.generate_image("a logo")
+    msg = str(exc_info.value)
+    assert "rate-limited" in msg and "free tier" not in msg
+    # Initial attempt + 2 retries = 3 calls.
+    assert calls["n"] == 3
 
 
 def test_parse_image_extracts_inline_data_and_note():
