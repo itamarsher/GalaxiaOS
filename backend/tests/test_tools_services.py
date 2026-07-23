@@ -507,6 +507,113 @@ async def test_configure_tavily_requires_api_key(session_factory, company_with_b
 
 
 @requires_db
+async def test_configure_nano_banana_stores_verified_key(
+    session_factory, company_with_budget, monkeypatch
+):
+    _set_master_key()
+    company_id = company_with_budget
+    agent, task = await _make_task(session_factory, company_id)
+
+    verified: list[str] = []
+
+    async def _ok(api_key):
+        verified.append(api_key)
+
+    async def _fake_write(db, **kwargs):
+        return None
+
+    monkeypatch.setattr("app.integrations.nano_banana.verify_credentials", _ok)
+    monkeypatch.setattr("app.services.memory.write", _fake_write)
+
+    async with session_factory() as db:
+        outcome = await execute_tool(
+            db,
+            _FakeCtx(),
+            agent=agent,
+            task=task,
+            name="configure_integration",
+            args={"provider": "nano_banana", "api_key": "gm-xxx"},
+        )
+        await db.commit()
+
+    assert outcome.is_error is False
+    assert verified == ["gm-xxx"]  # verified BEFORE storing
+    assert "generate_image" in outcome.observation
+    from app.services import apikeys
+
+    async with session_factory() as db:
+        key = await apikeys.get_plaintext_key(db, company_id=company_id, provider="nano_banana")
+    assert key == "gm-xxx"
+
+
+@requires_db
+async def test_configure_nano_banana_rejects_bad_key(
+    session_factory, company_with_budget, monkeypatch
+):
+    _set_master_key()
+    company_id = company_with_budget
+    agent, task = await _make_task(session_factory, company_id)
+
+    from app.integrations.mediagen import MediaGenError
+
+    async def _bad(api_key):
+        raise MediaGenError("Nano Banana credential check failed: 403")
+
+    monkeypatch.setattr("app.integrations.nano_banana.verify_credentials", _bad)
+
+    async with session_factory() as db:
+        outcome = await execute_tool(
+            db,
+            _FakeCtx(),
+            agent=agent,
+            task=task,
+            name="configure_integration",
+            args={"provider": "nano_banana", "api_key": "nope"},
+        )
+        await db.commit()
+
+    assert outcome.is_error is True
+    assert "rejected" in outcome.observation.lower()
+    from app.services import apikeys
+
+    async with session_factory() as db:
+        key = await apikeys.get_plaintext_key(db, company_id=company_id, provider="nano_banana")
+    assert key is None  # nothing stored when verification fails
+
+
+@requires_db
+async def test_configure_nano_banana_requires_api_key(
+    session_factory, company_with_budget, monkeypatch
+):
+    _set_master_key()
+    company_id = company_with_budget
+    agent, task = await _make_task(session_factory, company_id)
+
+    async def _ok(api_key):  # pragma: no cover - must not be reached
+        raise AssertionError("should not verify without a key")
+
+    monkeypatch.setattr("app.integrations.nano_banana.verify_credentials", _ok)
+
+    async with session_factory() as db:
+        outcome = await execute_tool(
+            db,
+            _FakeCtx(),
+            agent=agent,
+            task=task,
+            name="configure_integration",
+            args={"provider": "nano_banana"},  # no api_key
+        )
+        await db.commit()
+
+    assert outcome.is_error is True
+    from app.services import apikeys
+
+    async with session_factory() as db:
+        key = await apikeys.get_plaintext_key(db, company_id=company_id, provider="nano_banana")
+    assert key is None
+
+
+@requires_db
 async def test_configure_integration_unknown_provider(session_factory, company_with_budget):
     company_id = company_with_budget
     agent, task = await _make_task(session_factory, company_id)

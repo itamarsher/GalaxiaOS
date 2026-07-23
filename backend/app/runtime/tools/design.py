@@ -124,8 +124,10 @@ SPECS: list[ToolSpec] = [
 ]
 
 _UNSUPPORTED_HINT = (
-    "No media generator is connected. Ask the founder to set ABOS_MEDIA_GEN_PROVIDER "
-    "and a Google API key (or add a per-company Nano Banana key), or call "
+    "No media generator is connected. You can self-configure this: call "
+    "`configure_integration` with provider 'nano_banana' and a Google AI Studio "
+    "(Generative Language API) key — no need to wait on the founder. Or ask the "
+    "founder to set ABOS_MEDIA_GEN_PROVIDER and a Google API key, or call "
     "`request_capability`."
 )
 _NO_STORE_HINT = (

@@ -110,6 +110,27 @@ async def _post_json_with_retry(
         return resp.json()
 
 
+async def verify_credentials(api_key: str) -> None:
+    """Confirm a Google Generative Language API key works, raising :class:`MediaGenError` if not.
+
+    Used when an agent self-configures Nano Banana via ``configure_integration`` so a
+    bad key is rejected up front and never stored — the same honest verify-before-
+    store guard the Cloudflare/Tavily flows use. Fetches the image model's metadata
+    (a cheap GET, no generation billed) rather than rendering, which raises on an
+    auth/access failure just as reliably.
+    """
+    key = (api_key or "").strip()
+    if not key:
+        raise MediaGenError("Google API key missing.")
+    url = f"{_API_ROOT}/models/{settings.nano_banana_image_model}?key={key}"
+    try:
+        async with httpx.AsyncClient(timeout=settings.media_gen_timeout_seconds) as client:
+            resp = await client.get(url)
+            resp.raise_for_status()
+    except httpx.HTTPError as exc:
+        raise _explain_http_error(exc, what="Nano Banana credential check") from exc
+
+
 class NanoBananaMediaGen:
     def __init__(
         self,

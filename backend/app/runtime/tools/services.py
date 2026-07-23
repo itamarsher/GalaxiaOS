@@ -49,9 +49,10 @@ _MAX_TOOLS_SHOWN = 25
 #: Built-in integrations ABOS has its OWN adapter for (not MCP), and that an agent
 #: can therefore configure itself. Unlike ``connect_service`` (which registers an
 #: external MCP tool server), these credentials feed native capabilities — site
-#: hosting, custom domains, DNS (Cloudflare), and web search + page fetch (Tavily) —
-#: that resolve through native adapters, not an ``mcp__*`` namespace.
-_NATIVE_INTEGRATIONS = ("cloudflare", "tavily")
+#: hosting, custom domains, DNS (Cloudflare), web search + page fetch (Tavily), and
+#: image/video generation (Nano Banana / Veo) — that resolve through native
+#: adapters, not an ``mcp__*`` namespace.
+_NATIVE_INTEGRATIONS = ("cloudflare", "tavily", "nano_banana")
 
 
 SPECS: list[ToolSpec] = [
@@ -120,8 +121,9 @@ SPECS: list[ToolSpec] = [
             "verifies the credentials before storing them envelope-encrypted, so a bad token is "
             "rejected up front. Supported: 'cloudflare' (needs `api_token` + `account_id`) — "
             "powers `publish_content` and `connect_domain`; 'tavily' (needs `api_key`) — powers "
-            "`web_search` and `web_fetch`. Every downstream action is still governed and "
-            "budget-metered as usual."
+            "`web_search` and `web_fetch`; 'nano_banana' (needs `api_key`, a Google AI Studio / "
+            "Generative Language API key) — powers `generate_image` and `generate_video`. Every "
+            "downstream action is still governed and budget-metered as usual."
         ),
         input_schema={
             "type": "object",
@@ -144,7 +146,10 @@ SPECS: list[ToolSpec] = [
                 },
                 "api_key": {
                     "type": "string",
-                    "description": "Tavily API key (required for provider 'tavily').",
+                    "description": (
+                        "API key for the provider: Tavily API key for 'tavily', or a Google AI "
+                        "Studio (Generative Language API) key for 'nano_banana'."
+                    ),
                 },
             },
             "required": ["provider"],
@@ -315,6 +320,8 @@ async def _configure_integration(db, ctx, *, agent: Agent, task: Task, args: dic
         return await _configure_cloudflare(db, agent=agent, task=task, args=args)
     if provider == "tavily":
         return await _configure_tavily(db, agent=agent, task=task, args=args)
+    if provider == "nano_banana":
+        return await _configure_nano_banana(db, agent=agent, task=task, args=args)
     # Guarded by the membership check above; kept exhaustive for future providers.
     return ToolOutcome(observation=f"{provider} is not configurable yet.", is_error=True)
 
@@ -454,6 +461,79 @@ async def _configure_tavily(db, *, agent: Agent, task: Task, args: dict) -> Tool
             "Tavily configured and verified. `web_search` and `web_fetch` now work — load them "
             "with `use_tool` and use them directly. Each call is metered against the company "
             "budget."
+        )
+    )
+
+
+#: BYO key slot under which a company's Google Generative Language API key
+#: (Nano Banana / Veo) is stored (matches
+#: ``app.runtime.tools.design.MEDIA_GEN_PROVIDER`` — the same key powers
+#: generate_image and generate_video).
+_NANO_BANANA_PROVIDER = "nano_banana"
+
+
+async def _configure_nano_banana(db, *, agent: Agent, task: Task, args: dict) -> ToolOutcome:
+    from app.integrations.mediagen import MediaGenError
+    from app.integrations.nano_banana import verify_credentials
+    from app.services import apikeys
+
+    api_key = str(args.get("api_key") or "").strip()
+    if not api_key:
+        return ToolOutcome(
+            observation=(
+                "Nano Banana needs an `api_key`. Create one in Google AI Studio "
+                "(Generative Language API key), then pass it here."
+            ),
+            is_error=True,
+        )
+
+    # Verify before storing so a bad key is rejected up front — the same honest
+    # check the Cloudflare/Tavily flows do. Never store a credential we haven't
+    # proven works.
+    try:
+        await verify_credentials(api_key)
+    except MediaGenError as exc:
+        return ToolOutcome(
+            observation=(
+                f"Google rejected this key: {exc}. NOTHING was stored — check the key and "
+                "try again."
+            ),
+            is_error=True,
+        )
+
+    await apikeys.store_key(
+        db, company_id=task.company_id, provider=_NANO_BANANA_PROVIDER, plaintext=api_key
+    )
+
+    from app.services import memory as memory_svc
+
+    await memory_svc.write(
+        db,
+        company_id=task.company_id,
+        type=MemoryType.result,
+        title="Integration configured: Nano Banana",
+        content=(
+            f"{agent.name} ({agent.role.value}) configured a Google Generative Language API "
+            "key. ABOS's built-in image/video generation tools (`generate_image` / "
+            "`generate_video`) are now available to the fleet, billed against the company "
+            "budget."
+        ),
+        source_task_id=task.id,
+    )
+    await mission_log.record(
+        task.company_id,
+        agent_id=agent.id,
+        agent_name=agent.name,
+        role=agent.role.value,
+        headline="Configured Nano Banana (image + video generation)",
+        kind="update",
+    )
+
+    return ToolOutcome(
+        observation=(
+            "Nano Banana configured and verified. `generate_image` and `generate_video` now "
+            "work — load them with `use_tool` and use them directly. Each call is metered "
+            "against the company budget."
         )
     )
 
