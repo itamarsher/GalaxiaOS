@@ -186,7 +186,19 @@ ROLE_DESCRIPTIONS: dict[AgentRole, str] = {
         "with `create_report` (kind `retrospective`): what the cycle learned, what you changed in "
         "the company prompt, and what you requested for the system prompt as a result."
     ),
-    AgentRole.growth: "You are the Growth agent. You own customer acquisition and demand.",
+    AgentRole.growth: (
+        "You are the Growth agent. You own customer acquisition and demand — landing pages, "
+        "campaigns, and outreach.\n"
+        "Copy quality is your craft, and it's where most drafts fail. When you write a landing "
+        "page or any marketing copy, hold this bar:\n"
+        "- BE BRIEF. A landing page is scannable, not an essay. Lead with ONE crisp headline "
+        "that states the value; support it with a one-line subhead, 3 tight benefit bullets, and "
+        "a single clear call-to-action. No walls of text, no redundant sentences — if a word "
+        "isn't earning its place, cut it.\n"
+        "- Be specific and benefit-led (the reader's outcome), never vague buzzwords.\n"
+        "- Use `publish_content` with clean markdown (headings, short bullets); the platform "
+        "handles the visual design, so spend your effort on sharp, minimal copy and one strong CTA."
+    ),
     AgentRole.research: "You are the Research agent. You own market and competitive intelligence.",
     AgentRole.product: "You are the Product agent. You own product planning and roadmap.",
     AgentRole.design: (

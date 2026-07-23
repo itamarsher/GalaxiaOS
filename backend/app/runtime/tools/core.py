@@ -282,7 +282,9 @@ SPECS: list[ToolSpec] = [
             "up for an account, inspect something offline, confirm an external result) — "
             "and report back. This pauses your task until they respond; their reported "
             "results come back to you so you can continue with them. Use this instead of "
-            "guessing an outcome or giving up when the only path forward needs a person."
+            "guessing an outcome or giving up when the only path forward needs a person. "
+            "NEVER use this to obtain an API key, token, password, or any other secret — "
+            "the reply would be exposed in plaintext; use `request_secret` for those."
         ),
         input_schema={
             "type": "object",
@@ -401,6 +403,18 @@ SPECS: list[ToolSpec] = [
 ]
 
 
+# Outcomes of a dispatch attempt (``_spawn_child``), so callers can distinguish a
+# missing role from a de-duplicated (already-in-flight) initiative.
+_DISPATCHED = "dispatched"
+_NO_AGENT = "no_agent"
+_DUPLICATE = "duplicate"
+
+
+def _normalized_goal(goal: str) -> str:
+    """Whitespace/case-normalized goal text for duplicate detection."""
+    return " ".join((goal or "").split()).lower()
+
+
 async def _spawn_child(
     db,
     ctx,
@@ -409,12 +423,13 @@ async def _spawn_child(
     role: str,
     goal: str,
     objective_id: uuid.UUID | None = None,
-) -> bool:
+) -> str:
     """Enqueue a sub-task for the earliest active agent of ``role``.
 
-    Returns False (dispatching nothing) when the company has no active agent
-    of that role — callers surface this as a loud error rather than silently
-    dropping the initiative.
+    Returns one of :data:`_DISPATCHED`, :data:`_NO_AGENT` (no active agent of that
+    role — callers surface this as a loud error rather than silently dropping the
+    initiative), or :data:`_DUPLICATE` (a matching initiative is already in flight,
+    so this one is skipped instead of doubling the work).
     """
     # Prefer an active agent of the role: paused agents are parked (their work is
     # blocked anyway), and after the CEO hires extra capacity there may be more
@@ -430,16 +445,42 @@ async def _spawn_child(
         .limit(1)
     )
     if child_agent is None:
-        return False
+        return _NO_AGENT
+    # The dispatcher's chosen objective, else inherit the parent's — so an
+    # initiative's whole sub-tree stays linked to the objective it serves.
+    effective_objective = objective_id if objective_id is not None else parent.objective_id
+    # Dedup: don't dispatch a second initiative that duplicates one already in flight.
+    # The CEO re-plans from scratch every business cycle and can re-derive work that's
+    # still running — which is how two tasks ended up publishing the same landing page.
+    # Skip when an in-flight sibling has the same (normalized) goal, OR is the same
+    # role working the same objective. This catches re-derived/paraphrased duplicates
+    # without blocking legitimate cross-role fan-out on one objective.
+    norm = _normalized_goal(goal)
+    inflight = (
+        await db.scalars(
+            select(Task).where(
+                Task.company_id == parent.company_id,
+                Task.status.in_(_IN_FLIGHT),
+                Task.id != parent.id,
+            )
+        )
+    ).all()
+    for other in inflight:
+        same_goal = _normalized_goal(other.goal) == norm
+        same_slot = (
+            effective_objective is not None
+            and other.objective_id == effective_objective
+            and other.agent_id == child_agent.id
+        )
+        if same_goal or same_slot:
+            return _DUPLICATE
     child = Task(
         company_id=parent.company_id,
         run_id=parent.run_id,
         root_run_id=parent.root_run_id,
         agent_id=child_agent.id,
         parent_task_id=parent.id,
-        # The dispatcher's chosen objective, else inherit the parent's — so an
-        # initiative's whole sub-tree stays linked to the objective it serves.
-        objective_id=objective_id if objective_id is not None else parent.objective_id,
+        objective_id=effective_objective,
         depth=parent.depth + 1,
         goal=goal,
         status=TaskStatus.queued,
@@ -448,7 +489,7 @@ async def _spawn_child(
     db.add(child)
     await db.flush()
     await ctx.enqueue_task(child.id)
-    return True
+    return _DISPATCHED
 
 
 # Sentinel: a dispatch that must be objective-tagged but resolved to nothing.
@@ -526,8 +567,8 @@ async def _dispatch_task(db, ctx, *, agent: Agent, task: Task, args: dict) -> To
     objective_id = await _resolve_dispatch_objective(db, task, args.get("objective"))
     if objective_id is _MISSING_OBJECTIVE:
         return ToolOutcome(observation=_OBJECTIVE_REQUIRED, is_error=True)
-    dispatched = await _spawn_child(db, ctx, task, agent, args["role"], args["goal"], objective_id)
-    if not dispatched:
+    result = await _spawn_child(db, ctx, task, agent, args["role"], args["goal"], objective_id)
+    if result == _NO_AGENT:
         return ToolOutcome(
             observation=(
                 f"No active '{args['role']}' agent exists in this company — the "
@@ -535,6 +576,14 @@ async def _dispatch_task(db, ctx, *, agent: Agent, task: Task, args: dict) -> To
                 "actually available, then replan against your real roster."
             ),
             is_error=True,
+        )
+    if result == _DUPLICATE:
+        return ToolOutcome(
+            observation=(
+                f"Not dispatched — a matching initiative for '{args['goal'][:60]}' is "
+                "already in flight. Don't re-create work that's already running; use "
+                "collect_results to check on it instead."
+            )
         )
     return ToolOutcome(observation=f"dispatched {args['role']}: {args['goal'][:80]}")
 
@@ -580,16 +629,25 @@ async def _dispatch_tasks(db, ctx, *, agent: Agent, task: Task, args: dict) -> T
         )
     dispatched: list[str] = []
     missing_roles: set[str] = set()
+    duplicates: list[str] = []
     for entry, objective_id in resolved:
-        ok = await _spawn_child(db, ctx, task, agent, entry["role"], entry["goal"], objective_id)
-        if ok:
+        result = await _spawn_child(db, ctx, task, agent, entry["role"], entry["goal"], objective_id)
+        if result == _DISPATCHED:
             dispatched.append(f"{entry['role']}: {str(entry['goal'])[:60]}")
+        elif result == _DUPLICATE:
+            duplicates.append(f"{entry['role']}: {str(entry['goal'])[:60]}")
         else:
             missing_roles.add(entry["role"])
     lines = []
     if dispatched:
         body = "\n".join(f"- {d}" for d in dispatched)
         lines.append(f"dispatched {len(dispatched)} sub-tasks in parallel:\n{body}")
+    if duplicates:
+        body = "\n".join(f"- {d}" for d in duplicates)
+        lines.append(
+            f"Skipped {len(duplicates)} initiative(s) already in flight (not "
+            f"re-dispatched):\n{body}"
+        )
     if missing_roles:
         roles = ", ".join(sorted(missing_roles))
         lines.append(
@@ -1254,6 +1312,37 @@ async def _request_user_action(db, ctx, *, agent: Agent, task: Task, args: dict)
             observation="Describe the action you need the founder to perform.", is_error=True
         )
     reason = str(args.get("reason") or "").strip()
+    # A credential must never be solicited through this tool: the founder's reply lands
+    # as a plaintext chat message (no sealing, no redaction) and flows back into the
+    # agent's transcript. Redirect any credential-shaped ask to `request_secret`, whose
+    # value is envelope-encrypted, never returned, and spliced in only at the outbound
+    # boundary. Mirrors how `_request_secret` short-circuits when a secret already exists.
+    haystack = f"{action}\n{reason}".lower()
+    if any(
+        kw in haystack
+        for kw in (
+            "api key",
+            "api token",
+            "access key",
+            "secret key",
+            "private key",
+            "client secret",
+            "password",
+            "passphrase",
+            "token",
+            "secret",
+            "credential",
+        )
+    ):
+        return ToolOutcome(
+            observation=(
+                "This looks like a request for a credential (API key, token, password, …). "
+                "Do NOT ask for secrets here — a chat reply would expose the value in "
+                "plaintext. Use the `request_secret` tool instead: it stores the value "
+                "encrypted, never shows it to you, and you reference it as {{secret:name}}."
+            ),
+            is_error=True,
+        )
     summary = (
         "**Action requested**\n\n"
         f"The {agent.role.value} agent needs you to do something it can't do itself:\n\n"
