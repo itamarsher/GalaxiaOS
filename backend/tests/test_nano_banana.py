@@ -9,7 +9,7 @@ import pytest
 
 from app.config import settings
 from app.integrations.mediagen import GeneratedMedia, MediaGenError, get_media_gen
-from app.integrations.nano_banana import NanoBananaMediaGen, _explain_http_error
+from app.integrations.nano_banana import NanoBananaMediaGen, _explain_http_error, verify_credentials
 
 _PNG = b"\x89PNG\r\n\x1a\nfake-bytes"
 _B64 = base64.b64encode(_PNG).decode()
@@ -113,6 +113,52 @@ async def test_generate_image_raises_rate_limit_after_exhausting_retries(monkeyp
     assert "rate-limited" in msg and "free tier" not in msg
     # Initial attempt + 2 retries = 3 calls.
     assert calls["n"] == 3
+
+
+@pytest.mark.asyncio
+async def test_verify_credentials_rejects_missing_key():
+    with pytest.raises(MediaGenError):
+        await verify_credentials("")
+
+
+@pytest.mark.asyncio
+async def test_verify_credentials_ok_on_a_cheap_model_get(monkeypatch):
+    calls = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        return httpx.Response(200, json={"name": "models/gemini-2.5-flash-image"})
+
+    transport = httpx.MockTransport(handler)
+    orig_client = httpx.AsyncClient
+
+    def client_factory(*args, **kwargs):
+        kwargs["transport"] = transport
+        return orig_client(*args, **kwargs)
+
+    monkeypatch.setattr(httpx, "AsyncClient", client_factory)
+
+    await verify_credentials("test-key")
+    assert len(calls) == 1
+    assert calls[0].method == "GET"  # a metadata fetch, never a billed generation call
+
+
+@pytest.mark.asyncio
+async def test_verify_credentials_raises_on_bad_key(monkeypatch):
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(403, json={"error": {"message": "permission denied"}})
+
+    transport = httpx.MockTransport(handler)
+    orig_client = httpx.AsyncClient
+
+    def client_factory(*args, **kwargs):
+        kwargs["transport"] = transport
+        return orig_client(*args, **kwargs)
+
+    monkeypatch.setattr(httpx, "AsyncClient", client_factory)
+
+    with pytest.raises(MediaGenError, match="invalid or lacks access"):
+        await verify_credentials("bad-key")
 
 
 def test_parse_image_extracts_inline_data_and_note():

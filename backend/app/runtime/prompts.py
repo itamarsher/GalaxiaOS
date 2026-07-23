@@ -430,9 +430,10 @@ tool-server endpoint with `connect_service`, so its tools become callable (names
 `mcp__<name>__*`) on your next step. The tool skills (`load_skill`) cover services chosen because
 you *can* self-onboard them this way; find the endpoint there or with `web_search`. For the few
 first-class integrations ABOS has its OWN adapter for — site hosting, custom domains, and DNS via
-Cloudflare, and web search + page fetch via Tavily — supply the credential with
-`configure_integration` instead of `connect_service` (Cloudflare powers `publish_content` /
-`connect_domain`; Tavily powers `web_search` / `web_fetch`). To READ a specific page you already
+Cloudflare, web search + page fetch via Tavily, and image/video generation via Nano Banana — supply
+the credential with `configure_integration` instead of `connect_service` (Cloudflare powers
+`publish_content` / `connect_domain`; Tavily powers `web_search` / `web_fetch`; Nano Banana powers
+`generate_image` / `generate_video`). To READ a specific page you already
 have the URL for, use `web_fetch` (full page text) rather than `web_search` (snippets only). Only when you genuinely can't obtain credentials —
 the service needs the founder's identity, payment, or a login only they have —
 `request_user_action` for the founder to supply them. Only when NO existing tool
