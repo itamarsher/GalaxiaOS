@@ -639,6 +639,13 @@ class Settings(BaseSettings):
     # transport is strictly opt-in. Rotating this invalidates every issued token.
     function_connection_secret: str = ""
 
+    # Secret that signs per-user FOUNDER connection tokens for the Founder MCP
+    # endpoint (/connect/founder) — the credential a user's own AI presents to
+    # register, onboard, launch, and steer their companies (agent-first operation).
+    # Empty => the Founder MCP is disabled and all connection attempts are rejected,
+    # so it is strictly opt-in. Rotating this invalidates every issued founder token.
+    founder_connection_secret: str = ""
+
     # Reliability monitor: the platform company watches its OWN failed agent tasks,
     # wakes the Platform agent to investigate each (reading the code, and the Render
     # deploys when it looks infrastructure-related), and files a bug report — which
