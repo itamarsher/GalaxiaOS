@@ -116,6 +116,41 @@ async def test_reset_company(session_factory):
 
 
 @requires_db
+async def test_reset_preserves_member_involvement_and_access(session_factory):
+    """A reset must keep each member's involvement + access config, not just (user, role).
+
+    Regression: reset rebuilt memberships as ``Membership(user, company, role)`` and
+    dropped ``involvement`` — silently disarming the founder's approval gates (the
+    involvement router auto-approves when no one has opted into a decision kind).
+    """
+    from app.models import Membership
+    from app.models.enums import MembershipRole
+
+    async with session_factory() as db:
+        cid = await _make_company(db)
+        m = await db.scalar(select(Membership).where(Membership.company_id == cid))
+        m.involvement = "Approve every plan, hire, spend, and outbound comm before it proceeds."
+        m.proposed_involvement = "pending change"
+        m.access_labels = ["financial", "legal"]
+        m.coverage = "weekdays 9-5"
+        await db.commit()
+
+    async with session_factory() as db:
+        company = await db.get(Company, cid)
+        await reset_company(db, company=company)
+        await db.commit()
+
+    async with session_factory() as db:
+        m = await db.scalar(select(Membership).where(Membership.company_id == cid))
+        assert m is not None and m.role is MembershipRole.founder
+        # The gate-driving fields survive the cascade-delete + rebuild.
+        assert m.involvement == "Approve every plan, hire, spend, and outbound comm before it proceeds."
+        assert m.proposed_involvement == "pending change"
+        assert m.access_labels == ["financial", "legal"]
+        assert m.coverage == "weekdays 9-5"
+
+
+@requires_db
 async def test_reset_company_with_edited_mission(session_factory):
     """A founder can revise the mission as part of the reset (relaunch)."""
     _set_master_key()

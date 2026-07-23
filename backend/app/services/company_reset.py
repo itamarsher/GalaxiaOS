@@ -205,9 +205,22 @@ async def reset_company(
     budget_cents = budget.limit_cents if budget else 0
     budget_period = budget.period if budget else BudgetPeriod.monthly
 
-    # Preserve every membership (founder + any admins), not just the owner.
+    # Preserve every membership (founder + any admins), not just the owner — and
+    # crucially its *configuration*, not just (user, role). A member's involvement
+    # (which the involvement router uses to decide what escalates to a human vs.
+    # auto-approves), their pending proposed_involvement, data-access labels, and
+    # coverage all have to survive the cascade delete. Dropping ``involvement`` here
+    # silently disarmed the founder's approval gates after a reset: with no opt-in on
+    # record the router auto-approved plans/hires/spend that should have escalated.
     memberships = [
-        (m.user_id, m.role)
+        {
+            "user_id": m.user_id,
+            "role": m.role,
+            "involvement": m.involvement,
+            "proposed_involvement": m.proposed_involvement,
+            "access_labels": m.access_labels,
+            "coverage": m.coverage,
+        }
         for m in (
             await db.scalars(select(Membership).where(Membership.company_id == company_id))
         ).all()
@@ -227,8 +240,18 @@ async def reset_company(
     db.add(fresh)
     await db.flush()
 
-    for user_id, role in memberships:
-        db.add(Membership(user_id=user_id, company_id=company_id, role=role))
+    for m in memberships:
+        db.add(
+            Membership(
+                company_id=company_id,
+                user_id=m["user_id"],
+                role=m["role"],
+                involvement=m["involvement"],
+                proposed_involvement=m["proposed_involvement"],
+                access_labels=m["access_labels"],
+                coverage=m["coverage"],
+            )
+        )
     db.add(
         Budget(company_id=company_id, period=budget_period, limit_cents=budget_cents)
     )
