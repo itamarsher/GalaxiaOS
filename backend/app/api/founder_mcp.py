@@ -46,6 +46,7 @@ from app.models.enums import (
 )
 from app.runtime.queue import enqueue_task
 from app.services import chat as chat_svc
+from app.services import company_reset as company_reset_svc
 from app.services import founder_token, involvement, onboarding
 from app.services import runs as runs_svc
 from app.services.decisions import resolve_decision
@@ -119,6 +120,25 @@ _TOOL_SPECS = [
         "inputSchema": {
             "type": "object",
             "properties": {"company_id": {"type": "string"}},
+            "required": ["company_id"],
+        },
+    },
+    {
+        "name": "edit_mission",
+        "description": "Change a company's mission (works on a live or draft company). Resets the "
+        "company to a fresh 'draft', revising its mission text and/or constraints — this wipes the "
+        "generated org and operational state (tasks, decisions, sites, memory, budget spend) but "
+        "PRESERVES the budget limit, memberships (incl. your involvement / approval gates), and "
+        "saved provider keys. After calling this, run generate_org then launch_company to relaunch "
+        "on the new mission. Omit a field to keep its current value; an empty constraints list "
+        "clears constraints.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "company_id": {"type": "string"},
+                "mission_text": {"type": "string", "description": "The revised mission."},
+                "constraints": {"type": "array", "items": {"type": "string"}},
+            },
             "required": ["company_id"],
         },
     },
@@ -439,6 +459,27 @@ async def _call_tool(db, user_id: uuid.UUID, mid, params: dict) -> dict:
             preview = await onboarding.refine(db, company=company, message=str(args["message"]))
             await db.commit()
             return _ok(mid, _content(preview))
+
+        if name == "edit_mission":
+            company = await _founder_company(db, user_id, args.get("company_id"))
+            mt = args.get("mission_text")
+            fresh = await company_reset_svc.reset_company(
+                db,
+                company=company,
+                mission_text=str(mt) if mt is not None else None,
+                constraints=args.get("constraints"),
+            )
+            await db.commit()
+            return _ok(
+                mid,
+                _content(
+                    {
+                        "company_id": str(fresh.id),
+                        "status": fresh.status.value,
+                        "next": "generate_org, then launch_company",
+                    }
+                ),
+            )
 
         if name == "launch_company":
             company = await _founder_company(db, user_id, args.get("company_id"))
