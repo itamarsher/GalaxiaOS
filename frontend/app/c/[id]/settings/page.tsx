@@ -62,6 +62,12 @@ const SLOTS: { provider: string; label: string; hint: string; placeholder: strin
     hint: "Optional. Lets agents send real email from your own domain via Resend (generous free tier: 3,000/mo). With a key set, Resend becomes the email provider; without it, email is simulated.",
     placeholder: "re_…",
   },
+  {
+    provider: "nano_banana",
+    label: "Google Gemini API key (image/video generation)",
+    hint: "Optional. Powers the generate_image and generate_video tools via Google's Nano Banana / Gemini models. Needs a billing-enabled Google AI Studio (Generative Language API) project — the free tier has 0 image-generation quota. Without it, image generation is unavailable.",
+    placeholder: "AIza…",
+  },
 ];
 
 export default function SettingsPage() {
