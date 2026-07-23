@@ -145,7 +145,11 @@ async def preview(company: CompanyDep, db: DbDep):
 
 @router.post("/onboarding/{company_id}/launch", response_model=CompanyOut)
 async def launch(company: CompanyDep, db: DbDep):
-    task_id = await onboarding.launch(db, company=company)
+    try:
+        task_id = await onboarding.launch(db, company=company)
+    except onboarding.OnboardingError as exc:
+        # e.g. no storage provider connected — a prerequisite for launching.
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
     await db.commit()
     if task_id is not None:
         await enqueue_task(task_id)
