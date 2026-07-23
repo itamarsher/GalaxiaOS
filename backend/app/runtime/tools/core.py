@@ -1090,6 +1090,23 @@ async def _web_search(db, ctx, *, agent: Agent, task: Task, args: dict) -> ToolO
     query = args["query"]
     search, cost_cents, funding_user_id, reason = await _resolve_web_search(db, task.company_id)
     if search is None:
+        if settings.web_search_founder_fallback:
+            # Human-backed search: ask the founder (or their AI operator) to run it and
+            # reply with the findings — the task parks on the DM until they answer.
+            from app.runtime.tools.chat import escalate_to_founder
+
+            return await escalate_to_founder(
+                db,
+                ctx,
+                agent=agent,
+                task=task,
+                summary=(
+                    f"**WEB SEARCH:** {query}\n\n"
+                    "No automated web-search provider is connected, so this comes to you: "
+                    "please run this search and reply with the findings (titles, links, and "
+                    "the key facts). Your reply is delivered straight back to the agent."
+                ),
+            )
         return unsupported_capability(
             "Web search",
             hint=reason
@@ -1176,6 +1193,24 @@ async def _web_fetch(db, ctx, *, agent: Agent, task: Task, args: dict) -> ToolOu
     # web_fetch shares the Tavily provider/key with web_search; a resolved provider
     # that can't extract (e.g. a search-only test double or future provider) reports
     # the capability unsupported rather than pretending to read the pages.
+    if provider is None and settings.web_search_founder_fallback:
+        # Human-backed fetch: ask the founder (or their AI) to open the URL(s) and
+        # report the content — the task parks on the DM until they reply.
+        from app.runtime.tools.chat import escalate_to_founder
+
+        url_lines = "\n".join(f"- {u}" for u in urls)
+        return await escalate_to_founder(
+            db,
+            ctx,
+            agent=agent,
+            task=task,
+            summary=(
+                f"**WEB FETCH** — please open these page(s) and reply with the key content:\n\n"
+                f"{url_lines}\n\n"
+                "No automated fetch provider is connected, so this comes to you; your reply "
+                "is delivered straight back to the agent."
+            ),
+        )
     if provider is None or not hasattr(provider, "extract"):
         return unsupported_capability(
             "Fetching web pages",
