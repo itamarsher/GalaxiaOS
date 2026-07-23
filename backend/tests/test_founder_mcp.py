@@ -11,7 +11,16 @@ import json
 import uuid
 
 from app.api import founder_mcp as fm
-from app.models import Agent, AgentRun, Company, DecisionRequest, Membership, Task, User
+from app.models import (
+    Agent,
+    AgentRun,
+    Company,
+    DecisionRequest,
+    Membership,
+    Mission,
+    Task,
+    User,
+)
 from app.models.enums import (
     AgentRole,
     AgentStatus,
@@ -101,6 +110,53 @@ async def test_create_list_snapshot_and_playbook(session_factory):
         assert _payload(r)["customized"] is True
         got = await db.scalar(fm.select(Company).where(Company.id == uuid.UUID(cid)))
         assert got.playbook == "Be bold and concise."
+
+
+@requires_db
+async def test_edit_mission_resets_and_preserves_involvement(session_factory):
+    """edit_mission changes the mission (back to draft) without dropping the gates."""
+    async with session_factory() as db:
+        uid = await _user(db)
+        await db.commit()
+
+    async with session_factory() as db:
+        r = await fm._call_tool(
+            db, uid, 1,
+            {
+                "name": "create_company",
+                "arguments": {
+                    "mission_text": "Old mission: sell widgets",
+                    "budget_cents": 10000,
+                    "involvement": "Approve every plan, hire and spend before it proceeds.",
+                },
+            },
+        )
+        cid = _payload(r)["company_id"]
+
+    # edit_mission → new mission, company reset to draft
+    async with session_factory() as db:
+        r = await fm._call_tool(
+            db, uid, 2,
+            {
+                "name": "edit_mission",
+                "arguments": {
+                    "company_id": cid,
+                    "mission_text": "New mission: agent spend guardrails",
+                    "constraints": ["stay lean"],
+                },
+            },
+        )
+        assert _payload(r)["status"] == "draft"
+
+    async with session_factory() as db:
+        mission = await db.scalar(fm.select(Mission).where(Mission.company_id == uuid.UUID(cid)))
+        assert mission.raw_text == "New mission: agent spend guardrails"
+        assert mission.constraints == ["stay lean"]
+        # The founder's involvement (the approval gate) survives the mission change.
+        m = await db.scalar(
+            fm.select(Membership).where(Membership.company_id == uuid.UUID(cid))
+        )
+        assert m.involvement == "Approve every plan, hire and spend before it proceeds."
 
 
 @requires_db
