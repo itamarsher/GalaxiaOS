@@ -45,9 +45,11 @@ from app.models.enums import (
     TaskStatus,
 )
 from app.runtime.queue import enqueue_task
+from app.services import apikeys, founder_token, involvement, onboarding
 from app.services import chat as chat_svc
 from app.services import company_reset as company_reset_svc
-from app.services import founder_token, involvement, onboarding
+from app.services import governance as gov
+from app.services import integrations as integrations_svc
 from app.services import runs as runs_svc
 from app.services.decisions import resolve_decision
 from app.services.onboarding import OnboardingError
@@ -139,6 +141,66 @@ _TOOL_SPECS = [
                 "mission_text": {"type": "string", "description": "The revised mission."},
                 "constraints": {"type": "array", "items": {"type": "string"}},
             },
+            "required": ["company_id"],
+        },
+    },
+    {
+        "name": "set_involvement",
+        "description": "Set how you (the founder) want to be involved — the prose that drives which "
+        "decisions escalate to you vs. auto-resolve. Name the decision kinds you must approve (e.g. "
+        "'approve every plan, hire, spend increase, and outbound communication'). This is the lever "
+        "that ARMS your approval gates; without it the delegate auto-approves. Takes effect "
+        "immediately and survives a later edit_mission reset.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "company_id": {"type": "string"},
+                "involvement": {"type": "string", "description": "Your involvement, in prose."},
+            },
+            "required": ["company_id", "involvement"],
+        },
+    },
+    {
+        "name": "set_comms_approval",
+        "description": "Turn the external-communications approval guardrail on or off. When ON, every "
+        "outbound message (email, social/community post, published page) becomes a founder decision "
+        "before it can send — recommended for agent-driven companies.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "company_id": {"type": "string"},
+                "enabled": {"type": "boolean"},
+            },
+            "required": ["company_id", "enabled"],
+        },
+    },
+    {
+        "name": "add_provider_key",
+        "description": "Store a BYOK model/provider API key for the company (encrypted at rest), "
+        "replacing any active key for that provider. Use this to fund the company's own LLM/tooling "
+        "usage instead of the managed free allowance. Returns only the provider + key fingerprint, "
+        "never the key.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "company_id": {"type": "string"},
+                "provider": {
+                    "type": "string",
+                    "description": "e.g. 'anthropic', 'openai', 'openrouter', 'tavily'.",
+                },
+                "api_key": {"type": "string"},
+            },
+            "required": ["company_id", "provider", "api_key"],
+        },
+    },
+    {
+        "name": "get_storage_status",
+        "description": "Whether the company has a working file store (a launch prerequisite). Reports "
+        "if storage resolves and, if not, where a human founder can connect Google Drive. Agents "
+        "can't persist reports/artifacts without it.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"company_id": {"type": "string"}},
             "required": ["company_id"],
         },
     },
@@ -477,6 +539,62 @@ async def _call_tool(db, user_id: uuid.UUID, mid, params: dict) -> dict:
                         "company_id": str(fresh.id),
                         "status": fresh.status.value,
                         "next": "generate_org, then launch_company",
+                    }
+                ),
+            )
+
+        if name == "set_involvement":
+            company = await _founder_company(db, user_id, args.get("company_id"))
+            await involvement.set_involvement(
+                db, company_id=company.id, user_id=user_id, text=str(args["involvement"])
+            )
+            await db.commit()
+            return _ok(mid, _content({"ok": True, "gates_armed": True}))
+
+        if name == "set_comms_approval":
+            company = await _founder_company(db, user_id, args.get("company_id"))
+            enabled = await gov.set_external_comms_approval(
+                db, company_id=company.id, enabled=bool(args["enabled"])
+            )
+            await db.commit()
+            return _ok(mid, _content({"external_comms_approval": enabled}))
+
+        if name == "add_provider_key":
+            company = await _founder_company(db, user_id, args.get("company_id"))
+            key = await apikeys.store_key(
+                db,
+                company_id=company.id,
+                provider=str(args["provider"]).lower().strip(),
+                plaintext=str(args["api_key"]),
+            )
+            await db.commit()
+            return _ok(
+                mid,
+                _content(
+                    {
+                        "provider": key.provider,
+                        "key_fingerprint": key.key_fingerprint,
+                        "status": key.status.value,
+                    }
+                ),
+            )
+
+        if name == "get_storage_status":
+            company = await _founder_company(db, user_id, args.get("company_id"))
+            provider = await integrations_svc.resolve_file_provider(db, company_id=company.id)
+            status_out = await integrations_svc.google_drive_status(db, company_id=company.id)
+            return _ok(
+                mid,
+                _content(
+                    {
+                        "storage_resolves": provider is not None,
+                        "connect_available": status_out.get("connect_available"),
+                        "connect_hint": (
+                            None
+                            if provider is not None
+                            else "A human founder connects Drive once at "
+                            "/auth/google/drive/connect (account-wide) or in Settings → Integrations."
+                        ),
                     }
                 ),
             )

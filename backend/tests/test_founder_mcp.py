@@ -7,10 +7,13 @@ transport is a thin wrapper that only adds token→user_id auth on top).
 
 from __future__ import annotations
 
+import base64
 import json
+import os
 import uuid
 
 from app.api import founder_mcp as fm
+from app.config import settings
 from app.models import (
     Agent,
     AgentRun,
@@ -157,6 +160,67 @@ async def test_edit_mission_resets_and_preserves_involvement(session_factory):
             fm.select(Membership).where(Membership.company_id == uuid.UUID(cid))
         )
         assert m.involvement == "Approve every plan, hire and spend before it proceeds."
+
+
+@requires_db
+async def test_setup_tools_arm_gates_key_and_comms(session_factory, monkeypatch):
+    """The founder-AI setup surface: involvement, comms guardrail, BYOK key, storage status."""
+    settings.master_key = base64.urlsafe_b64encode(os.urandom(32)).decode()
+
+    # No Drive in tests; stub resolution so get_storage_status doesn't reach the
+    # app-global session in the legacy owner-drive fallback.
+    async def _no_provider(db, *, company_id):
+        return None
+
+    monkeypatch.setattr(fm.integrations_svc, "resolve_file_provider", _no_provider)
+    async with session_factory() as db:
+        uid = await _user(db)
+        await db.commit()
+    async with session_factory() as db:
+        r = await fm._call_tool(
+            db, uid, 1,
+            {"name": "create_company",
+             "arguments": {"mission_text": "Sell widgets to agents", "budget_cents": 5000}},
+        )
+        cid = _payload(r)["company_id"]
+
+    # set_involvement arms the gate (writes the founder membership's involvement)
+    async with session_factory() as db:
+        r = await fm._call_tool(
+            db, uid, 2,
+            {"name": "set_involvement",
+             "arguments": {"company_id": cid, "involvement": "Approve every plan, hire, and spend."}},
+        )
+        assert _payload(r)["gates_armed"] is True
+        m = await db.scalar(fm.select(Membership).where(Membership.company_id == uuid.UUID(cid)))
+        assert m.involvement == "Approve every plan, hire, and spend."
+
+    # set_comms_approval flips the guardrail
+    async with session_factory() as db:
+        r = await fm._call_tool(
+            db, uid, 3,
+            {"name": "set_comms_approval", "arguments": {"company_id": cid, "enabled": True}},
+        )
+        assert _payload(r)["external_comms_approval"] is True
+
+    # add_provider_key stores it encrypted, returns only a fingerprint
+    async with session_factory() as db:
+        r = await fm._call_tool(
+            db, uid, 4,
+            {"name": "add_provider_key",
+             "arguments": {"company_id": cid, "provider": "Anthropic", "api_key": "sk-secret-xyz"}},
+        )
+        p = _payload(r)
+        assert p["provider"] == "anthropic" and p["status"] == "active"
+        assert "sk-secret-xyz" not in json.dumps(p)  # plaintext never returned
+
+    # get_storage_status: no Drive in tests → does not resolve, offers a connect hint
+    async with session_factory() as db:
+        r = await fm._call_tool(
+            db, uid, 5, {"name": "get_storage_status", "arguments": {"company_id": cid}}
+        )
+        s = _payload(r)
+        assert s["storage_resolves"] is False and s["connect_hint"]
 
 
 @requires_db
