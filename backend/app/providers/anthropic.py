@@ -40,6 +40,16 @@ _STREAM_THRESHOLD = 16_000
 # Internal tool used to force structured JSON output (see ``complete``).
 _JSON_TOOL_NAME = "emit_result"
 
+# Substrings distinguishing a non-retryable billing/quota rejection (account
+# out of credit) from an ordinary malformed-request 400 (bad model name,
+# invalid tool schema, etc.) — both raise ``anthropic.BadRequestError``.
+_BILLING_ERROR_MARKERS = ("credit balance", "insufficient", "quota")
+
+
+def _is_billing_error(exc: anthropic.BadRequestError) -> bool:
+    text = str(exc).lower()
+    return any(marker in text for marker in _BILLING_ERROR_MARKERS)
+
 
 def _block_text(block: object) -> str:
     """Approximate character length of a structured block (for estimation)."""
@@ -190,7 +200,8 @@ class AnthropicProvider(LLMProvider):
             raise ProviderError(f"Anthropic could not find model '{model}'.",
                                 kind="bad_request") from exc
         except anthropic.BadRequestError as exc:
-            raise ProviderError(f"Anthropic rejected the request: {exc}", kind="bad_request") from exc
+            kind = "billing" if _is_billing_error(exc) else "bad_request"
+            raise ProviderError(f"Anthropic rejected the request: {exc}", kind=kind) from exc
         except anthropic.APIConnectionError as exc:
             raise ProviderError("Could not reach the Anthropic API (network error).",
                                 kind="connection") from exc
