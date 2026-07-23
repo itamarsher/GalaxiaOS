@@ -50,12 +50,17 @@ from app.models.enums import (
     TaskStatus,
 )
 
-#: Task statuses that mean a DM is already being handled, so a fresh founder
-#: message coalesces into the open task instead of spawning a duplicate.
-_ACTIVE_DM_TASK_STATUSES = (
+#: Task statuses where a DM handler will still READ a new founder message, so a
+#: fresh message coalesces into the open task instead of spawning a duplicate.
+#: Deliberately excludes ``waiting_approval``: a DM task parked on a decision is
+#: BLOCKED and will never pick up a new message, so coalescing into it silently
+#: drops the founder's message (they can't steer while a decision is pending). When
+#: the only open handler is parked, spawn a fresh one instead. (A task parked on a
+#: reply-*wait* is not dropped: the message satisfies that wait upstream in
+#: ``post_message`` — ``woken`` — before the spawn path is ever reached.)
+_OPEN_DM_TASK_STATUSES = (
     TaskStatus.queued,
     TaskStatus.running,
-    TaskStatus.waiting_approval,
     TaskStatus.auditing,
 )
 
@@ -750,7 +755,7 @@ async def spawn_dm_handler_task(
             Task.company_id == company_id,
             Task.agent_id == agent_id,
             Task.input["founder_dm_channel_id"].astext == str(channel.id),
-            Task.status.in_(_ACTIVE_DM_TASK_STATUSES),
+            Task.status.in_(_OPEN_DM_TASK_STATUSES),
         )
         .limit(1)
     )
