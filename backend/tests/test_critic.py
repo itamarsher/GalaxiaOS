@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 
 from app.models import Agent, AgentRun, Task
 from app.models.enums import AgentRole, RunStatus, RunTrigger, TaskStatus
@@ -201,6 +202,37 @@ async def test_review_output_skips_empty_summary(monkeypatch):
         output={"summary": ""},
     )
     assert v is None and meter.calls == []  # nothing to critique → no spend
+
+
+async def test_critic_budget_exceeded_fails_open_without_traceback(monkeypatch, caplog):
+    """A BudgetExceeded critic failure is an expected condition, not a bug -- it
+    must fail open (return None) and must NOT log with exc_info, or the root
+    ErrorEscalationHandler would auto-file it as a production error (issue #260)."""
+    from app.services.budget import BudgetExceeded
+
+    class _RaisingCostMeter:
+        async def run_llm(self, provider, **kwargs):
+            raise BudgetExceeded("company", 1, 0)
+
+    async def _resolve(db, *, company_id):
+        from app.services.apikeys import ResolvedProvider
+
+        return ResolvedProvider(_FakeProvider(), "key", "byo", "fake")
+
+    monkeypatch.setattr(critic.apikeys, "resolve_active_provider", _resolve)
+    agent, task = _FakeAgent(), _FakeTask()
+
+    with caplog.at_level("WARNING", logger="abos.critic"):
+        verdict = await critic.review_output(
+            object(), _Ctx(_RaisingCostMeter()), company_id=task.company_id, agent=agent,
+            task=task, output={"summary": "did some stuff"},
+        )
+    assert verdict is None  # fail-open: never blocks the agent
+
+    records = [r for r in caplog.records if r.name == "abos.critic"]
+    assert len(records) == 1
+    assert records[0].levelno == logging.WARNING
+    assert records[0].exc_info is None
 
 
 async def test_critic_fails_open_without_provider(monkeypatch):

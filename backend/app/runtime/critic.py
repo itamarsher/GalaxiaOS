@@ -39,6 +39,7 @@ from app.config import settings
 from app.models import Agent, Task
 from app.providers.base import ImageBlock, Message, TextBlock
 from app.services import apikeys
+from app.services.budget import BudgetExceeded
 
 _log = logging.getLogger("abos.critic")
 
@@ -193,6 +194,11 @@ async def _run(
             json_schema=CRITIC_VERDICT_SCHEMA,
             funding_user_id=resolved.funding_user_id,
         )
+    except BudgetExceeded:
+        # Expected business condition, not a bug -- don't attach a traceback or the
+        # root ErrorEscalationHandler will auto-file it as a production error.
+        _log.warning("critic call skipped for task %s: budget exceeded", task.id)
+        return None
     except Exception:  # noqa: BLE001 - a critic failure must never block the agent
         _log.exception("critic call failed for task %s", task.id)
         return None
