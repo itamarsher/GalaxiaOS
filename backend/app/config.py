@@ -162,6 +162,14 @@ class Settings(BaseSettings):
     # window (long enough that a just-created decision/wait is never raced).
     orphaned_approval_grace_minutes: int = 15
 
+    # Safety net for a task parked on a chat reply-wait that never gets an answer —
+    # the founder is away, or a teammate agent crashed. The message-budget escalation
+    # only catches a *chatty* loop; silence blocks the task (and, since waiting_approval
+    # is active, the whole business cycle) indefinitely. After this window with no
+    # reply, the reaper posts a "no reply — proceed or escalate" note, expires the
+    # wait, and re-queues the task so it can finish instead of hanging forever.
+    chat_reply_timeout_minutes: int = 30
+
     # Runtime safety caps (circuit breakers)
     max_task_depth: int = 4
     max_tasks_per_run: int = 200

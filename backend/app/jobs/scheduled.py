@@ -83,6 +83,78 @@ async def reap_orphaned_approvals(ctx: dict) -> dict:
     return {"reaped": reaped}
 
 
+async def reap_stale_chat_waits_for_company(db, company_id) -> list:
+    """Time out reply-waits that never got an answer, so silence can't deadlock a task.
+
+    A task parks on a ``ChatWait`` when an agent posts a message and waits for a reply
+    — from the founder (e.g. ``request_user_action``/``request_decision``) or a
+    teammate. The message-budget escalation only catches a *chatty* back-and-forth; a
+    wait that simply never gets a reply (the founder is away, a teammate crashed)
+    blocks the task forever, and because ``waiting_approval`` is an active status the
+    continuous business cycle never winds down. Past a grace window this posts a
+    founder-side "no reply — proceed or escalate" note, marks the wait ``expired`` (so
+    the task doesn't just re-park on resume, which keys off *pending* waits), and flips
+    the task back to ``queued``. Operates on the passed session and does NOT commit;
+    returns the woken task ids for the cron to enqueue.
+    """
+    from datetime import UTC, datetime, timedelta
+
+    from app.models import ChatWait, Task
+    from app.models.enums import ChatWaitStatus, TaskStatus
+    from app.services import chat as chat_svc
+
+    cutoff = datetime.now(UTC) - timedelta(minutes=settings.chat_reply_timeout_minutes)
+    stale = (
+        await db.scalars(
+            select(ChatWait).where(
+                ChatWait.company_id == company_id,
+                ChatWait.status == ChatWaitStatus.pending,
+                ChatWait.created_at < cutoff,
+            )
+        )
+    ).all()
+    woken: list = []
+    for wait in stale:
+        task = await db.get(Task, wait.task_id)
+        # Only unblock a task actually parked on this wait. If the task already moved
+        # on (e.g. another of its waits was just resumed) just expire the stale wait.
+        if task is None or task.status not in (
+            TaskStatus.waiting_approval,
+            TaskStatus.running,
+        ):
+            wait.status = ChatWaitStatus.expired
+            continue
+        await chat_svc.post_system_reply(
+            db,
+            company_id=company_id,
+            channel_id=wait.channel_id,
+            body=(
+                f"_(No reply received within {settings.chat_reply_timeout_minutes} minutes.)_ "
+                "Proceeding without one — use your best judgment to finish this task, or "
+                "escalate to the CEO if you're truly blocked. Do not keep waiting on this thread."
+            ),
+        )
+        wait.status = ChatWaitStatus.expired
+        task.status = TaskStatus.queued
+        woken.append(task.id)
+    return woken
+
+
+async def reap_stale_chat_waits(ctx: dict) -> dict:
+    """Cron: time out unanswered reply-waits across every active company and resume them."""
+    from app.runtime.queue import enqueue_task
+
+    to_enqueue: list = []
+    for company_id in await _active_company_ids():
+        async with SessionLocal() as db:
+            await set_tenant(db, company_id)
+            to_enqueue.extend(await reap_stale_chat_waits_for_company(db, company_id))
+            await db.commit()
+    for task_id in to_enqueue:
+        await enqueue_task(task_id)
+    return {"resumed": len(to_enqueue)}
+
+
 async def keep_warm(ctx: dict) -> dict:
     """Self-ping the public URL so a free-tier host doesn't idle the in-process worker.
 
