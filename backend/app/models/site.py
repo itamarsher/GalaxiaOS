@@ -70,7 +70,7 @@ class SiteLead(Base, PKMixin, TenantMixin, TimestampMixin):
     name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     # Optional free-text the visitor left (e.g. "what would you want first?").
     message: Mapped[str | None] = mapped_column(Text, nullable=True)
-    # Where the signal came from, e.g. "landing_page:my-startup".
+    # Where the signal came from, e.g. "site:my-startup".
     source: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
 

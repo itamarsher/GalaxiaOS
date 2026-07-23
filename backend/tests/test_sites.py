@@ -152,6 +152,40 @@ async def test_publish_unsupported_channel():
     assert out.is_error
 
 
+async def test_publish_blog_honors_lead_capture(monkeypatch):
+    # Regression: lead_capture used to be silently forced to False for channel
+    # "blog" (landing_page-only), even though the render/publish path is
+    # channel-agnostic — see issue #274.
+    captured = {}
+
+    async def _host(db, *, company_id):
+        return object()
+
+    async def _gate(db, ctx, *, agent, task, key, kind, brief, html):
+        return None
+
+    class _FakeSite:
+        id = uuid.uuid4()
+        slug = "post"
+        deployment_url = "https://abos-post.pages.dev"
+
+    async def _publish_site(db, host, *, company_id, title, body, lead_capture, cta_headline, cta_button):
+        captured["lead_capture"] = lead_capture
+        return _FakeSite()
+
+    monkeypatch.setattr("app.runtime.tools.marketing.resolve_site_host", _host)
+    monkeypatch.setattr("app.runtime.tools.marketing.visual_gate", _gate)
+    monkeypatch.setattr(sites_svc, "publish_site", _publish_site)
+    monkeypatch.setattr(sites_svc, "lead_capture_action", lambda site_id: None)
+
+    out = await _publish_content(
+        None, None, agent=None, task=_Task(),
+        args={"channel": "blog", "title": "t", "body": "b", "lead_capture": True},
+    )
+    assert captured["lead_capture"] is True
+    assert not out.is_error
+
+
 async def test_connect_unsupported_without_providers(monkeypatch):
     async def _host(db, *, company_id):
         return object()
@@ -321,7 +355,7 @@ async def test_capture_lead_persists_and_funnels_to_crm(
         )
         await db.commit()
         assert lead.email == "Founder@Example.com"
-        assert lead.source == f"landing_page:{site.slug}"
+        assert lead.source == f"site:{site.slug}"
 
         # Stored as a durable lead…
         leads = await sites_svc.list_leads(db, company_id=company_with_budget)

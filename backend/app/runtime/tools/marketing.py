@@ -38,8 +38,8 @@ SPECS: list[ToolSpec] = [
             "immediately on a free *.pages.dev URL — no domain purchase needed. The "
             "body supports markdown links ([text](https://…)), so you can link to a "
             "hosted waitlist/form (e.g. Tally, Typeform, Google Forms) for early "
-            "signal. For a landing_page you can instead set lead_capture=true to add "
-            "a built-in email/waitlist form to the page itself; submissions are "
+            "signal. For a landing_page or blog you can instead set lead_capture=true "
+            "to add a built-in email/waitlist form to the page itself; submissions are "
             "stored and added to the CRM as leads automatically."
         ),
         input_schema={
@@ -65,7 +65,7 @@ SPECS: list[ToolSpec] = [
                 "lead_capture": {
                     "type": "boolean",
                     "description": (
-                        "landing_page only: add a built-in email capture / waitlist "
+                        "landing_page or blog: add a built-in email capture / waitlist "
                         "form to the page. Captured emails become CRM leads."
                     ),
                 },
@@ -161,8 +161,8 @@ async def _publish_content(db, ctx, *, agent: Agent, task: Task, args: dict) -> 
 
     title = str(args["title"]).strip()
     body = str(args["body"])
-    # Lead capture is a landing-page-only affordance.
-    lead_capture = bool(args.get("lead_capture")) and channel == "landing_page"
+    # Lead capture is available on any real static-host channel (landing_page, blog).
+    lead_capture = bool(args.get("lead_capture")) and channel in _SITE_CHANNELS
     cta_headline = (str(args.get("cta_headline")).strip() or None) if args.get("cta_headline") else None
     cta_button = (str(args.get("cta_button")).strip() or None) if args.get("cta_button") else None
 
