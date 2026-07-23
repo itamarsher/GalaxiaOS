@@ -251,8 +251,29 @@ class OpenAIProvider(LLMProvider):
         for tc_id, tc_name, tc_args in raw_calls:
             try:
                 arguments = json.loads(tc_args or "{}")
-            except (json.JSONDecodeError, TypeError):
-                arguments = {}
+            except (json.JSONDecodeError, TypeError) as exc:
+                # A tool call's arguments JSON can fail to parse for two very
+                # different reasons: the model got cut off mid-argument (finish
+                # reason "length" — the arguments are legitimately incomplete,
+                # e.g. a long `content` string for save_file), or the model
+                # emitted genuinely malformed JSON. Silently defaulting to `{}`
+                # used to hide both cases behind "content is empty", which sent
+                # the agent chasing the wrong bug. Surface a distinguishable
+                # error instead (mirrors the pattern in
+                # ``app.services.onboarding._parse_llm_json``).
+                if finish == "length":
+                    raise ProviderError(
+                        f"OpenAI's response was cut off before it finished "
+                        f"generating arguments for the '{tc_name}' tool call "
+                        "(hit the output token limit). Try again with a "
+                        "shorter request.",
+                        kind="truncated",
+                    ) from exc
+                raise ProviderError(
+                    f"OpenAI returned malformed arguments for the '{tc_name}' "
+                    f"tool call: {exc}",
+                    kind="bad_request",
+                ) from exc
             tool_calls.append(ToolCall(id=tc_id, name=tc_name, arguments=arguments))
 
         return LLMResponse(
