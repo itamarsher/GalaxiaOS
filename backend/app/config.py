@@ -162,6 +162,13 @@ class Settings(BaseSettings):
     # window (long enough that a just-created decision/wait is never raced).
     orphaned_approval_grace_minutes: int = 15
 
+    # Human-backed web search: when no automated web-search provider is connected,
+    # route an agent's web_search/web_fetch to the FOUNDER (a DM the founder — or
+    # their AI operator — answers with the findings) instead of reporting the
+    # capability unsupported. Turns "the founder is our search agent" into a real
+    # first-class fallback. Off reverts to unsupported_capability.
+    web_search_founder_fallback: bool = True
+
     # Safety net for a task parked on a chat reply-wait that never gets an answer —
     # the founder is away, or a teammate agent crashed. The message-budget escalation
     # only catches a *chatty* loop; silence blocks the task (and, since waiting_approval

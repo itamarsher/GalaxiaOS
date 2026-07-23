@@ -288,10 +288,18 @@ async def test_web_search_commits_measured_credits_not_the_estimate(
 
 
 @requires_db
-async def test_web_fetch_is_unsupported_without_a_provider(session_factory, company_with_budget):
-    """No Tavily key and no global provider -> web_fetch reports unsupported."""
-    from app.runtime import tools as tools_pkg
+async def test_web_fetch_is_unsupported_without_a_provider(
+    session_factory, company_with_budget, monkeypatch
+):
+    """No provider + founder fallback OFF -> web_fetch reports unsupported.
 
+    (With the fallback ON — the default — it escalates to the founder instead; that
+    path is covered in test_web_search_founder_fallback.py.)
+    """
+    from app.runtime import tools as tools_pkg
+    from app.runtime.tools import core
+
+    monkeypatch.setattr(core.settings, "web_search_founder_fallback", False)
     _set_master_key()
     async with session_factory() as db:
         agent, task = await _make_agent_task(db, company_with_budget)
