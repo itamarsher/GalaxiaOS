@@ -409,6 +409,12 @@ class Settings(BaseSettings):
     # OAuth app is configured on the deployment); off deployments/tests skip it.
     require_storage_to_launch: bool = True
 
+    # When the founder DECLINES an outbound message (e.g. a landing page), don't let
+    # the fleet re-escalate the identical send from the next task/cycle for this many
+    # minutes — the per-task rejection only stopped the same task, so without this a
+    # declined page gets re-submitted (and re-rejected) in a loop. 0 disables.
+    founder_rejection_cooldown_minutes: int = 180
+
     # Floor for a functional agent's per-agent budget slice, so a lean weighted
     # split never leaves an agent with too little to take a single metered step
     # (an LLM call + a web search or two). Drawn from the reserve pool; scaled back

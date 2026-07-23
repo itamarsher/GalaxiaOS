@@ -207,3 +207,56 @@ async def test_reject_marks_parked_message_rejected(session_factory, company_wit
     async with session_factory() as db:
         msgs = await ext.list_messages(db, company_id=company_id)
         assert msgs[0].status is ExternalMessageStatus.rejected
+
+
+@requires_db
+async def test_recently_rejected_outbound_is_company_scoped(session_factory, company_with_budget):
+    """A founder rejection of an outbound blocks the SAME target from re-escalating.
+
+    Guards the resubmit loop: the per-task grant only stops one task, so a landing
+    page the founder declined would otherwise be re-proposed by the next task/cycle.
+    ``recently_rejected_outbound`` is the company-scoped memory that stops it.
+    """
+    company_id = company_with_budget
+    agent_id, task_id = await _make_task(session_factory, company_id)
+
+    async with session_factory() as db:
+        db.add(
+            DecisionRequest(
+                company_id=company_id,
+                agent_id=agent_id,
+                task_id=task_id,
+                kind=DecisionKind.external_comm,
+                summary="landing page",
+                payload={
+                    "tool": "publish_content",
+                    "args": {"channel": "landing_page", "title": "v1", "body": "..."},
+                    "founder_note": "Not until we have demand evidence.",
+                },
+                status=DecisionStatus.rejected,
+            )
+        )
+        await db.commit()
+
+    async with session_factory() as db:
+        # A DIFFERENT task re-attempting the same landing page is caught (company-scoped),
+        # and the founder's note comes back so the agent can adapt.
+        hit = await ext.recently_rejected_outbound(
+            db, company_id=company_id, tool="publish_content",
+            args={"channel": "landing_page", "title": "v1 (reworded)", "body": "..."},
+            within_minutes=180,
+        )
+        assert hit is not None
+        assert hit.payload["founder_note"] == "Not until we have demand evidence."
+
+        # A different channel (email to someone) is NOT blocked by a rejected page.
+        assert await ext.recently_rejected_outbound(
+            db, company_id=company_id, tool="send_email",
+            args={"to": "x@y.co", "subject": "Hi", "body": "..."}, within_minutes=180,
+        ) is None
+
+        # And the window bounds it: a 0-minute cooldown disables the guard entirely.
+        assert await ext.recently_rejected_outbound(
+            db, company_id=company_id, tool="publish_content",
+            args={"channel": "landing_page"}, within_minutes=0,
+        ) is None
