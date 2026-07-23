@@ -28,6 +28,7 @@ from app.models.enums import (
     ChatChannelKind,
     ChatWaitStatus,
     DecisionKind,
+    DecisionStatus,
     RunStatus,
     RunTrigger,
     TaskStatus,
@@ -1175,3 +1176,84 @@ async def test_structured_decision_surfaces_as_dm(session_factory, company_with_
         assert decision.channel_id is not None
         msgs = await chat.messages(db, channel_id=decision.channel_id)
         assert any("Ship the MVP" in m.body for m in msgs)
+
+
+@requires_db
+async def test_founder_dm_to_functional_agent_still_spawns_with_stale_pending_decision(
+    session_factory, company_with_budget, monkeypatch
+):
+    """Regression for #264: a founder DM to a FUNCTIONAL agent's channel must spawn
+    a task even when an older, unrelated ``DecisionRequest`` is still pending on
+    that same channel and the reply can't be classified as approving/rejecting it.
+
+    Previously the endpoint's spawn gate required ``decision_verdict == "none"``,
+    so an "unclear" classification (very common for functional agents, who
+    accumulate pending decisions from budget/governance escalations far more than
+    the CEO) silently swallowed the founder's steering message: the decision
+    stayed pending and no task ever read the message.
+    """
+    from app.api import chat as chat_api
+    from app.schemas import ChatPostRequest
+    from app.services import decisions as decisions_svc
+
+    async def _noop_enqueue(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(chat_api, "enqueue_task", _noop_enqueue)
+
+    # No provider configured -> _classify_reply degrades to "unclear" with no LLM call.
+    async def _no_provider(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(decisions_svc.apikeys, "resolve_active_provider", _no_provider)
+
+    company_id = company_with_budget
+    agent, task = await _agent_and_task(session_factory, company_id, role=AgentRole.growth)
+
+    async with session_factory() as db:
+        row = await db.get(Task, task.id)
+        row.status = TaskStatus.waiting_approval
+        decision = DecisionRequest(
+            company_id=company_id,
+            agent_id=agent.id,
+            task_id=task.id,
+            kind=DecisionKind.plan_approval,
+            summary="Proposed execution plan: ship the growth experiment",
+            payload={"tool": "submit_plan", "plan": "x"},
+            status=DecisionStatus.pending,
+        )
+        db.add(decision)
+        await db.flush()
+        channel = await chat.attach_decision_dm(db, decision=decision)
+        await db.commit()
+        channel_id, decision_id = channel.id, decision.id
+
+    async with session_factory() as db:
+        company = SimpleNamespace(id=company_id)
+        user = SimpleNamespace(id=None)
+        out = await chat_api.post_message(
+            company,
+            channel_id,
+            ChatPostRequest(message="Focus on outbound this week instead."),
+            db,
+            user,
+        )
+        await db.commit()
+    assert out is not None
+
+    async with session_factory() as db:
+        # The stale decision is untouched — still pending, no verdict was forced.
+        d = await db.get(DecisionRequest, decision_id)
+        assert d.status is DecisionStatus.pending
+        # A fresh handler task was spawned for the functional agent's DM so the
+        # founder's message doesn't get silently dropped.
+        spawned_task = await db.scalar(
+            select(Task).where(
+                Task.company_id == company_id,
+                Task.agent_id == agent.id,
+                Task.input["founder_dm_channel_id"].astext == str(channel_id),
+                Task.id != task.id,
+            )
+        )
+        assert spawned_task is not None
+        assert spawned_task.status is TaskStatus.queued
