@@ -51,45 +51,45 @@ def slugify(text: str) -> str:
     return s[:48] or "page"
 
 
-# Shared page chrome. Kept inline (single self-contained file) since the page is
-# deployed as one static asset with no external stylesheet.
-# A clean, modern landing-page look. Kept inline (single self-contained static asset,
-# no external stylesheet or font) and token-driven so light/dark both stay cohesive.
-# Deliberately avoids CSS the HTML-scaffold guard strips from authored bodies (e.g.
-# gradients), so the chrome renders identically no matter what the agent wrote.
+# Shared page chrome — the GalaxiaOS brand look, so a published page matches the app.
+# Kept inline (single self-contained static asset, no external stylesheet or font) and
+# token-driven, mirroring the app's design system (frontend/app/globals.css): deep
+# midnight base with the logo's indigo accent and white-on-indigo CTAs. Uses a radial
+# indigo glow (never ``linear-gradient``/``.hero{``, which the HTML-scaffold guard
+# strips from authored bodies) so the chrome renders identically whatever the agent wrote.
 _PAGE_STYLE = (
-    ":root{--ink:#0b1220;--body:#33415a;--muted:#64748b;--accent:#4f46e5;--accent-hover:#4338ca;"
-    "--line:#e6e9f0;--card:#f8fafc;--bg:#ffffff}"
+    ":root{--bg:#0d1320;--bg-glow:#161a36;--panel:#151d2e;--border:#27324a;--text:#e7edf6;"
+    "--muted:#8b99b2;--accent:#6366f1;--accent-strong:#a5b4fc;--accent-soft:rgba(99,102,241,0.14);"
+    "--on-accent:#ffffff;--radius:14px;--radius-sm:9px}"
     "*{box-sizing:border-box}"
     "body{font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,"
     "sans-serif;max-width:660px;margin:0 auto;padding:80px 22px 104px;line-height:1.65;"
-    "color:var(--body);background:var(--bg);-webkit-font-smoothing:antialiased;"
-    "text-rendering:optimizeLegibility}"
+    "color:var(--text);background:var(--bg);background-image:radial-gradient(1200px 600px at "
+    "50% -10%,var(--bg-glow),transparent 70%);background-attachment:fixed;"
+    "-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}"
     "h1{font-size:clamp(2.15rem,6vw,3rem);line-height:1.08;letter-spacing:-.03em;font-weight:800;"
-    "color:var(--ink);margin:0 0 .5em}"
-    "h2{font-size:1.55rem;line-height:1.25;letter-spacing:-.02em;font-weight:700;color:var(--ink);"
+    "color:#fff;margin:0 0 .5em}"
+    "h2{font-size:1.55rem;line-height:1.25;letter-spacing:-.02em;font-weight:700;color:#fff;"
     "margin:2.4em 0 .5em}"
-    "h3{font-size:1.15rem;font-weight:700;color:var(--ink);margin:1.8em 0 .4em}"
-    "p{margin:0 0 1.15em;font-size:1.075rem}"
+    "h3{font-size:1.15rem;font-weight:700;color:#fff;margin:1.8em 0 .4em}"
+    "p{margin:0 0 1.15em;font-size:1.075rem;color:var(--text)}"
     "ul{padding-left:1.15em;margin:0 0 1.25em}li{margin:.4em 0}"
-    "a{color:var(--accent);text-decoration:none;font-weight:600}a:hover{text-decoration:underline}"
-    "strong{color:var(--ink);font-weight:700}"
-    ".abos-capture{margin-top:2.6em;padding:28px;border:1px solid var(--line);border-radius:16px;"
-    "background:var(--card);box-shadow:0 1px 2px rgba(16,24,40,.05)}"
+    "a{color:var(--accent-strong);text-decoration:none;font-weight:600}a:hover{text-decoration:underline}"
+    "strong{color:#fff;font-weight:700}"
+    ".abos-capture{margin-top:2.6em;padding:28px;border:1px solid var(--border);"
+    "border-radius:var(--radius);background:var(--panel);"
+    "box-shadow:0 1px 2px rgba(0,0,0,.4),0 8px 24px rgba(0,0,0,.25)}"
     ".abos-capture h3{margin:0 0 14px;font-size:1.2rem}"
-    ".abos-capture input[type=email]{width:100%;padding:13px 15px;font-size:16px;color:var(--ink);"
-    "border:1px solid #cfd6e4;border-radius:10px;box-sizing:border-box;background:var(--bg)}"
+    ".abos-capture input[type=email]{width:100%;padding:13px 15px;font-size:16px;color:var(--text);"
+    "border:1px solid var(--border);border-radius:var(--radius-sm);box-sizing:border-box;"
+    "background:#0c111c}"
     ".abos-capture input[type=email]:focus{outline:none;border-color:var(--accent);"
-    "box-shadow:0 0 0 3px rgba(79,70,229,.18)}"
+    "box-shadow:0 0 0 3px var(--accent-soft)}"
     ".abos-capture button{margin-top:12px;width:100%;padding:13px 18px;font-size:16px;"
-    "font-weight:700;color:#fff;background:var(--accent);border:0;border-radius:10px;cursor:pointer;"
-    "transition:background .15s ease}"
-    ".abos-capture button:hover{background:var(--accent-hover)}"
+    "font-weight:700;color:var(--on-accent);background:var(--accent);border:0;"
+    "border-radius:var(--radius-sm);cursor:pointer;transition:filter .15s ease}"
+    ".abos-capture button:hover{filter:brightness(1.08)}"
     ".abos-hp{position:absolute;left:-9999px;width:1px;height:1px;opacity:0}"
-    "@media (prefers-color-scheme:dark){"
-    ":root{--ink:#f1f5f9;--body:#c3cbd9;--muted:#94a3b8;--line:#26303f;--card:#141a24;--bg:#0b0f16}"
-    ".abos-capture input[type=email]{border-color:#33405a}"
-    ".abos-capture{box-shadow:none}}"
 )
 
 
