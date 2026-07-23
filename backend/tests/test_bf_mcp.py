@@ -275,6 +275,69 @@ async def test_operator_bug_lifecycle_via_mcp_matches_native_gate(session_factor
 
 
 @requires_db
+async def test_file_tools_via_mcp_round_trip_and_respect_data_policy(session_factory, monkeypatch):
+    """save_file / list_company_files / read_company_file are exposed on MCP and behave
+    like their native counterparts: real archive + breadcrumb, and gated by the calling
+    agent's access labels (RFC 0001) — a growth agent can't read a financial filing."""
+    from app.services import integrations as integrations_svc
+    from app.services import memory as memory_svc
+    from tests.test_files_provider import FakeFileProvider
+
+    monkeypatch.setattr(settings, "function_connection_secret", _SECRET)
+    ids = await _seed(session_factory)
+    token = function_token.mint(company_id=ids.company_id, agent_id=ids.agent_id)
+
+    provider = FakeFileProvider()
+
+    async def _resolve(db, *, company_id):
+        return provider
+
+    monkeypatch.setattr(integrations_svc, "resolve_file_provider", _resolve)
+
+    # The save_file breadcrumb writes to memory_entries, which the test schema omits
+    # (pgvector-backed; see tests/conftest.py) — stub it like the other DB tests do.
+    async def _noop_write(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(memory_svc, "write", _noop_write)
+
+    with _client() as client:
+        tools = {t["name"] for t in _rpc(client, token, "tools/list").json()["result"]["tools"]}
+        assert {"save_file", "list_company_files", "read_company_file"} <= tools
+
+        # File an (unlabelled) artifact — the growth agent can file and read it back.
+        saved, _ = _tool(client, token, "save_file",
+                         {"category": "artifact", "name": "brief.md", "content": "hello world"})
+        assert saved["ok"] is True and "brief.md" in saved["path"]
+
+        listing, _ = _tool(client, token, "list_company_files")
+        assert any(f["name"] == "brief.md" for f in listing["files"])
+
+        read, _ = _tool(client, token, "read_company_file", {"name": "brief.md"})
+        assert read["content"] == "hello world"
+
+        # File a financial doc, then confirm the growth agent (no "financial" label)
+        # can neither see it in the listing nor read it directly — same as the native
+        # file tools' data-segmentation gate.
+        _tool(client, token, "save_file",
+              {"category": "financial", "name": "Q3 statement.md", "content": "numbers"})
+        listing2, _ = _tool(client, token, "list_company_files")
+        assert not any(f["name"] == "Q3 statement.md" for f in listing2["files"])
+        result = _rpc(client, token, "tools/call",
+                      {"name": "read_company_file", "arguments": {"name": "Q3 statement.md"}}
+                      ).json()["result"]
+        assert result.get("isError") is True
+        assert "No filed document" in result["content"][0]["text"]
+
+    # The filing left a real CompanyFile row.
+    from app.models import CompanyFile
+
+    async with session_factory() as db:
+        rows = (await db.scalars(select(CompanyFile).where(CompanyFile.company_id == ids.company_id))).all()
+        assert any(r.name == "brief.md" for r in rows)
+
+
+@requires_db
 async def test_mcp_endpoint_rejects_bad_or_missing_token(session_factory, monkeypatch):
     monkeypatch.setattr(settings, "function_connection_secret", _SECRET)
     with _client() as client:

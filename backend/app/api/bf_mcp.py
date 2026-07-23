@@ -32,12 +32,16 @@ from app.config import settings
 from app.db import set_tenant
 from app.deps import CompanyDep, CurrentUser, DbDep
 from app.models import Agent
+from app.models.enums import FileCategory
 from app.services import business_function, function_token
 from app.services import involvement as involvement_svc
 
 # Mirror the protocol version the repo's MCP client advertises.
 _PROTOCOL_VERSION = "2025-06-18"
 _SERVER_INFO = {"name": "abos-business-function", "version": "0.1.0"}
+
+# Category values exposed to file tools (communications is an internal-only log).
+_FILE_CATEGORIES = [c.value for c in FileCategory if c != FileCategory.communications]
 
 # The tools the surface exposes to a connected worker.
 _TOOL_SPECS = [
@@ -178,6 +182,44 @@ _TOOL_SPECS = [
         "its lifecycle status (open -> promoted -> delivered), so you can monitor whether a bug "
         "you reported has been picked up and fixed.",
         "inputSchema": {"type": "object", "properties": {"limit": {"type": "integer"}}},
+    },
+    {
+        "name": "save_file",
+        "description": "File a document into the company's external file store (organized "
+        "folders in the founder's Drive) so it is retained, shareable, and audit/DD-ready. "
+        "Use for anything worth keeping outside chat: deliverables, financial records, "
+        "data-room docs, brand/messaging guidelines, or received files. Re-saving the same "
+        "filename updates it in place.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "category": {"type": "string", "enum": _FILE_CATEGORIES},
+                "name": {"type": "string", "description": "Filename, e.g. 'Q3 revenue.md'."},
+                "content": {"type": "string", "description": "The full file content (text)."},
+                "description": {"type": "string", "description": "Optional one-line note for the index."},
+            },
+            "required": ["category", "name", "content"],
+        },
+    },
+    {
+        "name": "list_company_files",
+        "description": "List the documents already filed in the company's external store, "
+        "optionally limited to one category, so you can see what exists before creating or "
+        "referencing a document.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"category": {"type": "string", "enum": _FILE_CATEGORIES}},
+        },
+    },
+    {
+        "name": "read_company_file",
+        "description": "Read back the content of a previously filed document by name "
+        "(extension optional), e.g. to reuse the brand guidelines or a prior deliverable.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"name": {"type": "string"}},
+            "required": ["name"],
+        },
     },
     {
         "name": "review_backlog",
@@ -443,6 +485,164 @@ async def _call_tool(db, company_id, agent_id, mid, params: dict) -> dict:
                 for r in rows
             ]
             return _ok(mid, _content({"requests": items, "count": len(items)}))
+
+        # ── file store (parity with the native save_file/list_company_files/
+        # read_company_file agent tools in app.runtime.tools.files) ──
+        if name == "save_file":
+            from app.integrations.files import FileProviderAuthError, FileProviderError
+            from app.models import Company
+            from app.models.enums import MemoryType
+            from app.services import files as files_svc
+            from app.services import memory as memory_svc
+            from app.services.integrations import (
+                clear_file_provider_credential,
+                resolve_file_provider,
+            )
+
+            def _bad_category():
+                return _ok(mid, {"content": [{"type": "text",
+                    "text": f"Unknown category; choose one of {', '.join(_FILE_CATEGORIES)}."}],
+                    "isError": True})
+
+            raw_category = str(args.get("category") or "").strip().lower()
+            try:
+                category = FileCategory(raw_category)
+            except ValueError:
+                return _bad_category()
+            if category == FileCategory.communications:
+                return _bad_category()
+            file_name = str(args.get("name") or "").strip()
+            content = str(args.get("content") or "")
+            if not file_name:
+                return _ok(mid, {"content": [{"type": "text", "text": "A filename is required."}],
+                    "isError": True})
+            if not content.strip():
+                return _ok(mid, {"content": [{"type": "text",
+                    "text": "File content is empty; nothing to save."}], "isError": True})
+
+            provider = await resolve_file_provider(db, company_id=company_id)
+            if provider is None:
+                return _ok(mid, {"content": [{"type": "text",
+                    "text": "Saving a file is not supported in this environment: no file "
+                    "store is connected. Ask the founder to connect Google Drive in "
+                    "Settings."}], "isError": True})
+            company = await db.get(Company, company_id)
+            if company is None:
+                return _ok(mid, {"content": [{"type": "text",
+                    "text": "company not found; cannot file."}], "isError": True})
+            try:
+                row = await files_svc.archive(
+                    db, provider, company=company, category=category, name=file_name,
+                    content=content.encode("utf-8"),
+                    description=str(args.get("description") or "").strip() or None,
+                )
+            except FileProviderAuthError:
+                await clear_file_provider_credential(db, company_id=company_id)
+                await db.commit()
+                return _ok(mid, {"content": [{"type": "text",
+                    "text": "Google Drive disconnected — the stored credential has expired "
+                    "or been revoked. Ask the founder to reconnect it in Settings."}],
+                    "isError": True})
+            except FileProviderError as exc:
+                return _ok(mid, {"content": [{"type": "text",
+                    "text": f"saving the file failed: {exc}"}], "isError": True})
+
+            # Breadcrumb in Company Memory so the filing is recallable in planning context,
+            # inheriting the filed document's labels so recall is gated the same way.
+            await memory_svc.write(
+                db, company_id=company_id, type=MemoryType.result,
+                title=f"Filed {category.value}: {row.name}"[:500],
+                content=f"Saved to {row.folder_path}/{row.name}."
+                + (f"\n{row.description}" if row.description else ""),
+                labels=row.labels,
+            )
+            await db.commit()
+            where = f"{row.folder_path}/{row.name}"
+            return _ok(mid, _content({"ok": True, "path": where, "web_url": row.web_url}))
+
+        if name == "list_company_files":
+            from app.services import data_policy
+            from app.services import files as files_svc
+
+            raw_category = args.get("category")
+            category = None
+            if raw_category:
+                try:
+                    category = FileCategory(str(raw_category).strip().lower())
+                except ValueError:
+                    return _ok(mid, {"content": [{"type": "text",
+                        "text": f"Unknown category; choose one of {', '.join(_FILE_CATEGORIES)}."}],
+                        "isError": True})
+            rows = await files_svc.list_files(db, company_id=company_id, category=category)
+            agent = await db.get(Agent, agent_id)
+            # Data segmentation: an MCP-connected agent only sees files whose labels it
+            # may access, same as its native counterpart (the CEO bypasses).
+            rows = [r for r in rows if data_policy.agent_can_access(agent, r.labels)]
+            items = [
+                {
+                    "category": r.category.value,
+                    "name": r.name,
+                    "description": r.description,
+                    "web_url": r.web_url,
+                }
+                for r in rows
+            ]
+            return _ok(mid, _content({"files": items, "count": len(items)}))
+
+        if name == "read_company_file":
+            from app.integrations.files import FileProviderAuthError, FileProviderError
+            from app.runtime.tools.base import DEFAULT_MAX_OBSERVATION_CHARS, clip
+            from app.services import data_policy
+            from app.services import files as files_svc
+            from app.services.integrations import (
+                clear_file_provider_credential,
+                resolve_file_provider,
+            )
+
+            file_name = str(args.get("name") or "").strip()
+            if not file_name:
+                return _ok(mid, {"content": [{"type": "text", "text": "A file name is required."}],
+                    "isError": True})
+            row = await files_svc.find_file(db, company_id=company_id, name=file_name)
+            agent = await db.get(Agent, agent_id)
+            # Same missing-file message whether the file doesn't exist or this agent
+            # isn't cleared for it, so labels aren't probeable.
+            if row is None or not data_policy.agent_can_access(agent, row.labels):
+                return _ok(mid, {"content": [{"type": "text",
+                    "text": f"No filed document named {file_name!r}."}], "isError": True})
+
+            provider = await resolve_file_provider(db, company_id=company_id)
+            if provider is None or not row.external_id:
+                return _ok(mid, {"content": [{"type": "text",
+                    "text": "Reading a file is not supported in this environment: no file "
+                    "store is connected. Ask the founder to connect Google Drive in "
+                    "Settings."}], "isError": True})
+            cap = settings.max_file_read_bytes
+            if cap and row.size_bytes and row.size_bytes > cap:
+                return _ok(mid, {"content": [{"type": "text",
+                    "text": f"{row.name} is too large to read ({row.size_bytes // 1024} KB; "
+                    f"limit {cap // 1024} KB)."}], "isError": True})
+            try:
+                data = await provider.download_file(row.external_id)
+            except FileProviderAuthError:
+                await clear_file_provider_credential(db, company_id=company_id)
+                await db.commit()
+                return _ok(mid, {"content": [{"type": "text",
+                    "text": "Google Drive disconnected — the stored credential has expired "
+                    "or been revoked. Ask the founder to reconnect it in Settings."}],
+                    "isError": True})
+            except FileProviderError as exc:
+                return _ok(mid, {"content": [{"type": "text",
+                    "text": f"reading the file failed: {exc}"}], "isError": True})
+            try:
+                text = data.decode("utf-8")
+            except UnicodeDecodeError:
+                return _ok(mid, _content(
+                    {"name": row.name, "binary": True, "mime_type": row.mime_type}
+                ))
+            return _ok(mid, _content(
+                {"name": row.name, "content": clip(text, DEFAULT_MAX_OBSERVATION_CHARS)}
+            ))
 
         # ── operator-only bug lifecycle (parity with the native platform tools) ──
         # Same services + the same operator gate the native agent tools use, so the
