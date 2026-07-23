@@ -1086,20 +1086,18 @@ async def _resolve_web_search(
     return provider, settings.web_search_cost_cents * multiplier, funding_user_id, None
 
 
-async def _persist_search_to_memory(db, *, company_id, task, query: str, results) -> None:
-    """File web-search results into shared company memory so the *fleet* keeps them.
+async def _persist_web_finding(db, *, company_id, task, query: str, content: str) -> None:
+    """File a web finding into shared company memory so the *fleet* keeps it.
 
-    Search results otherwise live only in the searching agent's transcript, so a
-    sibling agent (or the next cycle) can't recall them and re-runs the same query —
-    the re-search loop seen in dogfooding. Persisting them as a recallable ``result``
-    memory makes each search shared knowledge. Best-effort and savepoint-isolated: a
-    write failure (e.g. embeddings unavailable, or the pgvector table absent in a
-    reduced schema) must never fail or poison the search itself.
+    A finding otherwise lives only in the searching agent's transcript, so a sibling
+    agent (or the next cycle) can't recall it and re-runs the same query — the
+    re-search loop seen in dogfooding. This covers both search sources: automated
+    provider results and the human-backed founder-fallback answer. Best-effort and
+    savepoint-isolated: a write failure (embeddings unavailable, or the pgvector
+    table absent in a reduced schema) must never fail or poison the search itself.
     """
     from app.services import memory as memory_svc
 
-    lines = [f"- {r.title} ({r.url}): {r.snippet}" for r in results]
-    content = clip("\n".join(lines), settings.web_search_max_chars)
     try:
         async with db.begin_nested():
             await memory_svc.write(
@@ -1107,7 +1105,7 @@ async def _persist_search_to_memory(db, *, company_id, task, query: str, results
                 company_id=company_id,
                 type=MemoryType.result,
                 title=f"Web research: {query}",
-                content=content,
+                content=clip(content, settings.web_search_max_chars),
                 source_task_id=task.id,
                 # Tagged so the TTL reaper can expire stale web findings (prices,
                 # stats, adoption numbers drift) without touching real work memory.
@@ -1115,6 +1113,14 @@ async def _persist_search_to_memory(db, *, company_id, task, query: str, results
             )
     except Exception:
         pass
+
+
+async def _persist_search_to_memory(db, *, company_id, task, query: str, results) -> None:
+    """Persist automated-provider search results (see :func:`_persist_web_finding`)."""
+    lines = [f"- {r.title} ({r.url}): {r.snippet}" for r in results]
+    await _persist_web_finding(
+        db, company_id=company_id, task=task, query=query, content="\n".join(lines)
+    )
 
 
 async def _web_search(db, ctx, *, agent: Agent, task: Task, args: dict) -> ToolOutcome:
@@ -1126,7 +1132,7 @@ async def _web_search(db, ctx, *, agent: Agent, task: Task, args: dict) -> ToolO
             # reply with the findings — the task parks on the DM until they answer.
             from app.runtime.tools.chat import escalate_to_founder
 
-            return await escalate_to_founder(
+            outcome = await escalate_to_founder(
                 db,
                 ctx,
                 agent=agent,
@@ -1138,6 +1144,16 @@ async def _web_search(db, ctx, *, agent: Agent, task: Task, args: dict) -> ToolO
                     "the key facts). Your reply is delivered straight back to the agent."
                 ),
             )
+            # First call parks (park=True) — no answer yet. On resume the founder's
+            # reply comes back through the outcome; file it to shared memory so the
+            # fleet doesn't re-ask the same question (the fallback path's re-search
+            # loop). Best-effort — persistence never changes what the agent sees.
+            if not outcome.park and not outcome.is_error:
+                await _persist_web_finding(
+                    db, company_id=task.company_id, task=task, query=query,
+                    content=outcome.observation,
+                )
+            return outcome
         return unsupported_capability(
             "Web search",
             hint=reason
