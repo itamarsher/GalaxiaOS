@@ -18,7 +18,10 @@ class ProviderError(Exception):
     Wraps the vendor SDK's exception so callers outside ``app/providers/`` can
     handle provider failures without importing a vendor SDK (see the
     provider-boundary guard). ``kind`` is a coarse, vendor-neutral category
-    (``auth`` | ``rate_limit`` | ``connection`` | ``bad_request`` | ``error``).
+    (``auth`` | ``rate_limit`` | ``connection`` | ``bad_request`` | ``billing``
+    | ``error``). ``billing`` marks a non-retryable rejection because the
+    account/key is out of credit or quota — callers should fail fast rather
+    than retry, since retrying spends the same exhausted balance.
     """
 
     def __init__(self, message: str, *, kind: str = "error") -> None:

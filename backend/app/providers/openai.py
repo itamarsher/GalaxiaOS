@@ -31,6 +31,16 @@ from app.providers.base import (
 # non-streaming response (which risks an HTTP read timeout).
 _STREAM_THRESHOLD = 16_000
 
+# Substrings distinguishing a non-retryable billing/quota rejection (account
+# out of credit) from an ordinary malformed-request 400 — both raise
+# ``openai.BadRequestError``.
+_BILLING_ERROR_MARKERS = ("credit balance", "insufficient", "quota", "billing")
+
+
+def _is_billing_error(exc: openai.BadRequestError) -> bool:
+    text = str(exc).lower()
+    return any(marker in text for marker in _BILLING_ERROR_MARKERS)
+
 
 def _flatten(content) -> str:
     """Render a Message's content (str or list[ContentBlock]) to plain text.
@@ -236,7 +246,8 @@ class OpenAIProvider(LLMProvider):
             raise ProviderError(f"OpenAI could not find model '{model}'.",
                                 kind="bad_request") from exc
         except openai.BadRequestError as exc:
-            raise ProviderError(f"OpenAI rejected the request: {exc}", kind="bad_request") from exc
+            kind = "billing" if _is_billing_error(exc) else "bad_request"
+            raise ProviderError(f"OpenAI rejected the request: {exc}", kind=kind) from exc
         except openai.APIConnectionError as exc:
             raise ProviderError("Could not reach the OpenAI API (network error).",
                                 kind="connection") from exc
