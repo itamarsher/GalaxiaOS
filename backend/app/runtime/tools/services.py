@@ -316,12 +316,26 @@ async def _configure_integration(db, ctx, *, agent: Agent, task: Task, args: dic
             ),
             is_error=True,
         )
+
+    # Secret broker: splice any {{secret:name}} placeholder into a COPY of the
+    # arguments before the credential ever reaches the provider's verification
+    # call. configure_integration is a native, always-on tool — not external-comm
+    # or MCP-routed — so it sits outside the substitution native.py already does
+    # at the outbound boundary for those call kinds; without this, a resolved
+    # `{{secret:name}}` reference would reach Tavily/Cloudflare/Google verbatim
+    # and be rejected as an invalid credential.
+    from app.services import secrets as secrets_svc
+
+    exec_args, _used_secrets = await secrets_svc.resolve_placeholders(
+        db, company_id=task.company_id, args=args
+    )
+
     if provider == "cloudflare":
-        return await _configure_cloudflare(db, agent=agent, task=task, args=args)
+        return await _configure_cloudflare(db, agent=agent, task=task, args=exec_args)
     if provider == "tavily":
-        return await _configure_tavily(db, agent=agent, task=task, args=args)
+        return await _configure_tavily(db, agent=agent, task=task, args=exec_args)
     if provider == "nano_banana":
-        return await _configure_nano_banana(db, agent=agent, task=task, args=args)
+        return await _configure_nano_banana(db, agent=agent, task=task, args=exec_args)
     # Guarded by the membership check above; kept exhaustive for future providers.
     return ToolOutcome(observation=f"{provider} is not configurable yet.", is_error=True)
 

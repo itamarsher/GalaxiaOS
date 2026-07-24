@@ -444,6 +444,56 @@ async def test_configure_tavily_stores_verified_key(
 
 
 @requires_db
+async def test_configure_tavily_resolves_secret_placeholder(
+    session_factory, company_with_budget, monkeypatch
+):
+    """A `{{secret:name}}` placeholder must resolve to plaintext before Tavily
+    sees it — not reach the provider (or storage) as the literal placeholder
+    string. Regression test for #303."""
+    _set_master_key()
+    company_id = company_with_budget
+    agent, task = await _make_task(session_factory, company_id)
+
+    from app.services import secrets as secrets_svc
+
+    async with session_factory() as db:
+        await secrets_svc.store_secret(
+            db, company_id=company_id, name="tavily_api_key_v3", plaintext="tvly-real-key"
+        )
+        await db.commit()
+
+    verified: list[str] = []
+
+    async def _ok(api_key):
+        verified.append(api_key)
+
+    async def _fake_write(db, **kwargs):
+        return None
+
+    monkeypatch.setattr("app.integrations.tavily.verify_credentials", _ok)
+    monkeypatch.setattr("app.services.memory.write", _fake_write)
+
+    async with session_factory() as db:
+        outcome = await execute_tool(
+            db,
+            _FakeCtx(),
+            agent=agent,
+            task=task,
+            name="configure_integration",
+            args={"provider": "tavily", "api_key": "{{secret:tavily_api_key_v3}}"},
+        )
+        await db.commit()
+
+    assert outcome.is_error is False
+    assert verified == ["tvly-real-key"]  # resolved plaintext reached Tavily, not the placeholder
+    from app.services import apikeys
+
+    async with session_factory() as db:
+        key = await apikeys.get_plaintext_key(db, company_id=company_id, provider="tavily")
+    assert key == "tvly-real-key"  # and the resolved key — not the placeholder — was stored
+
+
+@requires_db
 async def test_configure_tavily_rejects_bad_key(session_factory, company_with_budget, monkeypatch):
     _set_master_key()
     company_id = company_with_budget
