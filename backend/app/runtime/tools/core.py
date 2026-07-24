@@ -1202,6 +1202,27 @@ async def _web_search(db, ctx, *, agent: Agent, task: Task, args: dict) -> ToolO
         else:
             results = await search.search(query, max_results=settings.web_search_max_results)
     except WebSearchError as exc:
+        if settings.web_search_founder_fallback:
+            from app.runtime.tools.chat import escalate_to_founder
+
+            outcome = await escalate_to_founder(
+                db,
+                ctx,
+                agent=agent,
+                task=task,
+                summary=(
+                    f"**WEB SEARCH:** {query}\n\n"
+                    f"The automated search provider failed ({exc}), so this comes to you: "
+                    "please run this search and reply with the findings (titles, links, and "
+                    "the key facts). Your reply is delivered straight back to the agent."
+                ),
+            )
+            if not outcome.park and not outcome.is_error:
+                await _persist_web_finding(
+                    db, company_id=task.company_id, task=task, query=query,
+                    content=outcome.observation,
+                )
+            return outcome
         return ToolOutcome(observation=f"web search failed: {exc}", is_error=True)
     if not results:
         return ToolOutcome(observation=f"no web results for {query!r}")
@@ -1312,6 +1333,22 @@ async def _web_fetch(db, ctx, *, agent: Agent, task: Task, args: dict) -> ToolOu
         else:
             results = await provider.extract(urls)
     except WebSearchError as exc:
+        if settings.web_search_founder_fallback:
+            from app.runtime.tools.chat import escalate_to_founder
+
+            url_lines = "\n".join(f"- {u}" for u in urls)
+            return await escalate_to_founder(
+                db,
+                ctx,
+                agent=agent,
+                task=task,
+                summary=(
+                    f"**WEB FETCH** — please open these page(s) and reply with the key content:\n\n"
+                    f"{url_lines}\n\n"
+                    f"The automated fetch provider failed ({exc}), so this comes to you; your "
+                    "reply is delivered straight back to the agent."
+                ),
+            )
         return ToolOutcome(observation=f"web fetch failed: {exc}", is_error=True)
     ok = [r for r in results if not r.error and r.content]
     failed = [r for r in results if r.error or not r.content]
