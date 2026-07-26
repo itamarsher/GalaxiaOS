@@ -52,7 +52,14 @@ from app.runtime.prompts import (
     REFINE_SYSTEM,
     generation_language_directive,
 )
-from app.services import apikeys, data_policy, investors, worker_binding
+from app.services import (
+    apikeys,
+    data_policy,
+    function_catalog,
+    function_health,
+    investors,
+    worker_binding,
+)
 from app.services import chat as chat_svc
 from app.services import governance as gov
 
@@ -518,6 +525,9 @@ async def provision_fleet(
             autonomy_level=_parse_autonomy(spec.get("autonomy_level")),
             access_labels=data_policy.default_access_labels_for_role(role.value),
             backend_type=worker_binding.default_backend_for(role),
+            # Catalog specs (RFC 0002) carry a config blob — the function key, its
+            # health target, and skills; None for the LLM/default-fleet path.
+            config=spec.get("config"),
         )
         db.add(agent)
         await db.flush()
@@ -638,7 +648,9 @@ async def generate(db: AsyncSession, *, company: Company) -> dict:
         agent_id=None,
         task_id=None,
         model=planner_model,
-        system=MISSION_TO_PLAN_SYSTEM,
+        # The catalog appends its vocabulary so the model recommends which functions
+        # to spin up (RFC 0002 — function-first onboarding).
+        system=MISSION_TO_PLAN_SYSTEM + function_catalog.recommendation_directive(),
         messages=[Message(role="user", content=mission.raw_text)],
         max_tokens=gen_max_tokens,
         json_schema=MISSION_TO_PLAN_SCHEMA,
@@ -684,47 +696,59 @@ async def generate(db: AsyncSession, *, company: Company) -> dict:
                 )
             )
 
-    # ── LLM #2: plan + budget → org design ────────────────────────────────────
-    set_progress(
-        company.id, phase="org", pct=55, message="Designing the agent fleet"
-    )
-    # Carry the raw mission (not just the derived objectives) so the org designer
-    # reasons in the founder's own words and locale; ensure_ascii=False keeps
-    # non-Latin scripts intact instead of escaping them to \\uXXXX gibberish.
-    org_input = json.dumps(
-        {
-            "mission": mission.raw_text,
-            "objectives": plan.get("objectives", []),
-            "monthly_budget_cents": budget.limit_cents,
-        },
-        ensure_ascii=False,
-    )
-    org_resp = await meter.run_llm(
-        provider,
-        api_key=api_key,
-        company_id=company.id,
-        agent_id=None,
-        task_id=None,
-        model=planner_model,
-        system=PLAN_TO_ORG_SYSTEM + generation_language_directive(language),
-        messages=[Message(role="user", content=org_input)],
-        max_tokens=gen_max_tokens,
-        json_schema=PLAN_TO_ORG_SCHEMA,
-        funding_user_id=funding_user_id,
-    )
-    org = _parse_llm_json(org_resp)
-    set_progress(
-        company.id, phase="wiring", pct=80, message="Wiring the org chart"
-    )
-
-    # Ignore any per-agent budget figures the LLM guessed — provision_fleet owns
-    # the allocation so it always sums correctly.
-    role_to_agent = await provision_fleet(
-        db,
-        company=company,
-        specs=_fleet_specs(_as_dicts(org.get("agents"), "role")),
-        total_budget_cents=budget.limit_cents,
-    )
+    # ── Spin up the functions (RFC 0002: function-first, else LLM org design) ──
+    recommended = [k for k in (plan.get("recommended_functions") or []) if isinstance(k, str)]
+    picked = function_catalog.picked_selectable(recommended)
+    cost_estimate: int | None = None
+    if picked:
+        # Function-first: the recommended building blocks ARE the fleet. GalaxiaOS
+        # spins up each one's component in-house (oversight appended), so no second
+        # LLM call and no third-party signup for the native functions.
+        set_progress(
+            company.id, phase="org", pct=60, message="Spinning up the functions you need"
+        )
+        role_to_agent = await provision_fleet(
+            db, company=company,
+            specs=function_catalog.resolve_selection(picked),
+            total_budget_cents=budget.limit_cents,
+        )
+    else:
+        # Fallback: no recommended functions → today's LLM org designer.
+        set_progress(company.id, phase="org", pct=55, message="Designing the agent fleet")
+        org_input = json.dumps(
+            {
+                "mission": mission.raw_text,
+                "objectives": plan.get("objectives", []),
+                "monthly_budget_cents": budget.limit_cents,
+            },
+            ensure_ascii=False,
+        )
+        org_resp = await meter.run_llm(
+            provider,
+            api_key=api_key,
+            company_id=company.id,
+            agent_id=None,
+            task_id=None,
+            model=planner_model,
+            system=PLAN_TO_ORG_SYSTEM + generation_language_directive(language),
+            messages=[Message(role="user", content=org_input)],
+            max_tokens=gen_max_tokens,
+            json_schema=PLAN_TO_ORG_SCHEMA,
+            funding_user_id=funding_user_id,
+        )
+        org = _parse_llm_json(org_resp)
+        cost_estimate = _as_int(org.get("monthly_cost_estimate_cents"), None)
+        role_to_agent = await provision_fleet(
+            db,
+            company=company,
+            specs=_fleet_specs(_as_dicts(org.get("agents"), "role")),
+            total_budget_cents=budget.limit_cents,
+        )
+    set_progress(company.id, phase="wiring", pct=80, message="Wiring the org chart")
+    if picked:
+        # Seed formal health KRs — business KPIs per function + agent-based KPIs —
+        # so targets are first-class and the improvement cycle can detect off-target.
+        await function_health.sync_health_krs(db, company=company)
 
     # ── Investment review (best-effort; never breaks generation) ──────────────
     investor_reviews = 0
@@ -739,9 +763,13 @@ async def generate(db: AsyncSession, *, company: Company) -> dict:
             _log.exception("investment review failed for company %s", company.id)
 
     return {
-        "cost_estimate_cents": _as_int(org.get("monthly_cost_estimate_cents"), None),
+        "cost_estimate_cents": cost_estimate,
         "agent_roles": list(role_to_agent.keys()),
         "investor_reviews": investor_reviews,
+        # Function-first picks + the external ones the founder must connect (billing →
+        # Stripe); in-house blocks need nothing. Empty on the LLM-org fallback path.
+        "functions": picked,
+        "functions_needing_connection": function_catalog.external_functions(picked),
     }
 
 
@@ -998,6 +1026,78 @@ async def refine(db: AsyncSession, *, company: Company, message: str) -> dict:
     return {
         "reply": str(reply) if reply else "Done — I've updated the plan.",
         "cost_estimate_cents": _as_int(patch.get("monthly_cost_estimate_cents"), None),
+    }
+
+
+def _agent_function_key(agent: Agent) -> str | None:
+    """The selectable building-block key an agent staffs, or ``None``.
+
+    Only selectable functions count — core/oversight agents carry a function key in
+    ``config`` too (e.g. ``ceo``), but they're never the picker's to add or remove.
+    """
+    key = (agent.config or {}).get("function")
+    fn = function_catalog.get(key) if isinstance(key, str) else None
+    return key if (fn is not None and not fn.core) else None
+
+
+async def selected_functions(db: AsyncSession, *, company_id: uuid.UUID) -> list[str]:
+    """The selectable building blocks this company currently staffs (RFC 0002)."""
+    agents = (
+        await db.scalars(select(Agent).where(Agent.company_id == company_id))
+    ).all()
+    return [k for a in agents if (k := _agent_function_key(a)) is not None]
+
+
+async def set_functions(
+    db: AsyncSession, *, company: Company, keys: list[str]
+) -> dict:
+    """Reconcile the draft company's function-agents to the founder's picks (RFC 0002).
+
+    The picker's backend: add the newly-picked building blocks, remove the
+    deselected ones (never a core/oversight agent), and re-split the budget across
+    what remains. Draft-only — a launched company changes its fleet through the CEO,
+    not this onboarding control. Returns the resulting selection + which picks need a
+    connected provider. The caller commits.
+    """
+    if company.status is not CompanyStatus.draft:
+        raise OnboardingError(
+            "Functions can only be chosen before launch; a live company reshapes "
+            "itself through its CEO."
+        )
+    desired = function_catalog.picked_selectable(keys)
+    desired_set = set(desired)
+    budget = await db.scalar(select(Budget).where(Budget.company_id == company.id))
+    total = budget.limit_cents if budget else None
+
+    agents = (
+        await db.scalars(select(Agent).where(Agent.company_id == company.id))
+    ).all()
+    current = {k: a for a in agents if (k := _agent_function_key(a)) is not None}
+
+    for key, agent in current.items():
+        if key not in desired_set:
+            await db.delete(agent)
+    await db.flush()
+
+    missing = [k for k in desired if k not in current]
+    if missing:
+        # provision_fleet wires the new function-agents under the CEO and re-splits
+        # the budget across the whole fleet.
+        await provision_fleet(
+            db, company=company,
+            specs=[function_catalog.spec_for(k) for k in missing],
+            total_budget_cents=total,
+        )
+    else:
+        # Removal-only: still re-split so the freed budget is redistributed.
+        await _reallocate_agent_budgets(db, company_id=company.id, total_cents=total)
+
+    # Keep the formal health KRs in sync with the new selection.
+    await function_health.sync_health_krs(db, company=company)
+
+    return {
+        "functions": desired,
+        "functions_needing_connection": function_catalog.external_functions(desired),
     }
 
 

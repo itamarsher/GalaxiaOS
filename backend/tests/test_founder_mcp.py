@@ -224,6 +224,48 @@ async def test_setup_tools_arm_gates_key_and_comms(session_factory, monkeypatch)
 
 
 @requires_db
+async def test_function_health_and_retarget_over_mcp(session_factory):
+    from app.services import function_catalog as fc
+    from app.services import function_health as fh
+    from app.services.onboarding import provision_fleet
+
+    async with session_factory() as db:
+        u, company = await _active_company_with_founder(db)
+        db.add(Mission(company_id=company.id, raw_text="m"))
+        await db.flush()
+        await provision_fleet(db, company=company,
+                              specs=fc.resolve_selection(["website"]), total_budget_cents=10_000)
+        await fh.sync_health_krs(db, company=company)
+        await db.commit()
+        uid, cid = u.id, str(company.id)
+
+    # get_function_health surfaces the seeded KPIs.
+    async with session_factory() as db:
+        r = await fm._call_tool(db, uid, 1, {
+            "name": "get_function_health", "arguments": {"company_id": cid}})
+        board = _payload(r)
+        assert any(f["function"] == "website" for f in board["functions"])
+        assert {k["metric"] for k in board["agent_kpis"]}  # agent KPIs present
+
+    # set_health_target retargets a KPI; the improvement cycle now measures off it.
+    async with session_factory() as db:
+        r = await fm._call_tool(db, uid, 2, {
+            "name": "set_health_target",
+            "arguments": {"company_id": cid, "metric": "signup_conversion_rate", "target": 0.09}})
+        assert _payload(r)["target"] == 0.09
+
+    async with session_factory() as db:
+        targets = await fh.kr_targets(db, company_id=uuid.UUID(cid))
+        assert targets["signup_conversion_rate"] == 0.09
+
+    # An unknown KPI is a clean JSON-RPC error, not a 500.
+    async with session_factory() as db:
+        r = await fm._call_tool(db, uid, 3, {
+            "name": "set_health_target",
+            "arguments": {"company_id": cid, "metric": "bogus", "target": 1}})
+        assert "error" in r
+
+
 async def test_cannot_touch_a_company_you_dont_found(session_factory):
     async with session_factory() as db:
         owner = await _user(db)

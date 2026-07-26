@@ -136,6 +136,31 @@ async def create_scheduled_run(db: AsyncSession, company_id: uuid.UUID) -> uuid.
     )
 
 
+async def create_improvement_run(
+    db: AsyncSession, company_id: uuid.UUID, *, brief: str
+) -> uuid.UUID | None:
+    """Create a CEO run to drive per-function improvement from real status (RFC 0002).
+
+    The function-improvement cron assembles ``brief`` (which functions are off
+    track and why) and hands it to the CEO, so the improvement moves are dispatched
+    through the normal governed path — objective-tagged, budgeted, approval-gated —
+    rather than bypassing orchestration. Returns the CEO task id to enqueue.
+    """
+    loop_seed = f"function improvement {datetime.now(UTC).isoformat()}"
+    return await _create_ceo_run(
+        db,
+        company_id,
+        trigger=RunTrigger.scheduled,
+        goal=(
+            "Run a per-function improvement cycle. Below is the company's real "
+            "per-function health status. For each function that is off track, "
+            "dispatch the next highest-leverage initiative to its owning agent to "
+            "close the gap, tagging each to the objective it advances.\n\n" + brief
+        ),
+        loop_seed=loop_seed,
+    )
+
+
 async def create_reliability_review_task(
     db: AsyncSession, company_id: uuid.UUID, *, failed_task: Task
 ) -> uuid.UUID | None:

@@ -154,13 +154,16 @@ def _model(provider) -> str:
 
 def _evidence(skill, signal: SkillSignal) -> str:
     """Render a skill's failure evidence as the optimizer/gate user prompt tail."""
-    lines = [
-        f"Skill: {skill.name} — {skill.title}",
-        (
+    lines = [f"Skill: {skill.name} — {skill.title}"]
+    if signal.sample_count:
+        lines.append(
             f"Recent signal: {signal.success_count}/{signal.sample_count} tasks succeeded "
             f"({signal.success_rate:.0%} success) across {signal.sample_count} uses."
-        ),
-    ]
+        )
+    if signal.context:
+        # Cross-company function performance (RFC 0002 slice 4) — the business-outcome
+        # reason this playbook is being improved for everyone who uses it.
+        lines.append(f"Cross-company signal: {signal.context}")
     if signal.failures:
         lines.append("\nFailing tasks that loaded this skill:")
         for i, f in enumerate(signal.failures, 1):
@@ -323,6 +326,14 @@ def build_issue_body(proposal: SkillProposal) -> str:
     """The tracker-issue body: rationale, evidence, and the exact file to write."""
     s = proposal.signal
     changes = "\n".join(f"- {c}" for c in proposal.changes)
+    if s.sample_count:
+        signal_line = (
+            f"**Recent signal:** {s.success_count}/{s.sample_count} tasks succeeded "
+            f"({s.success_rate:.0%}) across {s.sample_count} uses.\n"
+        )
+    else:
+        # Cross-company function-performance driven (RFC 0002 slice 4), not task-rate.
+        signal_line = f"**Cross-company signal:** {s.context}\n"
     banner = (
         ""
         if proposal.confidence == "high"
@@ -335,8 +346,7 @@ def build_issue_body(proposal: SkillProposal) -> str:
         f"{banner}"
         "Automated, validation-gated skill-optimizer proposal.\n\n"
         f"**Skill:** `{proposal.skill_name}` — {proposal.title}\n"
-        f"**Recent signal:** {s.success_count}/{s.sample_count} tasks succeeded "
-        f"({s.success_rate:.0%}) across {s.sample_count} uses.\n"
+        f"{signal_line}"
         f"**Gate:** the proposed playbook beat the current one by margin "
         f"{proposal.gate_margin}/10 in an independent A/B review.\n\n"
         f"**Why:** {proposal.rationale}\n\n"
@@ -402,12 +412,45 @@ async def file_proposal(
     return result.url
 
 
-async def run(db: AsyncSession, ctx, *, company_id: uuid.UUID) -> dict:
+def merge_priority_candidates(
+    ranked: list[SkillSignal], priority_skills: dict[str, str] | None, *, batch: int
+) -> list[SkillSignal]:
+    """Fold cross-company priority skills into the ranked task-signal candidates.
+
+    Cross-company function performance (RFC 0002 slice 4) prioritizes a playbook by
+    real business outcome across companies, independent of per-company task volume —
+    so a priority skill enters the batch even below the per-company sample threshold.
+    A skill already ranked keeps its task signal but gains the cross-company context;
+    priority skills lead (business-outcome first), then the ranked remainder, capped.
+    """
+    priority_skills = priority_skills or {}
+    by_name = {s.skill_name: s for s in ranked}
+    ordered: list[SkillSignal] = []
+    for name, reason in priority_skills.items():
+        existing = by_name.pop(name, None)
+        if existing is not None:
+            from dataclasses import replace
+            ordered.append(replace(existing, context=reason))
+        else:
+            ordered.append(SkillSignal(
+                skill_name=name, sample_count=0, success_count=0,
+                failure_count=0, context=reason,
+            ))
+    ordered.extend(s for s in ranked if s.skill_name in by_name)
+    return ordered[:batch]
+
+
+async def run(
+    db: AsyncSession, ctx, *, company_id: uuid.UUID,
+    priority_skills: dict[str, str] | None = None,
+) -> dict:
     """One optimization tick for a company: rank, optimize, and file up to a batch.
 
     Reads the reward signal, picks the worst-performing skills, and for each runs
     the reflect → gate loop; accepted candidates are filed into the auto-merge
-    pipeline. No-ops cleanly when there is no LLM credential or issue tracker.
+    pipeline. ``priority_skills`` (RFC 0002 slice 4) folds in playbooks flagged by
+    cross-company function performance — improving them for everyone who runs that
+    function. No-ops cleanly when there is no LLM credential or issue tracker.
     """
     resolved = await apikeys.resolve_active_provider(db, company_id=company_id)
     if resolved is None:
@@ -420,11 +463,14 @@ async def run(db: AsyncSession, ctx, *, company_id: uuid.UUID) -> dict:
     signals = await signal_svc.collect(
         db, company_id=company_id, window_days=settings.skill_optimize_window_days
     )
-    candidates = signal_svc.rank_candidates(
+    ranked = signal_svc.rank_candidates(
         signals,
         min_samples=settings.skill_optimize_min_samples,
         success_ceiling=settings.skill_optimize_success_ceiling,
-    )[: settings.skill_optimize_batch]
+    )
+    candidates = merge_priority_candidates(
+        ranked, priority_skills, batch=settings.skill_optimize_batch
+    )
 
     proposed: list[str] = []
     for signal in candidates:

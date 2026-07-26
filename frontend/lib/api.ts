@@ -108,7 +108,27 @@ export interface Preview {
   company: Company; objectives: Objective[];
   org: { agents: Agent[]; edges: AgentEdge[] }; cost_estimate_cents: number | null;
   investment_reviews: InvestmentReview[];
+  // RFC 0002: the building blocks this company staffs + which picks need a connection.
+  functions?: string[];
+  functions_needing_connection?: string[];
 }
+/** A selectable/oversight building block in the function catalog (RFC 0002). */
+export interface CatalogFunction {
+  key: string; title: string; category: string; summary: string;
+  role: string; implementation: "in_house" | "external";
+  health_signals: string[]; default_skills: string[]; core: boolean;
+}
+export interface FunctionCatalog { selectable: CatalogFunction[]; core: CatalogFunction[] }
+/** One KPI on the function-health board (RFC 0002). */
+export interface HealthKpi {
+  metric: string; current: number | null; target: number | null;
+  unit: string | null; status: "on_track" | "off_target" | "unmeasured";
+}
+export interface FunctionHealth {
+  function: string; title: string; on_track: boolean; kpis: HealthKpi[];
+}
+export interface AgentKpi { metric: string; current: number | null; target: number | null; unit: string | null }
+export interface FunctionHealthBoard { functions: FunctionHealth[]; agent_kpis: AgentKpi[] }
 export interface BudgetView {
   budget: { limit_cents: number; spent_cents: number; reserved_cents: number };
   by_category: Record<string, number>;
@@ -371,6 +391,12 @@ export const api = {
       body: JSON.stringify({ message }),
     }),
   preview: (companyId: string) => req<Preview>(`/onboarding/${companyId}/preview`),
+  functionCatalog: () => req<FunctionCatalog>(`/functions/catalog`),
+  setFunctions: (companyId: string, functions: string[]) =>
+    req<Preview>(`/onboarding/${companyId}/functions`, {
+      method: "POST",
+      body: JSON.stringify({ functions }),
+    }),
   launch: (companyId: string) => req<Company>(`/onboarding/${companyId}/launch`, { method: "POST" }),
 
   company: (companyId: string) => req<Company>(`/companies/${companyId}`),
@@ -408,6 +434,8 @@ export const api = {
     }),
 
   objectives: (companyId: string) => req<Objective[]>(`/companies/${companyId}/objectives`),
+  functionHealth: (companyId: string) =>
+    req<FunctionHealthBoard>(`/companies/${companyId}/function-health`),
 
   org: (companyId: string) => req<{ agents: Agent[]; edges: AgentEdge[] }>(`/companies/${companyId}/org`),
   agents: (companyId: string) => req<Agent[]>(`/companies/${companyId}/agents`),

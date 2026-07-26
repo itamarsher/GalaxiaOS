@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { api, fmtUsd, type Company, type GenerationProgress, type InvestmentReview, type ManagedStatus, type Preview, type ReusableCredential } from "@/lib/api";
+import { api, fmtUsd, type CatalogFunction, type Company, type GenerationProgress, type InvestmentReview, type ManagedStatus, type Preview, type ReusableCredential } from "@/lib/api";
 import { CloudflareCard, GoogleDriveCard, ReuseCredentialsCard } from "@/lib/connectors";
 
 type Step = "loading" | "auth" | "businesses" | "mission" | "key" | "generating" | "review";
@@ -560,6 +560,16 @@ export default function Home() {
             ))}
           </div>
 
+          {companyId && (
+            <FunctionsPicker
+              companyId={companyId}
+              selected={preview.functions ?? []}
+              needingConnection={preview.functions_needing_connection ?? []}
+              busy={busy}
+              onChange={setPreview}
+            />
+          )}
+
           <div className="card">
             <div className="step">Refine · Chat to change the plan</div>
             <p className="muted">
@@ -626,6 +636,90 @@ const STANCE_LABEL: Record<string, string> = {
   conditional: "Conditional",
   pass: "Pass",
 };
+
+// RFC 0002: the founder picks which building blocks (functions) to run and
+// auto-improve. Toggling one re-provisions the fleet from the catalog server-side;
+// GalaxiaOS runs the in-house ones itself — only `external` blocks (billing) need a
+// connected provider.
+function FunctionsPicker({
+  companyId, selected, needingConnection, busy, onChange,
+}: {
+  companyId: string;
+  selected: string[];
+  needingConnection: string[];
+  busy: boolean;
+  onChange: (p: Preview) => void;
+}) {
+  const [catalog, setCatalog] = useState<CatalogFunction[] | null>(null);
+  const [saving, setSaving] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    api.functionCatalog()
+      .then((c) => { if (!cancelled) setCatalog(c.selectable); })
+      .catch(() => { if (!cancelled) setError("Couldn't load the function catalog."); });
+    return () => { cancelled = true; };
+  }, []);
+
+  const chosen = new Set(selected);
+  async function toggle(key: string) {
+    const next = new Set(chosen);
+    if (next.has(key)) next.delete(key); else next.add(key);
+    setSaving(key);
+    setError(null);
+    try {
+      onChange(await api.setFunctions(companyId, Array.from(next)));
+    } catch {
+      setError("Couldn't update that function. Try again.");
+    } finally {
+      setSaving(null);
+    }
+  }
+
+  if (error && !catalog) return null;  // catalog is a nice-to-have; never block review
+  if (!catalog) return null;
+
+  return (
+    <div className="card">
+      <div className="step">Functions · Choose what GalaxiaOS runs and auto-improves</div>
+      <p className="muted" style={{ fontSize: 13, margin: "4px 0 10px" }}>
+        Pick the building blocks your business needs — we recommended a starting set. GalaxiaOS
+        runs each one in-house and keeps improving it; only ones marked <em>connect</em> need an
+        external account.
+      </p>
+      {catalog.map((f) => {
+        const on = chosen.has(f.key);
+        const needs = f.implementation === "external";
+        return (
+          <label
+            key={f.key}
+            className="agent"
+            style={{ display: "flex", gap: 10, alignItems: "flex-start", cursor: busy ? "default" : "pointer", opacity: saving === f.key ? 0.6 : 1 }}
+          >
+            <input
+              type="checkbox"
+              checked={on}
+              disabled={busy || saving !== null}
+              onChange={() => toggle(f.key)}
+              style={{ marginTop: 4 }}
+            />
+            <span>
+              <strong>{f.title}</strong>
+              {needs && (
+                <span className="pill" style={{ marginLeft: 8 }}>
+                  {on && needingConnection.includes(f.key) ? "needs connection" : "connect"}
+                </span>
+              )}
+              <div className="muted" style={{ fontSize: 12 }}>{f.summary}</div>
+            </span>
+          </label>
+        );
+      })}
+      {error && <p className="muted" style={{ fontSize: 12, color: "var(--danger, #c66)" }}>{error}</p>}
+    </div>
+  );
+}
 
 function personaOrder(persona: string): number {
   return PERSONA_META[persona]?.order ?? 99;

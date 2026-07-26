@@ -45,7 +45,14 @@ from app.models.enums import (
     TaskStatus,
 )
 from app.runtime.queue import enqueue_task
-from app.services import apikeys, founder_token, involvement, onboarding
+from app.services import (
+    apikeys,
+    founder_token,
+    function_health,
+    function_improvement,
+    involvement,
+    onboarding,
+)
 from app.services import chat as chat_svc
 from app.services import company_reset as company_reset_svc
 from app.services import governance as gov
@@ -172,6 +179,33 @@ _TOOL_SPECS = [
                 "enabled": {"type": "boolean"},
             },
             "required": ["company_id", "enabled"],
+        },
+    },
+    {
+        "name": "get_function_health",
+        "description": "Read the company's function-health board (RFC 0002): per-function KPI "
+        "status (on_track/off_target/unmeasured) with current value and target, plus the "
+        "agent-based KPIs. Use it to see which KPIs to instrument or retarget.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"company_id": {"type": "string"}},
+            "required": ["company_id"],
+        },
+    },
+    {
+        "name": "set_health_target",
+        "description": "Set (or clear) the target for one health KPI — what 'good' means for it. "
+        "The improvement cycle measures off-target against this. 'metric' is a KPI name from "
+        "get_function_health (e.g. 'signup_conversion_rate', 'agent_reliability'); omit 'target' "
+        "or pass null to clear it.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "company_id": {"type": "string"},
+                "metric": {"type": "string", "description": "The KPI name to retarget."},
+                "target": {"type": ["number", "null"], "description": "New target value, or null to clear."},
+            },
+            "required": ["company_id", "metric"],
         },
     },
     {
@@ -558,6 +592,24 @@ async def _call_tool(db, user_id: uuid.UUID, mid, params: dict) -> dict:
             )
             await db.commit()
             return _ok(mid, _content({"external_comms_approval": enabled}))
+
+        if name == "get_function_health":
+            company = await _founder_company(db, user_id, args.get("company_id"))
+            board = await function_improvement.health_board(db, company_id=company.id)
+            return _ok(mid, _content(board))
+
+        if name == "set_health_target":
+            company = await _founder_company(db, user_id, args.get("company_id"))
+            raw = args.get("target")
+            target = float(raw) if isinstance(raw, (int, float)) else None
+            try:
+                result = await function_health.set_target(
+                    db, company_id=company.id, metric=str(args["metric"]), target=target
+                )
+            except ValueError as exc:
+                return _error(mid, -32602, str(exc))
+            await db.commit()
+            return _ok(mid, _content(result))
 
         if name == "add_provider_key":
             company = await _founder_company(db, user_id, args.get("company_id"))

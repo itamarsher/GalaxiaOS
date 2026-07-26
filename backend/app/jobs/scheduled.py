@@ -470,14 +470,30 @@ async def optimize_skills(ctx: dict) -> dict:
     from app.runtime import skill_optimizer
     from app.services import platform_company
 
+    company_id = platform_company.platform_company_id()
+    if company_id is None:
+        return {"skipped": "no_platform_company"}
+
+    # Cross-company learning (RFC 0002 slice 4): aggregate per-function performance
+    # across ALL companies (tenant-unset session) and prioritize the laggards'
+    # playbooks, so a fix propagates to everyone running that function.
+    priority_skills: dict[str, str] = {}
+    if settings.function_learning_enabled:
+        from app.services import function_learning
+
+        async with SessionLocal() as db:  # no set_tenant → sees every company
+            perfs = await function_learning.aggregate(db)
+        priority_skills = function_learning.priority_skills(
+            perfs, min_adoption=settings.function_learning_min_adoption
+        )
+
     async with SessionLocal() as db:
-        company_id = platform_company.platform_company_id()
-        if company_id is None:
-            return {"skipped": "no_platform_company"}
         await set_tenant(db, company_id)
-        result = await skill_optimizer.run(db, ctx["runtime"], company_id=company_id)
+        result = await skill_optimizer.run(
+            db, ctx["runtime"], company_id=company_id, priority_skills=priority_skills
+        )
         await db.commit()
-    return result
+    return {**result, "priority_skills": len(priority_skills)}
 
 
 async def run_business_cycle(ctx: dict) -> dict:
@@ -505,3 +521,95 @@ async def run_business_cycle(ctx: dict) -> dict:
             await enqueue_task(task_id)
             enqueued += 1
     return {"companies": count, "enqueued": enqueued}
+
+
+async def capture_signals(ctx: dict) -> dict:
+    """Auto-capture health signals from connected data for each active company (RFC 0002).
+
+    Derives the KPIs we already have data for — CRM (leads, pipeline), runway — and
+    the agent-based KPIs from reputation, records them as real signals, and refreshes
+    the KR board. Best-effort and opt-in, so the improvement cycle measures reality
+    instead of waiting for hand-entered metrics.
+    """
+    if not settings.signal_capture_enabled:
+        return {"skipped": True}
+
+    from app.services import function_health, signal_capture
+
+    count = 0
+    captured = 0
+    for company_id in await _active_company_ids():
+        async with SessionLocal() as db:
+            await set_tenant(db, company_id)
+            recorded = await signal_capture.capture(db, company_id=company_id)
+            await function_health.record_agent_signals(db, company_id=company_id)
+            await function_health.refresh_kr_values(db, company_id=company_id)
+            await db.commit()
+        count += 1
+        captured += len(recorded)
+    return {"companies": count, "signals": captured}
+
+
+async def improve_functions(ctx: dict) -> dict:
+    """Drive the per-function improvement cycle for each active company (RFC 0002).
+
+    Assesses every function against its real health signals; for an idle company
+    with off-track functions, kicks a CEO improvement run seeded with the brief so
+    the moves dispatch through the normal governed path. Skips busy companies (never
+    stacks a parallel run) and companies with nothing to improve.
+    """
+    if not settings.function_improvement_enabled:
+        return {"skipped": True}
+
+    from app.runtime.queue import enqueue_task
+    from app.services import function_health, function_improvement, function_learning
+
+    # Cross-company winners, computed once (tenant-unset) and reused: a company still
+    # off-track on a function that's winning elsewhere gets told to adopt what works —
+    # the propagation half of cross-company learning (RFC 0002 slice 4 reinforce).
+    winner_perfs = []
+    if settings.function_learning_enabled:
+        async with SessionLocal() as db:
+            winner_perfs = await function_learning.aggregate(db)
+
+    count = 0
+    driven = 0
+    for company_id in await _active_company_ids():
+        async with SessionLocal() as db:
+            await set_tenant(db, company_id)
+            count += 1
+            if await orchestrator.has_active_tasks(db, company_id):
+                continue
+            # Ensure the KR board reflects the latest captured signals before assessing
+            # (the capture_signals cron does the recording; this is a cheap re-sync).
+            await function_health.refresh_kr_values(db, company_id=company_id)
+            statuses = await function_improvement.assess_functions(db, company_id=company_id)
+            brief = function_improvement.improvement_brief(statuses)
+            if not brief:
+                await db.commit()  # persist the refreshed KR values / agent signals
+                continue
+            brief += _winner_reinforcement(statuses, winner_perfs)
+            task_id = await orchestrator.create_improvement_run(db, company_id, brief=brief)
+            await db.commit()
+        if task_id is not None:
+            await enqueue_task(task_id)
+            driven += 1
+    return {"companies": count, "driven": driven}
+
+
+def _winner_reinforcement(statuses, winner_perfs) -> str:
+    """Append "this works elsewhere — adopt it" notes for off-track winner functions."""
+    if not winner_perfs:
+        return ""
+    from app.services import function_learning
+
+    notes = []
+    for s in statuses:
+        if s.on_track:
+            continue
+        note = function_learning.reinforcement_note(s.function, winner_perfs)
+        if note:
+            notes.append(f"- {note}")
+    if not notes:
+        return ""
+    return "\n\nProven across companies (reinforce, don't reinvent):\n" + "\n".join(notes)

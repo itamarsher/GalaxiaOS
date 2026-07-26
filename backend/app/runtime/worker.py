@@ -11,7 +11,9 @@ from app.db import SessionLocal
 from app.jobs.recovery import recover_pending_work
 from app.jobs.scheduled import (
     backfill_memory_embeddings,
+    capture_signals,
     generate_digests,
+    improve_functions,
     keep_warm,
     monitor_failed_tasks,
     monitor_render_platform,
@@ -97,6 +99,12 @@ class WorkerSettings:
         # no delegate configured, and entirely off via ABOS_DELEGATE_ENABLED.
         cron(triage_founder_decisions, minute=set(range(0, 60))),
         cron(run_business_cycle, hour=settings.business_cycle_hour_utc, minute=0),
+        # Auto-capture health signals from connected data (CRM/runway/reputation) and
+        # refresh the KR board (RFC 0002). Hourly, opt-in; ahead of the improve cron.
+        cron(capture_signals, minute=settings.signal_capture_minute),
+        # Per-function improvement cycle (RFC 0002): hourly, assess each function
+        # against real health signals and drive the gap. Opt-in; no-op when disabled.
+        cron(improve_functions, minute=settings.function_improve_minute),
         # Keep-warm self-ping (every 3 min, well under a 15-min idle window) so a
         # free-tier host doesn't spin the in-process worker down. Opt-in + no-op
         # without a public URL (ABOS_KEEP_WARM_ENABLED); harmless on always-on hosts.

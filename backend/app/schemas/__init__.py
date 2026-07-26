@@ -170,6 +170,15 @@ class PreviewOut(BaseModel):
     org: OrgChartOut
     cost_estimate_cents: int | None = None
     investment_reviews: list[InvestmentReviewOut] = Field(default_factory=list)
+    # RFC 0002: the selectable building-block keys this company currently staffs, and
+    # the picked ones that still need a connected provider (billing → Stripe). Drive
+    # the onboarding function picker.
+    functions: list[str] = Field(default_factory=list)
+    functions_needing_connection: list[str] = Field(default_factory=list)
+
+
+class SetFunctionsRequest(BaseModel):
+    functions: list[str]
 
 
 # ── Sites & connected domains ────────────────────────────────────────────────
