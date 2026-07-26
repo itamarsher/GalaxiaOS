@@ -470,14 +470,30 @@ async def optimize_skills(ctx: dict) -> dict:
     from app.runtime import skill_optimizer
     from app.services import platform_company
 
+    company_id = platform_company.platform_company_id()
+    if company_id is None:
+        return {"skipped": "no_platform_company"}
+
+    # Cross-company learning (RFC 0002 slice 4): aggregate per-function performance
+    # across ALL companies (tenant-unset session) and prioritize the laggards'
+    # playbooks, so a fix propagates to everyone running that function.
+    priority_skills: dict[str, str] = {}
+    if settings.function_learning_enabled:
+        from app.services import function_learning
+
+        async with SessionLocal() as db:  # no set_tenant → sees every company
+            perfs = await function_learning.aggregate(db)
+        priority_skills = function_learning.priority_skills(
+            perfs, min_adoption=settings.function_learning_min_adoption
+        )
+
     async with SessionLocal() as db:
-        company_id = platform_company.platform_company_id()
-        if company_id is None:
-            return {"skipped": "no_platform_company"}
         await set_tenant(db, company_id)
-        result = await skill_optimizer.run(db, ctx["runtime"], company_id=company_id)
+        result = await skill_optimizer.run(
+            db, ctx["runtime"], company_id=company_id, priority_skills=priority_skills
+        )
         await db.commit()
-    return result
+    return {**result, "priority_skills": len(priority_skills)}
 
 
 async def run_business_cycle(ctx: dict) -> dict:

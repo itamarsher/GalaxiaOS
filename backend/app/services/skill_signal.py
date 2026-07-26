@@ -94,6 +94,9 @@ class SkillSignal:
     success_count: int
     failure_count: int
     failures: list[FailureExample] = field(default_factory=list)
+    #: Extra, non-task evidence for the optimizer — e.g. cross-company function
+    #: performance (RFC 0002 slice 4). Rendered alongside the task signal.
+    context: str = ""
 
     @property
     def success_rate(self) -> float:

@@ -77,10 +77,23 @@ you don't track"); off-target detection against seeded targets slots into
 `classify` next. Skill-playbook edits and `request_capability` remain available
 moves the CEO can take from the brief.
 
-## 4. Cross-company learning (slice 4)
+## 4. Cross-company learning (slice 4 — landed)
 
 The dogfooding loop (`MISSION.md`) turns any agent's unmet need into a shipped
-platform capability for every company. This extends it to *function performance*:
-which moves actually lifted a signal (e.g. `signup_conversion_rate`), aggregated
-across companies (tenant-isolated data, shared *learning*) and propagated as
-skill-library edits via `skill-optimize` so `default_skills` keep improving.
+platform capability for every company. `services/function_learning.py` extends it
+to *function performance*. `aggregate` runs on a **tenant-unset** session (like the
+other platform crons — data stays isolated, only the *learning* crosses) and, per
+building block across every company that staffs it, computes adoption, how widely
+its `health_signals` are measured, and — direction-aware (`bounce_rate` improves
+when it falls) — how many signals are trending up vs down. `priority_skills` maps
+the **laggards** (widely adopted but under-measured, or declining across companies)
+to their `default_skills` with a cross-company reason.
+
+Those skills are folded into the existing skill-optimizer:
+`skill_optimizer.merge_priority_candidates` leads the batch with the
+business-outcome laggards (even below the per-company task-sample threshold),
+carrying the cross-company reason as evidence into the reflect→gate loop, so a
+validated playbook fix flows through the `skill-optimize` auto-merge pipeline and
+lifts that function **for everyone**. Wired into the `optimize_skills` cron behind
+`function_learning_enabled`. Next: reinforce the *winners* (propagate what's
+improving), not only fix the laggards.

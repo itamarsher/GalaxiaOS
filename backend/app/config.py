@@ -620,6 +620,11 @@ class Settings(BaseSettings):
     skill_optimize_gate_min_margin: int = 1  # candidate must beat current by ≥ this to propose
     skill_optimize_gate_auto_margin: int = 3  # ≥ this gate margin → auto path; else flag for a human
     skill_optimize_model: str = ""  # empty → the provider's planner-tier default
+    # RFC 0002 slice 4 — cross-company function learning. When on, the skill-optimizer
+    # also prioritizes the playbooks of functions lagging across companies, so a fix
+    # propagates to everyone running that function. Rides the skill-optimize cron.
+    function_learning_enabled: bool = False
+    function_learning_min_adoption: int = 1  # min companies staffing a function to weigh it
     # Labels put on a high-confidence proposal so it enters the auto-merge pipeline.
     # NoDecode + the validator below accept a plain comma-separated env string.
     skill_optimize_labels: Annotated[list[str], NoDecode] = Field(
