@@ -130,6 +130,34 @@ async def kr_targets(db: AsyncSession, *, company_id: uuid.UUID) -> dict[str, fl
     return {metric: target for metric, target in rows}
 
 
+async def set_target(
+    db: AsyncSession, *, company_id: uuid.UUID, metric: str, target: float | None
+) -> dict:
+    """Set (or clear, with ``None``) a health KR's target. Caller commits.
+
+    The founder/CEO tunes what "good" means for a KPI over the MCP surface; the
+    improvement cycle's off-target detection then measures against it. Raises
+    ``ValueError`` for an unknown metric so the caller can report it cleanly.
+    """
+    kr = await db.scalar(
+        select(KeyResult)
+        .join(Objective, Objective.id == KeyResult.objective_id)
+        .where(
+            KeyResult.company_id == company_id,
+            KeyResult.metric == metric,
+            Objective.title == HEALTH_OBJECTIVE_TITLE,
+        )
+    )
+    if kr is None:
+        raise ValueError(
+            f"no health KPI '{metric}' for this company — it isn't a signal of any "
+            f"staffed function"
+        )
+    kr.target_value = target
+    await db.flush()
+    return {"metric": metric, "target": target, "unit": kr.unit, "current": kr.current_value}
+
+
 async def health_krs(
     db: AsyncSession, *, company_id: uuid.UUID
 ) -> dict[str, dict]:

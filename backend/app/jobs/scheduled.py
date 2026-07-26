@@ -523,6 +523,33 @@ async def run_business_cycle(ctx: dict) -> dict:
     return {"companies": count, "enqueued": enqueued}
 
 
+async def capture_signals(ctx: dict) -> dict:
+    """Auto-capture health signals from connected data for each active company (RFC 0002).
+
+    Derives the KPIs we already have data for — CRM (leads, pipeline), runway — and
+    the agent-based KPIs from reputation, records them as real signals, and refreshes
+    the KR board. Best-effort and opt-in, so the improvement cycle measures reality
+    instead of waiting for hand-entered metrics.
+    """
+    if not settings.signal_capture_enabled:
+        return {"skipped": True}
+
+    from app.services import function_health, signal_capture
+
+    count = 0
+    captured = 0
+    for company_id in await _active_company_ids():
+        async with SessionLocal() as db:
+            await set_tenant(db, company_id)
+            recorded = await signal_capture.capture(db, company_id=company_id)
+            await function_health.record_agent_signals(db, company_id=company_id)
+            await function_health.refresh_kr_values(db, company_id=company_id)
+            await db.commit()
+        count += 1
+        captured += len(recorded)
+    return {"companies": count, "signals": captured}
+
+
 async def improve_functions(ctx: dict) -> dict:
     """Drive the per-function improvement cycle for each active company (RFC 0002).
 
@@ -553,9 +580,8 @@ async def improve_functions(ctx: dict) -> dict:
             count += 1
             if await orchestrator.has_active_tasks(db, company_id):
                 continue
-            # Refresh the formal KR board from real signals: record the agent-based
-            # KPIs from reputation, then sync every health KR's current value.
-            await function_health.record_agent_signals(db, company_id=company_id)
+            # Ensure the KR board reflects the latest captured signals before assessing
+            # (the capture_signals cron does the recording; this is a cheap re-sync).
             await function_health.refresh_kr_values(db, company_id=company_id)
             statuses = await function_improvement.assess_functions(db, company_id=company_id)
             brief = function_improvement.improvement_brief(statuses)

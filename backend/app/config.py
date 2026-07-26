@@ -385,6 +385,11 @@ class Settings(BaseSettings):
     # company with off-track functions, kicks a CEO improvement run to close the gap.
     function_improvement_enabled: bool = False
     function_improve_minute: int = 37  # once/hour at :37 (offset from the other crons)
+    # RFC 0002 — auto-capture health signals from connected/internal data (CRM,
+    # runway) + agent reputation, and refresh the KR board. Opt-in; feeds the
+    # improvement cycle so KPIs populate without hand-entry.
+    signal_capture_enabled: bool = False
+    signal_capture_minute: int = 22  # once/hour at :22 (offset; ahead of :37 improve)
     # Keep the org working without waiting for the daily cron: when a run finishes
     # (every task terminal, nothing awaiting the founder), automatically start the
     # next cycle after a short delay — as long as the company is active and has

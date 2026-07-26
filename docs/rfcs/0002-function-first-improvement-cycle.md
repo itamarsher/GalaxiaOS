@@ -72,6 +72,20 @@ board live from real signals, and `function_improvement.health_board`
 (`GET /companies/{id}/function-health`) surfaces it on the dashboard's **Health**
 page — per-function KPI current/target/status plus the agent-based KPIs.
 
+**Editable targets over MCP.** `function_health.set_target` lets the founder/CEO
+tune what "good" means for any KPI; exposed on the Founder MCP as `set_health_target`
+(+ `get_function_health` to read the board first). Off-target detection then measures
+against the tuned target — no UI needed.
+
+**Auto-capture of real signals** (`services/signal_capture.py`). Rather than wait for
+hand-entered metrics, an opt-in hourly cron (`signal_capture_enabled`) derives the
+KPIs we already have data for — CRM (`inbound_leads`, `pipeline_created`), runway
+(`runway_months`, `burn_rate`) — plus the agent-based KPIs from reputation, and
+records them as real `MetricSignal`s on the same pipeline (skipping unchanged values
+so the series stays bounded). Sources are pluggable: an analytics/Stripe-subscription
+source (`website_visitors`, `mrr`) slots in the same way once connected. So the
+whole loop — KR board, assessment, cross-company learning — populates on its own.
+
 ## 3. The continuous per-function improvement cycle (slice 3 — landed)
 
 `services/function_improvement.py` generalizes the retrospective into a
