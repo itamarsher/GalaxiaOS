@@ -1018,6 +1018,75 @@ async def refine(db: AsyncSession, *, company: Company, message: str) -> dict:
     }
 
 
+def _agent_function_key(agent: Agent) -> str | None:
+    """The selectable building-block key an agent staffs, or ``None``.
+
+    Only selectable functions count — core/oversight agents carry a function key in
+    ``config`` too (e.g. ``ceo``), but they're never the picker's to add or remove.
+    """
+    key = (agent.config or {}).get("function")
+    fn = function_catalog.get(key) if isinstance(key, str) else None
+    return key if (fn is not None and not fn.core) else None
+
+
+async def selected_functions(db: AsyncSession, *, company_id: uuid.UUID) -> list[str]:
+    """The selectable building blocks this company currently staffs (RFC 0002)."""
+    agents = (
+        await db.scalars(select(Agent).where(Agent.company_id == company_id))
+    ).all()
+    return [k for a in agents if (k := _agent_function_key(a)) is not None]
+
+
+async def set_functions(
+    db: AsyncSession, *, company: Company, keys: list[str]
+) -> dict:
+    """Reconcile the draft company's function-agents to the founder's picks (RFC 0002).
+
+    The picker's backend: add the newly-picked building blocks, remove the
+    deselected ones (never a core/oversight agent), and re-split the budget across
+    what remains. Draft-only — a launched company changes its fleet through the CEO,
+    not this onboarding control. Returns the resulting selection + which picks need a
+    connected provider. The caller commits.
+    """
+    if company.status is not CompanyStatus.draft:
+        raise OnboardingError(
+            "Functions can only be chosen before launch; a live company reshapes "
+            "itself through its CEO."
+        )
+    desired = function_catalog.picked_selectable(keys)
+    desired_set = set(desired)
+    budget = await db.scalar(select(Budget).where(Budget.company_id == company.id))
+    total = budget.limit_cents if budget else None
+
+    agents = (
+        await db.scalars(select(Agent).where(Agent.company_id == company.id))
+    ).all()
+    current = {k: a for a in agents if (k := _agent_function_key(a)) is not None}
+
+    for key, agent in current.items():
+        if key not in desired_set:
+            await db.delete(agent)
+    await db.flush()
+
+    missing = [k for k in desired if k not in current]
+    if missing:
+        # provision_fleet wires the new function-agents under the CEO and re-splits
+        # the budget across the whole fleet.
+        await provision_fleet(
+            db, company=company,
+            specs=[function_catalog.spec_for(k) for k in missing],
+            total_budget_cents=total,
+        )
+    else:
+        # Removal-only: still re-split so the freed budget is redistributed.
+        await _reallocate_agent_budgets(db, company_id=company.id, total_cents=total)
+
+    return {
+        "functions": desired,
+        "functions_needing_connection": function_catalog.external_functions(desired),
+    }
+
+
 async def launch(db: AsyncSession, *, company: Company) -> uuid.UUID | None:
     """Seed governance, activate the company, and create the root CEO run.
 

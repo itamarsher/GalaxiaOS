@@ -52,20 +52,30 @@ the health signals baked into its system prompt. `external` picks (billing) are
 returned as `functions_needing_connection` for the connect-prompt; in-house blocks
 need nothing. No recommendation → today's LLM org designer (additive, not a cutover).
 
-**Remaining (slice 2b):** the founder-facing picker UI (toggle the pre-checked
-recommendations — the provisioned function-agents already *are* the editable
-selection), and seeding formal `KeyResult` rows from `health_signals` once targets
-exist (today the target lives on the agent).
+**Slice 2b landed:** the founder-facing picker. `POST /onboarding/{id}/functions`
+(`onboarding.set_functions`) reconciles the draft's function-agents to the picks —
+adds the newly-picked blocks, removes deselected ones (never core/oversight), and
+re-splits the budget; the provisioned function-agents *are* the persisted, editable
+selection (`PreviewOut.functions`). The onboarding review UI renders the catalog with
+the recommendations pre-checked and `external` picks flagged to connect. Seeding
+formal `KeyResult` rows from `health_signals` still waits on real targets (today the
+target lives on the agent + drives slice 3).
 
-## 3. The continuous per-function improvement cycle (slice 3)
+## 3. The continuous per-function improvement cycle (slice 3 — landed)
 
-Generalizes the retrospective (`orchestrator._maybe_continue_cycle`) and the
-skill-optimizer into a **status-driven, per-function** loop. Each cycle, per
-function, it reads the real signals for its `health_signals` (`services/metrics`)
-plus objective/KR progress (`services/objectives`) and reputation; off-target, it
-drives the highest-leverage move — a `Task`, a skill-playbook edit
-(`runtime/skill_optimizer`), or `request_capability` (`services/feature_requests`).
-Only the scheduler is new; actions flow through existing budget + governance gates.
+`services/function_improvement.py` generalizes the retrospective into a
+**status-driven, per-function** loop. Each cycle, `assess_functions` reads — off
+each function-agent's `config` — which of its `health_signals` the company has
+**actually measured** (real `MetricSignal` rows) vs. is flying blind on, and
+`improvement_brief` turns the gaps into a CEO brief. The hourly `improve_functions`
+cron (opt-in, `function_improvement_enabled`) hands that brief to
+`orchestrator.create_improvement_run` for an **idle** company with off-track
+functions, so the moves dispatch through the normal governed path (objective-tagged,
+budgeted, approval-gated) — not around it. The scoring is deliberately grounded in
+real data: an unmeasured KPI is the unambiguous first gap ("you can't improve what
+you don't track"); off-target detection against seeded targets slots into
+`classify` next. Skill-playbook edits and `request_capability` remain available
+moves the CEO can take from the brief.
 
 ## 4. Cross-company learning (slice 4)
 

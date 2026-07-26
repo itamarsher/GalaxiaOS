@@ -505,3 +505,37 @@ async def run_business_cycle(ctx: dict) -> dict:
             await enqueue_task(task_id)
             enqueued += 1
     return {"companies": count, "enqueued": enqueued}
+
+
+async def improve_functions(ctx: dict) -> dict:
+    """Drive the per-function improvement cycle for each active company (RFC 0002).
+
+    Assesses every function against its real health signals; for an idle company
+    with off-track functions, kicks a CEO improvement run seeded with the brief so
+    the moves dispatch through the normal governed path. Skips busy companies (never
+    stacks a parallel run) and companies with nothing to improve.
+    """
+    if not settings.function_improvement_enabled:
+        return {"skipped": True}
+
+    from app.runtime.queue import enqueue_task
+    from app.services import function_improvement
+
+    count = 0
+    driven = 0
+    for company_id in await _active_company_ids():
+        async with SessionLocal() as db:
+            await set_tenant(db, company_id)
+            count += 1
+            if await orchestrator.has_active_tasks(db, company_id):
+                continue
+            statuses = await function_improvement.assess_functions(db, company_id=company_id)
+            brief = function_improvement.improvement_brief(statuses)
+            if not brief:
+                continue
+            task_id = await orchestrator.create_improvement_run(db, company_id, brief=brief)
+            await db.commit()
+        if task_id is not None:
+            await enqueue_task(task_id)
+            driven += 1
+    return {"companies": count, "driven": driven}

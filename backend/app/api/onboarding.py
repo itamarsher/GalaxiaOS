@@ -23,8 +23,9 @@ from app.schemas import (
     ReusableCredentialOut,
     ReuseCredentialsRequest,
     ReuseCredentialsResponse,
+    SetFunctionsRequest,
 )
-from app.services import investors, onboarding, onboarding_reuse
+from app.services import function_catalog, investors, onboarding, onboarding_reuse
 
 router = APIRouter(tags=["onboarding"])
 
@@ -125,6 +126,17 @@ async def refine(company: CompanyDep, body: RefineRequest, db: DbDep):
     return RefineResponse(reply=result["reply"], preview=preview)
 
 
+@router.post("/onboarding/{company_id}/functions", response_model=PreviewOut)
+async def set_functions(company: CompanyDep, body: SetFunctionsRequest, db: DbDep):
+    """Reconcile the draft's function picks (RFC 0002) — the onboarding picker."""
+    try:
+        await onboarding.set_functions(db, company=company, keys=body.functions)
+    except onboarding.OnboardingError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+    await db.commit()
+    return await _build_preview(db, company)
+
+
 @router.post(
     "/onboarding/{company_id}/investment-review",
     response_model=list[InvestmentReviewOut],
@@ -171,6 +183,9 @@ async def _build_preview(db: DbDep, company) -> PreviewOut:
             select(InvestmentReview).where(InvestmentReview.company_id == company.id)
         )
     ).all()
+    functions = [
+        k for a in agents if (k := onboarding._agent_function_key(a)) is not None
+    ]
     return PreviewOut(
         company=CompanyOut.model_validate(company),
         objectives=[ObjectiveOut.model_validate(o) for o in objectives],
@@ -179,4 +194,6 @@ async def _build_preview(db: DbDep, company) -> PreviewOut:
             edges=[AgentEdgeOut.model_validate(e) for e in edges],
         ),
         investment_reviews=[InvestmentReviewOut.model_validate(r) for r in reviews],
+        functions=functions,
+        functions_needing_connection=function_catalog.external_functions(functions),
     )

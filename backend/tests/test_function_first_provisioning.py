@@ -7,9 +7,10 @@ from __future__ import annotations
 
 from sqlalchemy import select
 
-from app.models import Agent, Company
-from app.models.enums import AgentRole
+from app.models import Agent, Budget, Company
+from app.models.enums import AgentRole, CompanyStatus
 from app.services import function_catalog as fc
+from app.services import onboarding
 from app.services.onboarding import provision_fleet
 from tests.conftest import requires_db
 
@@ -47,3 +48,43 @@ async def test_selected_functions_provision_with_config_and_health_target(
     roles = {a.role for a in agents}
     assert {AgentRole.ceo, AgentRole.governance, AgentRole.auditor,
             AgentRole.data, AgentRole.platform} <= roles
+
+
+@requires_db
+async def test_set_functions_reconciles_add_and_remove(session_factory, company_with_budget):
+    async with session_factory() as db:
+        company = await db.get(Company, company_with_budget)
+        company.status = CompanyStatus.draft  # the picker is draft-only
+        await provision_fleet(
+            db, company=company, specs=fc.resolve_selection(["website", "social"]),
+            total_budget_cents=10_000,
+        )
+        await db.commit()
+
+    # Reconcile to a different selection: drop social, keep website, add outbound.
+    async with session_factory() as db:
+        company = await db.get(Company, company_with_budget)
+        result = await onboarding.set_functions(
+            db, company=company, keys=["website", "outbound"]
+        )
+        await db.commit()
+    assert set(result["functions"]) == {"website", "outbound"}
+
+    async with session_factory() as db:
+        selected = set(await onboarding.selected_functions(db, company_id=company_with_budget))
+        # Deselected function is gone; oversight (CEO) is untouched.
+        assert selected == {"website", "outbound"}
+        ceos = (await db.scalars(
+            select(Agent).where(Agent.company_id == company_with_budget,
+                                Agent.role == AgentRole.ceo)
+        )).all()
+        assert len(ceos) == 1
+        # Budget re-split stays within the company limit.
+        budget = await db.scalar(
+            select(Budget).where(Budget.company_id == company_with_budget)
+        )
+        capped = (await db.scalars(
+            select(Agent).where(Agent.company_id == company_with_budget,
+                                Agent.role != AgentRole.ceo)
+        )).all()
+        assert sum(a.monthly_budget_cents or 0 for a in capped) <= budget.limit_cents

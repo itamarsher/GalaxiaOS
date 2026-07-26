@@ -380,6 +380,11 @@ class Settings(BaseSettings):
     # Continuous operation: a recurring "business cycle" re-wakes the org.
     business_cycle_enabled: bool = True
     business_cycle_hour_utc: int = 12
+    # RFC 0002 slice 3 — the per-function improvement cycle. When enabled, an hourly
+    # cron assesses each function against its real health signals and, for an idle
+    # company with off-track functions, kicks a CEO improvement run to close the gap.
+    function_improvement_enabled: bool = False
+    function_improve_minute: int = 37  # once/hour at :37 (offset from the other crons)
     # Keep the org working without waiting for the daily cron: when a run finishes
     # (every task terminal, nothing awaiting the founder), automatically start the
     # next cycle after a short delay — as long as the company is active and has
