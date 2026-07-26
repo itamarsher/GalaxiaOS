@@ -120,7 +120,16 @@ async def test_off_target_drives_the_improvement_cycle(session_factory, company_
 
     async with session_factory() as db:
         statuses = await fi.assess_functions(db, company_id=company_with_budget)
+        board = await fi.health_board(db, company_id=company_with_budget)
     web = next(s for s in statuses if s.function == "website")
     assert "signup_conversion_rate" in web.off_target
     assert not web.on_track
     assert "below target" in fi.improvement_brief(statuses)
+
+    # The dashboard board reflects the same status + live KR values.
+    web_board = next(f for f in board["functions"] if f["function"] == "website")
+    assert web_board["on_track"] is False
+    conv = next(k for k in web_board["kpis"] if k["metric"] == "signup_conversion_rate")
+    assert conv["status"] == "off_target" and conv["current"] == 0.02 and conv["target"] == 0.05
+    # Agent-based KPIs are surfaced separately.
+    assert {k["metric"] for k in board["agent_kpis"]} == set(fm.AGENT_SIGNALS)

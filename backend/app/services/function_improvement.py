@@ -144,3 +144,48 @@ def improvement_brief(statuses: list[FunctionStatus]) -> str:
             parts.append(f"below target on {', '.join(s.off_target)} (act to close the gap)")
         lines.append(f"- {s.title} ({s.function}): {'; '.join(parts)}.")
     return "\n".join(lines)
+
+
+def _kpi_status(signal: str, status: FunctionStatus) -> str:
+    if signal in status.unmeasured:
+        return "unmeasured"
+    if signal in status.off_target:
+        return "off_target"
+    return "on_track"
+
+
+async def health_board(db: AsyncSession, *, company_id: uuid.UUID) -> dict:
+    """The dashboard-facing function-health board (RFC 0002).
+
+    Composes the per-function assessment with the live KR values so the dashboard
+    shows, per function, each KPI's current value / target / status — plus the
+    company-level agent-based KPIs. Read-only; no LLM.
+    """
+    statuses = await assess_functions(db, company_id=company_id)
+    krs = await function_health.health_krs(db, company_id=company_id)
+
+    def _kpi(signal: str, status: FunctionStatus) -> dict:
+        kr = krs.get(signal, {})
+        return {
+            "metric": signal,
+            "current": kr.get("current"),
+            "target": kr.get("target"),
+            "unit": kr.get("unit") or function_metrics.signal_unit(signal),
+            "status": _kpi_status(signal, status),
+        }
+
+    functions = [
+        {
+            "function": s.function,
+            "title": s.title,
+            "on_track": s.on_track,
+            "kpis": [_kpi(sig, s) for sig in (s.measured + s.unmeasured)],
+        }
+        for s in statuses
+    ]
+    agent_kpis = [
+        {"metric": m, "current": krs[m]["current"], "target": krs[m]["target"],
+         "unit": krs[m]["unit"] or function_metrics.signal_unit(m)}
+        for m in function_metrics.AGENT_SIGNALS if m in krs
+    ]
+    return {"functions": functions, "agent_kpis": agent_kpis}

@@ -136,6 +136,7 @@ def create_app() -> FastAPI:
     app.include_router(stripe_webhooks.router)
     app.include_router(onboarding.router)
     app.include_router(functions.router)
+    app.include_router(functions.company_router)
     app.include_router(apikeys.router)
     app.include_router(secrets.router)
     app.include_router(secrets.decisions_router)

@@ -130,6 +130,28 @@ async def kr_targets(db: AsyncSession, *, company_id: uuid.UUID) -> dict[str, fl
     return {metric: target for metric, target in rows}
 
 
+async def health_krs(
+    db: AsyncSession, *, company_id: uuid.UUID
+) -> dict[str, dict]:
+    """Metric → {current, target, unit} for the company's seeded health KRs.
+
+    The read side for the dashboard board — one row per KPI with its live value and
+    target, whether business or agent-based."""
+    rows = await db.execute(
+        select(KeyResult.metric, KeyResult.current_value, KeyResult.target_value,
+               KeyResult.unit)
+        .join(Objective, Objective.id == KeyResult.objective_id)
+        .where(
+            KeyResult.company_id == company_id,
+            Objective.title == HEALTH_OBJECTIVE_TITLE,
+        )
+    )
+    return {
+        metric: {"current": current, "target": target, "unit": unit}
+        for metric, current, target, unit in rows
+    }
+
+
 async def refresh_kr_values(db: AsyncSession, *, company_id: uuid.UUID) -> None:
     """Update each health KR's ``current_value`` to the latest matching signal.
 

@@ -11,10 +11,11 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
-from app.deps import CurrentUser
-from app.services import function_catalog
+from app.deps import CompanyDep, CurrentUser, DbDep
+from app.services import function_catalog, function_improvement
 
 router = APIRouter(prefix="/functions", tags=["functions"])
+company_router = APIRouter(prefix="/companies/{company_id}", tags=["functions"])
 
 
 def _serialize(fn: function_catalog.BusinessFunction) -> dict:
@@ -42,3 +43,10 @@ async def catalog(user: CurrentUser) -> dict:
         "selectable": [_serialize(f) for f in function_catalog.selectable_functions()],
         "core": [_serialize(f) for f in function_catalog.core_functions()],
     }
+
+
+@company_router.get("/function-health")
+async def function_health_board(company: CompanyDep, db: DbDep) -> dict:
+    """This company's function-health board (RFC 0002): per-function KPI status +
+    current/target from the seeded KRs, plus the agent-based KPIs. Read-only."""
+    return await function_improvement.health_board(db, company_id=company.id)

@@ -68,7 +68,9 @@ business KPIs per function *and* **agent-based KPIs** (`agent_reliability` /
 `agent_trust` / `agent_roi`), recorded company-wide from the reputation model by
 `record_agent_signals` — so a scorecard tracks whether the agents *running* the
 functions are dependable, not just business outcomes. `refresh_kr_values` keeps the
-board live from real signals.
+board live from real signals, and `function_improvement.health_board`
+(`GET /companies/{id}/function-health`) surfaces it on the dashboard's **Health**
+page — per-function KPI current/target/status plus the agent-based KPIs.
 
 ## 3. The continuous per-function improvement cycle (slice 3 — landed)
 
