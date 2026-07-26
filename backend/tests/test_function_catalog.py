@@ -1,7 +1,6 @@
 """The business-function catalog — the reusable building blocks (RFC 0002).
 
-Pure catalog data + the selection resolver that maps a founder's picks onto the
-``provision_fleet`` specs GalaxiaOS spins up. No DB, so these always run.
+Pure catalog data + the selection resolver; no DB, so these always run.
 """
 
 from __future__ import annotations
@@ -28,12 +27,23 @@ def test_selectable_excludes_core_which_is_guaranteed_oversight():
 
 
 def test_finer_grained_blocks_use_custom_so_they_coexist():
-    # custom is never deduped by provision_fleet, so these all exist at once;
-    # blocks with a dedicated role reuse it.
+    # custom is never deduped by provision_fleet; dedicated roles are reused.
     for key in ("website", "social", "outbound", "inbound", "customer_service", "legal"):
         assert fc.get(key).role is AgentRole.custom
     assert fc.get("finance").role is AgentRole.finance
     assert fc.get("brand").role is AgentRole.design
+
+
+def test_functions_are_in_house_first_except_the_genuinely_hard_ones():
+    # Keep functions native; billing (payments) is the reserved external case.
+    for key in ("website", "social", "outbound", "inbound", "brand",
+                "customer_service", "legal", "finance"):
+        assert fc.is_in_house(key), f"{key} should be in-house"
+    assert not fc.is_in_house("billing")
+    assert fc.get("billing").implementation == "external"
+    # In-house blocks don't default to external-SaaS connector skills.
+    assert "webflow" not in fc.get("website").default_skills
+    assert "buffer" not in fc.get("social").default_skills
 
 
 def test_health_signals_define_the_improvement_target():
@@ -45,12 +55,9 @@ def test_health_signals_define_the_improvement_target():
 
 def test_spec_for_is_provision_fleet_shaped():
     spec = fc.spec_for("website")
-    assert spec == {
-        "role": "custom",
-        "name": "Web Presence & Conversion",
-        "responsibility": spec["responsibility"],
-        "autonomy_level": "approve_required",
-    }
+    assert spec["role"] == "custom"
+    assert spec["name"] == "Web Presence & Conversion"
+    assert spec["autonomy_level"] == "approve_required"
     assert spec["responsibility"]
 
 

@@ -37,6 +37,9 @@ class BusinessFunction:
     role: AgentRole  # which existing role staffs it (custom → its own identity)
     health_signals: tuple[str, ...] = ()  # metrics the improvement cycle reads to pick the next move
     default_skills: tuple[str, ...] = ()  # skill-library playbooks to seed
+    # "in_house" (default): GalaxiaOS runs it with its own agents + native tools, no
+    # third-party signup. "external": reserved for the genuinely-hard case (billing).
+    implementation: str = "in_house"
     core: bool = False  # oversight GalaxiaOS always guarantees — not an à-la-carte pick
 
 
@@ -52,13 +55,13 @@ _CATALOG: tuple[BusinessFunction, ...] = (
        responsibility="Own the company's website: keep it live and on-message, and continuously improve visitor-to-signup conversion.",
        role=AgentRole.custom,
        health_signals=("website_visitors", "signup_conversion_rate", "bounce_rate"),
-       default_skills=("landing-page-optimization", "seo-keyword-strategy", "webflow")),
+       default_skills=("landing-page-optimization", "seo-keyword-strategy", "blog-post-production")),
     _f(key="social", title="Social Media", category="acquisition",
        summary="Grow and engage an audience across social channels.",
        responsibility="Own the company's social presence: plan and publish content, grow the audience, and lift engagement.",
        role=AgentRole.custom,
        health_signals=("social_followers", "social_engagement_rate", "social_reach"),
-       default_skills=("social-media-campaign", "content-marketing-calendar", "buffer")),
+       default_skills=("social-media-campaign", "content-marketing-calendar", "social-graphics-batch")),
     _f(key="outbound", title="Outbound Sales", category="acquisition",
        summary="Prospect, reach out, and book meetings that create pipeline.",
        responsibility="Own outbound demand: build target lists, run personalized outreach, and book qualified meetings that create pipeline.",
@@ -95,6 +98,12 @@ _CATALOG: tuple[BusinessFunction, ...] = (
        role=AgentRole.finance,
        health_signals=("runway_months", "gross_margin", "burn_rate"),
        default_skills=("monthly-financial-close", "runway-and-burn-analysis", "unit-economics-analysis")),
+    _f(key="billing", title="Billing & Payments", category="revenue",
+       summary="Charge customers and manage subscriptions and invoices.",
+       responsibility="Own billing: charge customers, manage subscriptions and invoices, and reconcile payments.",
+       role=AgentRole.custom, implementation="external",  # payments → a connected provider (Stripe)
+       health_signals=("mrr", "failed_payment_rate", "collections_outstanding"),
+       default_skills=("invoicing-and-collections", "revenue-recognition", "stripe")),
     # ── Oversight: guaranteed on every company, not an à-la-carte pick ──────────
     _f(key="ceo", title="CEO", category="oversight",
        summary="Decompose the mission into initiatives and dispatch the team.",
@@ -139,6 +148,16 @@ def core_functions() -> list[BusinessFunction]:
 def get(key: str) -> BusinessFunction | None:
     """Look up one building block by its stable key, or ``None``."""
     return _BY_KEY.get(key)
+
+
+def is_in_house(key: str) -> bool:
+    """Whether GalaxiaOS runs this block itself (no third-party signup required).
+
+    In-house-first is strategic: keep functions native so a founder isn't forced to
+    register for a dozen services. Only ``external`` blocks (e.g. billing) need a
+    connected provider — the seam onboarding uses to prompt for a connection."""
+    fn = _BY_KEY.get(key)
+    return fn is None or fn.implementation == "in_house"
 
 
 def health_signals(key: str) -> tuple[str, ...]:

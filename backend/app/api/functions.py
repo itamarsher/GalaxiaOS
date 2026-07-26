@@ -24,6 +24,7 @@ def _serialize(fn: function_catalog.BusinessFunction) -> dict:
         "category": fn.category,
         "summary": fn.summary,
         "role": fn.role.value,
+        "implementation": fn.implementation,
         "health_signals": list(fn.health_signals),
         "default_skills": list(fn.default_skills),
         "core": fn.core,
