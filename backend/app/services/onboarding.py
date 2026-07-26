@@ -52,7 +52,14 @@ from app.runtime.prompts import (
     REFINE_SYSTEM,
     generation_language_directive,
 )
-from app.services import apikeys, data_policy, function_catalog, investors, worker_binding
+from app.services import (
+    apikeys,
+    data_policy,
+    function_catalog,
+    function_health,
+    investors,
+    worker_binding,
+)
 from app.services import chat as chat_svc
 from app.services import governance as gov
 
@@ -738,6 +745,10 @@ async def generate(db: AsyncSession, *, company: Company) -> dict:
             total_budget_cents=budget.limit_cents,
         )
     set_progress(company.id, phase="wiring", pct=80, message="Wiring the org chart")
+    if picked:
+        # Seed formal health KRs — business KPIs per function + agent-based KPIs —
+        # so targets are first-class and the improvement cycle can detect off-target.
+        await function_health.sync_health_krs(db, company=company)
 
     # ── Investment review (best-effort; never breaks generation) ──────────────
     investor_reviews = 0
@@ -1080,6 +1091,9 @@ async def set_functions(
     else:
         # Removal-only: still re-split so the freed budget is redistributed.
         await _reallocate_agent_budgets(db, company_id=company.id, total_cents=total)
+
+    # Keep the formal health KRs in sync with the new selection.
+    await function_health.sync_health_krs(db, company=company)
 
     return {
         "functions": desired,

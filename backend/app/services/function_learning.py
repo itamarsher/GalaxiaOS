@@ -27,14 +27,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Agent, MetricSignal
-from app.services import function_catalog
-
-#: Health signals where a *lower* value is the improvement (everything else is
-#: higher-is-better). Kept here next to the aggregation that needs it.
-_LOWER_IS_BETTER = frozenset({
-    "bounce_rate", "inbound_response_time", "first_response_time", "churn_rate",
-    "compliance_issues_open", "burn_rate", "failed_payment_rate", "collections_outstanding",
-})
+from app.services import function_catalog, function_metrics
 
 
 def trend(points: list[tuple[object, float]], *, lower_is_better: bool) -> str:
@@ -119,7 +112,8 @@ async def aggregate(db: AsyncSession) -> list[FunctionPerformance]:
     """
     catalog = {f.key: f for f in function_catalog.selectable_functions()}
     signal_dirs = {
-        s: (s in _LOWER_IS_BETTER) for f in catalog.values() for s in f.health_signals
+        s: function_metrics.is_lower_better(s)
+        for f in catalog.values() for s in f.health_signals
     }
     if not signal_dirs:
         return []
@@ -167,12 +161,52 @@ async def aggregate(db: AsyncSession) -> list[FunctionPerformance]:
     return perfs
 
 
+def winners(
+    perfs: list[FunctionPerformance], *, min_adoption: int = 2
+) -> list[FunctionPerformance]:
+    """Functions improving broadly across companies — the *winners* to propagate.
+
+    A winner is well-adopted, mostly measuring, and trending up more than down.
+    ``min_adoption`` defaults to 2 so "across companies" is real, not one company's
+    good week. Ordered most-improving first.
+    """
+    out = [
+        p for p in perfs
+        if p.adoption >= min_adoption
+        and p.measuring * 2 >= p.adoption  # ≥half are measuring it
+        and p.improved > p.declined
+    ]
+    return sorted(out, key=lambda p: (-(p.improved - p.declined), -p.adoption))
+
+
+def winning_functions(perfs: list[FunctionPerformance], *, min_adoption: int = 2) -> set[str]:
+    """Just the function keys that are winning across companies (RFC 0002 slice 4)."""
+    return {p.function for p in winners(perfs, min_adoption=min_adoption)}
+
+
+def reinforcement_note(function: str, perfs: list[FunctionPerformance]) -> str:
+    """A one-line "this is working elsewhere — adopt it" note, or "" if not a winner.
+
+    Handed to a company still off-track on a function that's a proven winner at other
+    companies, so the improvement run reinforces what's working instead of
+    reinventing — the propagation half of cross-company learning."""
+    for p in winners(perfs):
+        if p.function == function:
+            return (
+                f"'{p.title}' is a proven winner across companies "
+                f"({p.improved} KPIs up vs {p.declined} down over {p.adoption} companies) — "
+                f"adopt the shared playbook approach rather than starting from scratch."
+            )
+    return ""
+
+
 def learning_brief(perfs: list[FunctionPerformance]) -> str:
     """A short audit line per function, laggards first (or "" if nothing to learn)."""
     ranked = sorted(perfs, key=lambda p: (not p.lagging, -p.adoption))
     lines = [
         f"- {p.title}: {p.adoption} companies, {p.measuring} measuring, "
-        f"{p.improved}↑/{p.declined}↓{'  ⚠ lagging' if p.lagging else ''}"
+        f"{p.improved}↑/{p.declined}↓"
+        f"{'  ⚠ lagging' if p.lagging else ('  ★ winning' if p.improved > p.declined and p.adoption >= 2 else '')}"
         for p in ranked
     ]
     return "\n".join(lines)

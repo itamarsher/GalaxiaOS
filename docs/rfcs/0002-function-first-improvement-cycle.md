@@ -57,25 +57,32 @@ need nothing. No recommendation → today's LLM org designer (additive, not a cu
 adds the newly-picked blocks, removes deselected ones (never core/oversight), and
 re-splits the budget; the provisioned function-agents *are* the persisted, editable
 selection (`PreviewOut.functions`). The onboarding review UI renders the catalog with
-the recommendations pre-checked and `external` picks flagged to connect. Seeding
-formal `KeyResult` rows from `health_signals` still waits on real targets (today the
-target lives on the agent + drives slice 3).
+the recommendations pre-checked and `external` picks flagged to connect.
+
+**Formal KRs landed** (`services/function_health.py` + `function_metrics.py`). On
+provision (and on every picker change), `sync_health_krs` reconciles a `KeyResult`
+per health signal under a dedicated "Operational health" objective — carrying the
+metric's unit and a default target from `function_metrics.SIGNAL_META` (which also
+owns metric *direction*, shared with slices 3/4). Seeded KRs are **both**: the
+business KPIs per function *and* **agent-based KPIs** (`agent_reliability` /
+`agent_trust` / `agent_roi`), recorded company-wide from the reputation model by
+`record_agent_signals` — so a scorecard tracks whether the agents *running* the
+functions are dependable, not just business outcomes. `refresh_kr_values` keeps the
+board live from real signals.
 
 ## 3. The continuous per-function improvement cycle (slice 3 — landed)
 
 `services/function_improvement.py` generalizes the retrospective into a
 **status-driven, per-function** loop. Each cycle, `assess_functions` reads — off
 each function-agent's `config` — which of its `health_signals` the company has
-**actually measured** (real `MetricSignal` rows) vs. is flying blind on, and
-`improvement_brief` turns the gaps into a CEO brief. The hourly `improve_functions`
-cron (opt-in, `function_improvement_enabled`) hands that brief to
-`orchestrator.create_improvement_run` for an **idle** company with off-track
-functions, so the moves dispatch through the normal governed path (objective-tagged,
-budgeted, approval-gated) — not around it. The scoring is deliberately grounded in
-real data: an unmeasured KPI is the unambiguous first gap ("you can't improve what
-you don't track"); off-target detection against seeded targets slots into
-`classify` next. Skill-playbook edits and `request_capability` remain available
-moves the CEO can take from the brief.
+**measured** (real `MetricSignal` rows), and now, against the seeded KR targets,
+which measured KPIs are **off-target** (direction-aware). `improvement_brief` turns
+both gaps (unmeasured + below-target) into a CEO brief. The hourly `improve_functions`
+cron (opt-in, `function_improvement_enabled`) records the agent KPIs, refreshes the
+KR board, then hands the brief to `orchestrator.create_improvement_run` for an
+**idle** company with off-track functions — so the moves dispatch through the normal
+governed path (objective-tagged, budgeted, approval-gated), not around it.
+Skill-playbook edits and `request_capability` remain available moves.
 
 ## 4. Cross-company learning (slice 4 — landed)
 
@@ -95,5 +102,12 @@ business-outcome laggards (even below the per-company task-sample threshold),
 carrying the cross-company reason as evidence into the reflect→gate loop, so a
 validated playbook fix flows through the `skill-optimize` auto-merge pipeline and
 lifts that function **for everyone**. Wired into the `optimize_skills` cron behind
-`function_learning_enabled`. Next: reinforce the *winners* (propagate what's
-improving), not only fix the laggards.
+`function_learning_enabled`.
+
+**Reinforce winners (landed).** The flip side of fixing laggards:
+`function_learning.winners` identifies functions improving broadly (well-adopted,
+mostly measuring, trending up more than down), and `reinforcement_note` turns a
+winner into an "adopt what works" line. The `improve_functions` cron computes the
+cross-company winners once per tick and, for a company still off-track on a function
+that's a proven winner elsewhere, appends that note to its improvement brief — so a
+laggard company reinforces the shared, working approach instead of reinventing it.

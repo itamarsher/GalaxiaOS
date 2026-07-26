@@ -61,6 +61,18 @@ def test_merge_priority_candidates_leads_with_business_signal():
     assert len(merge_priority_candidates(ranked, {"b": "x", "c": "y"}, batch=1)) == 1
 
 
+def test_winners_and_reinforcement_note():
+    winning = _perf(function="outbound", title="Outbound", adoption=3, measuring=3,
+                    improved=5, declined=1)
+    lagging = _perf(function="website", title="Web", adoption=3, measuring=1)
+    one_off = _perf(function="social", title="Social", adoption=1, measuring=1, improved=2)
+    perfs = [winning, lagging, one_off]
+    keys = fl.winning_functions(perfs, min_adoption=2)
+    assert keys == {"outbound"}  # min_adoption filters the single-company one
+    assert "proven winner" in fl.reinforcement_note("outbound", perfs)
+    assert fl.reinforcement_note("website", perfs) == ""  # lagging, not a winner
+
+
 @requires_db
 async def test_aggregate_reads_signals_across_companies(session_factory, company_with_budget):
     # Two companies both staff `website`; one has a declining KPI, the other measures

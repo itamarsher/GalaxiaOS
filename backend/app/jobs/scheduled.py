@@ -535,7 +535,15 @@ async def improve_functions(ctx: dict) -> dict:
         return {"skipped": True}
 
     from app.runtime.queue import enqueue_task
-    from app.services import function_improvement
+    from app.services import function_health, function_improvement, function_learning
+
+    # Cross-company winners, computed once (tenant-unset) and reused: a company still
+    # off-track on a function that's winning elsewhere gets told to adopt what works —
+    # the propagation half of cross-company learning (RFC 0002 slice 4 reinforce).
+    winner_perfs = []
+    if settings.function_learning_enabled:
+        async with SessionLocal() as db:
+            winner_perfs = await function_learning.aggregate(db)
 
     count = 0
     driven = 0
@@ -545,13 +553,37 @@ async def improve_functions(ctx: dict) -> dict:
             count += 1
             if await orchestrator.has_active_tasks(db, company_id):
                 continue
+            # Refresh the formal KR board from real signals: record the agent-based
+            # KPIs from reputation, then sync every health KR's current value.
+            await function_health.record_agent_signals(db, company_id=company_id)
+            await function_health.refresh_kr_values(db, company_id=company_id)
             statuses = await function_improvement.assess_functions(db, company_id=company_id)
             brief = function_improvement.improvement_brief(statuses)
             if not brief:
+                await db.commit()  # persist the refreshed KR values / agent signals
                 continue
+            brief += _winner_reinforcement(statuses, winner_perfs)
             task_id = await orchestrator.create_improvement_run(db, company_id, brief=brief)
             await db.commit()
         if task_id is not None:
             await enqueue_task(task_id)
             driven += 1
     return {"companies": count, "driven": driven}
+
+
+def _winner_reinforcement(statuses, winner_perfs) -> str:
+    """Append "this works elsewhere — adopt it" notes for off-track winner functions."""
+    if not winner_perfs:
+        return ""
+    from app.services import function_learning
+
+    notes = []
+    for s in statuses:
+        if s.on_track:
+            continue
+        note = function_learning.reinforcement_note(s.function, winner_perfs)
+        if note:
+            notes.append(f"- {note}")
+    if not notes:
+        return ""
+    return "\n\nProven across companies (reinforce, don't reinvent):\n" + "\n".join(notes)

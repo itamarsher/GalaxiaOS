@@ -20,6 +20,21 @@ def test_classify_splits_measured_from_unmeasured():
     assert fi.classify(("a",), set())["unmeasured"] == ["a"]
 
 
+def test_classify_flags_off_target_direction_aware():
+    split = fi.classify(
+        ("signup_conversion_rate", "bounce_rate", "website_visitors"),
+        {"signup_conversion_rate", "bounce_rate"},  # measured (visitors not)
+        latest_values={"signup_conversion_rate": 0.02, "bounce_rate": 0.6},
+        targets={"signup_conversion_rate": 0.05, "bounce_rate": 0.4},
+    )
+    assert split["unmeasured"] == ["website_visitors"]
+    # conversion below target AND bounce_rate above target (lower-is-better) → both off.
+    assert set(split["off_target"]) == {"signup_conversion_rate", "bounce_rate"}
+    # A measured KPI at/above target is not off.
+    ok = fi.classify(("csat",), {"csat"}, latest_values={"csat": 0.95}, targets={"csat": 0.9})
+    assert ok["off_target"] == []
+
+
 def test_brief_is_empty_when_every_function_is_measuring():
     on_track = [fi.FunctionStatus(agent_id=None, function="website", title="Web",
                                   measured=["x"], unmeasured=[])]
