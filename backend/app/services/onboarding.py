@@ -52,7 +52,7 @@ from app.runtime.prompts import (
     REFINE_SYSTEM,
     generation_language_directive,
 )
-from app.services import apikeys, data_policy, investors, worker_binding
+from app.services import apikeys, data_policy, function_catalog, investors, worker_binding
 from app.services import chat as chat_svc
 from app.services import governance as gov
 
@@ -518,6 +518,9 @@ async def provision_fleet(
             autonomy_level=_parse_autonomy(spec.get("autonomy_level")),
             access_labels=data_policy.default_access_labels_for_role(role.value),
             backend_type=worker_binding.default_backend_for(role),
+            # Catalog specs (RFC 0002) carry a config blob — the function key, its
+            # health target, and skills; None for the LLM/default-fleet path.
+            config=spec.get("config"),
         )
         db.add(agent)
         await db.flush()
@@ -638,7 +641,9 @@ async def generate(db: AsyncSession, *, company: Company) -> dict:
         agent_id=None,
         task_id=None,
         model=planner_model,
-        system=MISSION_TO_PLAN_SYSTEM,
+        # The catalog appends its vocabulary so the model recommends which functions
+        # to spin up (RFC 0002 — function-first onboarding).
+        system=MISSION_TO_PLAN_SYSTEM + function_catalog.recommendation_directive(),
         messages=[Message(role="user", content=mission.raw_text)],
         max_tokens=gen_max_tokens,
         json_schema=MISSION_TO_PLAN_SCHEMA,
@@ -684,47 +689,55 @@ async def generate(db: AsyncSession, *, company: Company) -> dict:
                 )
             )
 
-    # ── LLM #2: plan + budget → org design ────────────────────────────────────
-    set_progress(
-        company.id, phase="org", pct=55, message="Designing the agent fleet"
-    )
-    # Carry the raw mission (not just the derived objectives) so the org designer
-    # reasons in the founder's own words and locale; ensure_ascii=False keeps
-    # non-Latin scripts intact instead of escaping them to \\uXXXX gibberish.
-    org_input = json.dumps(
-        {
-            "mission": mission.raw_text,
-            "objectives": plan.get("objectives", []),
-            "monthly_budget_cents": budget.limit_cents,
-        },
-        ensure_ascii=False,
-    )
-    org_resp = await meter.run_llm(
-        provider,
-        api_key=api_key,
-        company_id=company.id,
-        agent_id=None,
-        task_id=None,
-        model=planner_model,
-        system=PLAN_TO_ORG_SYSTEM + generation_language_directive(language),
-        messages=[Message(role="user", content=org_input)],
-        max_tokens=gen_max_tokens,
-        json_schema=PLAN_TO_ORG_SCHEMA,
-        funding_user_id=funding_user_id,
-    )
-    org = _parse_llm_json(org_resp)
-    set_progress(
-        company.id, phase="wiring", pct=80, message="Wiring the org chart"
-    )
-
-    # Ignore any per-agent budget figures the LLM guessed — provision_fleet owns
-    # the allocation so it always sums correctly.
-    role_to_agent = await provision_fleet(
-        db,
-        company=company,
-        specs=_fleet_specs(_as_dicts(org.get("agents"), "role")),
-        total_budget_cents=budget.limit_cents,
-    )
+    # ── Spin up the functions (RFC 0002: function-first, else LLM org design) ──
+    recommended = [k for k in (plan.get("recommended_functions") or []) if isinstance(k, str)]
+    picked = function_catalog.picked_selectable(recommended)
+    cost_estimate: int | None = None
+    if picked:
+        # Function-first: the recommended building blocks ARE the fleet. GalaxiaOS
+        # spins up each one's component in-house (oversight appended), so no second
+        # LLM call and no third-party signup for the native functions.
+        set_progress(
+            company.id, phase="org", pct=60, message="Spinning up the functions you need"
+        )
+        role_to_agent = await provision_fleet(
+            db, company=company,
+            specs=function_catalog.resolve_selection(picked),
+            total_budget_cents=budget.limit_cents,
+        )
+    else:
+        # Fallback: no recommended functions → today's LLM org designer.
+        set_progress(company.id, phase="org", pct=55, message="Designing the agent fleet")
+        org_input = json.dumps(
+            {
+                "mission": mission.raw_text,
+                "objectives": plan.get("objectives", []),
+                "monthly_budget_cents": budget.limit_cents,
+            },
+            ensure_ascii=False,
+        )
+        org_resp = await meter.run_llm(
+            provider,
+            api_key=api_key,
+            company_id=company.id,
+            agent_id=None,
+            task_id=None,
+            model=planner_model,
+            system=PLAN_TO_ORG_SYSTEM + generation_language_directive(language),
+            messages=[Message(role="user", content=org_input)],
+            max_tokens=gen_max_tokens,
+            json_schema=PLAN_TO_ORG_SCHEMA,
+            funding_user_id=funding_user_id,
+        )
+        org = _parse_llm_json(org_resp)
+        cost_estimate = _as_int(org.get("monthly_cost_estimate_cents"), None)
+        role_to_agent = await provision_fleet(
+            db,
+            company=company,
+            specs=_fleet_specs(_as_dicts(org.get("agents"), "role")),
+            total_budget_cents=budget.limit_cents,
+        )
+    set_progress(company.id, phase="wiring", pct=80, message="Wiring the org chart")
 
     # ── Investment review (best-effort; never breaks generation) ──────────────
     investor_reviews = 0
@@ -739,9 +752,13 @@ async def generate(db: AsyncSession, *, company: Company) -> dict:
             _log.exception("investment review failed for company %s", company.id)
 
     return {
-        "cost_estimate_cents": _as_int(org.get("monthly_cost_estimate_cents"), None),
+        "cost_estimate_cents": cost_estimate,
         "agent_roles": list(role_to_agent.keys()),
         "investor_reviews": investor_reviews,
+        # Function-first picks + the external ones the founder must connect (billing →
+        # Stripe); in-house blocks need nothing. Empty on the LLM-org fallback path.
+        "functions": picked,
+        "functions_needing_connection": function_catalog.external_functions(picked),
     }
 
 

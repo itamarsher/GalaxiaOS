@@ -53,12 +53,33 @@ def test_health_signals_define_the_improvement_target():
     assert fc.health_signals("unknown-key") == ()
 
 
-def test_spec_for_is_provision_fleet_shaped():
+def test_spec_for_is_provision_fleet_shaped_and_carries_function_config():
     spec = fc.spec_for("website")
     assert spec["role"] == "custom"
     assert spec["name"] == "Web Presence & Conversion"
     assert spec["autonomy_level"] == "approve_required"
-    assert spec["responsibility"]
+    # Health target is baked into the prompt AND carried structurally in config.
+    assert "signup_conversion_rate" in spec["responsibility"]
+    assert spec["config"]["function"] == "website"
+    assert spec["config"]["implementation"] == "in_house"
+    assert "signup_conversion_rate" in spec["config"]["health_signals"]
+
+
+def test_external_block_prompt_and_helpers():
+    # billing is the external archetype: its spec says so, and it's the only pick
+    # surfaced for connection.
+    assert "external provider" in fc.spec_for("billing")["responsibility"]
+    assert fc.external_functions(["website", "billing", "bogus"]) == ["billing"]
+    assert fc.external_functions(["website", "social"]) == []
+
+
+def test_recommendation_directive_and_picked_selectable():
+    directive = fc.recommendation_directive()
+    assert "recommended_functions" in directive
+    assert "- website:" in directive and "- outbound:" in directive
+    assert "- ceo:" not in directive  # oversight is never in the recommendable list
+    # picked_selectable keeps recognized selectable keys, drops oversight + unknown.
+    assert fc.picked_selectable(["website", "ceo", "bogus", "website"]) == ["website"]
 
 
 def test_resolve_selection_dedupes_drops_bogus_and_always_adds_oversight():

@@ -166,21 +166,78 @@ def health_signals(key: str) -> tuple[str, ...]:
     return fn.health_signals if fn else ()  # unknown key → no target
 
 
+def function_config(fn: BusinessFunction) -> dict:
+    """Per-function metadata to persist on the provisioned agent's ``config`` (JSONB).
+
+    Lets the improvement cycle (slice 3) recover which function an agent staffs and
+    its health target without a schema change, and marks `external` blocks so the
+    connect-prompt can find them after launch."""
+    return {
+        "function": fn.key,
+        "implementation": fn.implementation,
+        "health_signals": list(fn.health_signals),
+        "default_skills": list(fn.default_skills),
+    }
+
+
+def _responsibility_for(fn: BusinessFunction) -> str:
+    """The staffing agent's system-prompt seed, with its health target baked in.
+
+    Anchoring the health signals (and, for `external` blocks, the connected-provider
+    note) into the prompt is what makes the agent operate toward its KPIs from day one."""
+    text = fn.responsibility
+    if fn.health_signals:
+        text += ("\n\nYour health metrics — what \"improving\" means for this function: "
+                 + ", ".join(fn.health_signals) + ".")
+    if fn.implementation == "external":
+        text += (" This function runs on a connected external provider; coordinate that "
+                 "connection before operating.")
+    return text
+
+
 def spec_for(key: str) -> dict:
     """A ``provision_fleet``-compatible spec for one block (raises ``KeyError`` if unknown).
 
     The seam where "GalaxiaOS spins up the component" maps onto existing
     org-provisioning: the dict is shaped exactly like the org-designer /
-    ``_DEFAULT_FLEET`` entries ``onboarding.provision_fleet`` consumes, so a
-    founder's pick provisions through one code path.
+    ``_DEFAULT_FLEET`` entries ``onboarding.provision_fleet`` consumes (plus a
+    ``config`` blob it now passes through), so a founder's pick provisions through
+    one code path — carrying the function's identity, health target, and skills.
     """
     fn = _BY_KEY[key]
     return {
         "role": fn.role.value,
         "name": fn.title,
-        "responsibility": fn.responsibility,
+        "responsibility": _responsibility_for(fn),
         "autonomy_level": "approve_required",
+        "config": function_config(fn),
     }
+
+
+def external_functions(keys: list[str]) -> list[str]:
+    """Which selected keys need a connected provider (not in-house) — the connect-prompt.
+
+    In-house-first means most functions need nothing; only ``external`` blocks (e.g.
+    billing → Stripe) are surfaced for the founder to connect. Core/unknown ignored."""
+    return [k for k in keys if (fn := _BY_KEY.get(k)) is not None and not fn.core
+            and fn.implementation == "external"]
+
+
+def recommendation_directive() -> str:
+    """Prompt block telling the mission→plan LLM to recommend functions from the catalog.
+
+    Appended to ``MISSION_TO_PLAN_SYSTEM`` at call time so the catalog stays the one
+    source of the vocabulary. In-house-first is stated so the model prefers native
+    blocks and only reaches for an `external` one (billing) when the business needs it."""
+    lines = "\n".join(f"- {f.key}: {f.summary}" for f in selectable_functions())
+    return (
+        "\n\nAlso return \"recommended_functions\": an array of catalog keys for the "
+        "building blocks THIS mission needs, most important first. Keep it in-house "
+        "first — prefer the native blocks below; only add \"billing\" when the business "
+        "must charge customers itself. Do NOT list oversight "
+        "(ceo/governance/auditor/data/platform); it is always added automatically.\n"
+        "Catalog:\n" + lines
+    )
 
 
 def resolve_selection(keys: list[str]) -> list[dict]:
@@ -205,3 +262,16 @@ def resolve_selection(keys: list[str]) -> list[dict]:
             seen.add(fn.key)
             ordered.append(fn.key)
     return [spec_for(key) for key in ordered]
+
+
+def picked_selectable(keys: list[str]) -> list[str]:
+    """The recognized selectable keys among ``keys`` (drops unknown + oversight).
+
+    Onboarding uses this to decide the function-first path: any selectable pick →
+    provision from the catalog; none → fall back to the LLM org designer."""
+    out: list[str] = []
+    for key in keys:
+        fn = _BY_KEY.get(key)
+        if fn is not None and not fn.core and key not in out:
+            out.append(key)
+    return out

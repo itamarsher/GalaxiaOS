@@ -40,14 +40,22 @@ provision specs and **always appends the guaranteed oversight blocks** (CEO,
 governance, auditor, data, platform), so any selection still launches a governed
 company. `GET /functions/catalog` exposes it (`api/functions.py`).
 
-## 2. Function-first onboarding (slice 2)
+## 2. Function-first onboarding (slice 2 — backend landed)
 
-Add a **function-selection** step: render the catalog, pre-check the LLM's
-`recommended_functions`, let the founder toggle. Launch provisions via
-`provision_fleet(specs=resolve_selection(keys), …)` — one path, oversight
-guaranteed — and **seeds each function's health KRs** from `health_signals`. Only
-`external` blocks prompt to connect a provider (via `is_in_house`); in-house blocks
-need nothing. No selection → today's LLM-designed fleet: additive, not a cutover.
+**Landed:** the mission→plan LLM now emits `recommended_functions`
+(`recommendation_directive` appends the catalog vocabulary, in-house-first). When a
+mission recommends any selectable block, `generate` provisions the fleet from the
+catalog via `provision_fleet(specs=resolve_selection(picked), …)` — one path,
+oversight guaranteed, **no second org-design LLM call** — and each function-agent
+carries its identity + health target in `Agent.config` (JSONB, no migration) with
+the health signals baked into its system prompt. `external` picks (billing) are
+returned as `functions_needing_connection` for the connect-prompt; in-house blocks
+need nothing. No recommendation → today's LLM org designer (additive, not a cutover).
+
+**Remaining (slice 2b):** the founder-facing picker UI (toggle the pre-checked
+recommendations — the provisioned function-agents already *are* the editable
+selection), and seeding formal `KeyResult` rows from `health_signals` once targets
+exist (today the target lives on the agent).
 
 ## 3. The continuous per-function improvement cycle (slice 3)
 

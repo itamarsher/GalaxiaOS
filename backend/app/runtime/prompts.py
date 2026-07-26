@@ -600,7 +600,8 @@ concise operating plan. Respond ONLY with minified JSON matching this shape:
   "objectives": [
     {"title": "...", "rationale": "...", "priority": 1,
      "key_results": [{"metric": "...", "target_value": 1000, "unit": "USD"}]}
-  ]
+  ],
+  "recommended_functions": ["website", "outbound"]
 }
 EARLY-SIGNAL / LEAD CAPTURE — best practice on ABOS. Validate demand before heavy
 building. Unless the mission already has proven demand, make ONE early objective about
@@ -694,6 +695,8 @@ MISSION_TO_PLAN_SCHEMA: dict = {
                 },
             },
         },
+        # RFC 0002: the catalog keys of the building blocks this mission needs.
+        "recommended_functions": {"type": "array", "items": {"type": "string"}},
     },
 }
 
