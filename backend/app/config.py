@@ -614,9 +614,10 @@ class Settings(BaseSettings):
     # underperforming from real skill-usage outcomes, then proposes validation-gated,
     # bounded edits — filed as issues into the same triage→implement→CI→auto-merge
     # pipeline a capability request uses, so a validated skill edit reviews-and-merges
-    # itself. Opt-in (defaults OFF) because it edits the skill library autonomously;
-    # runs on the platform company only, and no-ops without an LLM + tracker.
-    skill_optimize_enabled: bool = False
+    # itself. On by default; runs on the platform company only and no-ops without an
+    # LLM + tracker, and every edit still passes an independent validation gate before
+    # it's proposed. This is what lets RFC 0002 cross-company learning ship fixes.
+    skill_optimize_enabled: bool = True
     skill_optimize_minute: int = 47  # once/hour at :47 (offset from the other crons)
     skill_optimize_batch: int = 3  # candidate skills examined per tick (budget cap)
     skill_optimize_window_days: int = 14  # outcome window the signal aggregates over
