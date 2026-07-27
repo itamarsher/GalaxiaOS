@@ -67,7 +67,8 @@ table, so a plain Postgres without the `vector` extension is enough. Example:
 export ABOS_TEST_DATABASE_URL="postgresql+asyncpg://postgres@/testdb?host=/tmp&port=5599"
 ```
 
-## Deploys are manual
+## Deploys are automatic
 
-Render `autoDeploy` is off on `abos-api`, so a merge to `main` does **not** ship.
-Trigger the deploy explicitly after a merge when a change needs to go live.
+Render `autoDeploy` is **on** for `abos-api`, so a merge to `main` **ships**. Treat a
+merge as a release: make sure a change is safe to run in production before merging
+(new runtime behind a flag, migrations applied, etc.).

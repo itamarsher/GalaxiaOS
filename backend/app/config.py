@@ -380,15 +380,16 @@ class Settings(BaseSettings):
     # Continuous operation: a recurring "business cycle" re-wakes the org.
     business_cycle_enabled: bool = True
     business_cycle_hour_utc: int = 12
-    # RFC 0002 slice 3 — the per-function improvement cycle. When enabled, an hourly
+    # RFC 0002 slice 3 — the per-function improvement cycle. On by default: an hourly
     # cron assesses each function against its real health signals and, for an idle
     # company with off-track functions, kicks a CEO improvement run to close the gap.
-    function_improvement_enabled: bool = False
+    # Inert for companies without function-provisioned agents (assess finds nothing).
+    function_improvement_enabled: bool = True
     function_improve_minute: int = 37  # once/hour at :37 (offset from the other crons)
     # RFC 0002 — auto-capture health signals from connected/internal data (CRM,
-    # runway) + agent reputation, and refresh the KR board. Opt-in; feeds the
-    # improvement cycle so KPIs populate without hand-entry.
-    signal_capture_enabled: bool = False
+    # runway) + agent reputation, and refresh the KR board. On by default; only
+    # records where data exists, so it feeds the cycle without hand-entry.
+    signal_capture_enabled: bool = True
     signal_capture_minute: int = 22  # once/hour at :22 (offset; ahead of :37 improve)
     # Keep the org working without waiting for the daily cron: when a run finishes
     # (every task terminal, nothing awaiting the founder), automatically start the
@@ -625,10 +626,11 @@ class Settings(BaseSettings):
     skill_optimize_gate_min_margin: int = 1  # candidate must beat current by ≥ this to propose
     skill_optimize_gate_auto_margin: int = 3  # ≥ this gate margin → auto path; else flag for a human
     skill_optimize_model: str = ""  # empty → the provider's planner-tier default
-    # RFC 0002 slice 4 — cross-company function learning. When on, the skill-optimizer
-    # also prioritizes the playbooks of functions lagging across companies, so a fix
-    # propagates to everyone running that function. Rides the skill-optimize cron.
-    function_learning_enabled: bool = False
+    # RFC 0002 slice 4 — cross-company function learning. On by default: the
+    # skill-optimizer also prioritizes the playbooks of functions lagging across
+    # companies, so a fix propagates to everyone running that function. Rides the
+    # skill-optimize cron (itself opt-in), so this is inert until that runs.
+    function_learning_enabled: bool = True
     function_learning_min_adoption: int = 1  # min companies staffing a function to weigh it
     # Labels put on a high-confidence proposal so it enters the auto-merge pipeline.
     # NoDecode + the validator below accept a plain comma-separated env string.
