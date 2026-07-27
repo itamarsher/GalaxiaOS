@@ -55,6 +55,7 @@ CATEGORY_FOLDERS: dict[FileCategory, str] = {
     FileCategory.inbox: "Inbox",
     FileCategory.communications: "Communications",
     FileCategory.knowledge: "Knowledge",
+    FileCategory.code: "Code",
 }
 
 #: Extension → MIME for the handful of text formats agents produce.

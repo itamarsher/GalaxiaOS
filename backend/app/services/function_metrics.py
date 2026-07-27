@@ -41,6 +41,10 @@ SIGNAL_META: dict[str, tuple[str, bool, float | None]] = {
     "csat": ("score", False, 0.9),
     "first_response_time": ("hours", True, 4),
     "churn_rate": ("ratio", True, 0.05),
+    # engineering (RFC 0003)
+    "code_tasks_shipped": ("tasks/mo", False, None),
+    "ci_pass_rate": ("ratio", False, 0.9),
+    "review_turnaround_hours": ("hours", True, 24),
     # legal
     "contracts_reviewed": ("contracts", False, None),
     "compliance_issues_open": ("issues", True, 0),

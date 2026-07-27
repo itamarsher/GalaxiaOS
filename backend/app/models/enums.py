@@ -360,3 +360,4 @@ class FileCategory(str, enum.Enum):
     inbox = "inbox"  # noteworthy files received via external channels
     communications = "communications"  # outbound comms log (e.g. emails sent)
     knowledge = "knowledge"  # other knowledge to retain in external storage
+    code = "code"  # git-bundle repos for the coding function (RFC 0003; binary blobs)

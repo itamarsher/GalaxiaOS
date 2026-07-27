@@ -12,7 +12,7 @@ from app.services import function_catalog as fc
 def test_catalog_covers_named_blocks_and_maps_to_real_roles():
     keys = {f.key for f in fc.all_functions()}
     for expected in ("website", "social", "outbound", "inbound", "brand",
-                     "customer_service", "legal", "finance"):
+                     "customer_service", "legal", "finance", "engineering"):
         assert expected in keys
     for fn in fc.all_functions():
         assert isinstance(fn.role, AgentRole)
