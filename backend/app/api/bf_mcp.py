@@ -41,7 +41,12 @@ _PROTOCOL_VERSION = "2025-06-18"
 _SERVER_INFO = {"name": "abos-business-function", "version": "0.1.0"}
 
 # Category values exposed to file tools (communications is an internal-only log).
-_FILE_CATEGORIES = [c.value for c in FileCategory if c != FileCategory.communications]
+# Categories a worker may write/list as text files. Communications is a system log;
+# code holds binary git bundles handled by the repo tools (RFC 0003), not save_file.
+_FILE_CATEGORIES = [
+    c.value for c in FileCategory
+    if c not in (FileCategory.communications, FileCategory.code)
+]
 
 # The tools the surface exposes to a connected worker.
 _TOOL_SPECS = [
@@ -222,6 +227,42 @@ _TOOL_SPECS = [
         },
     },
     {
+        "name": "list_repos",
+        "description": "List the code repositories this company holds (RFC 0003). Each is a "
+        "git bundle on the company file store — full history in one file, no git server or "
+        "GitHub. Returns name, head ref, and size.",
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "get_repo",
+        "description": "Fetch a repo's canonical git bundle (base64) so you can `git clone` it "
+        "locally, work, and push back. Returns exists=false with an empty bundle for a new repo "
+        "— start it with `git init` and push the first bundle. Coding function only.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"repo": {"type": "string", "description": "Repo name, e.g. 'product'."}},
+            "required": ["repo"],
+        },
+    },
+    {
+        "name": "push_repo",
+        "description": "Push a new canonical git bundle for a repo (base64), after doing the work "
+        "in your sandbox and `git bundle create`. Include the `git diff` as the reviewable "
+        "artifact. Governance: when your function needs approval, call request_decision with the "
+        "diff FIRST and push only once the founder approves. Overwrites the canonical bundle.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "repo": {"type": "string"},
+                "bundle_b64": {"type": "string", "description": "The new git bundle, base64-encoded."},
+                "head": {"type": "string", "description": "The branch/ref you bundled, e.g. 'main'."},
+                "diff": {"type": "string", "description": "The unified diff of this change (for the record)."},
+                "summary": {"type": "string", "description": "One line: what changed and why."},
+            },
+            "required": ["repo", "bundle_b64"],
+        },
+    },
+    {
         "name": "review_backlog",
         "description": "OPERATOR ONLY. Review the cross-company demand backlog (open bugs + "
         "capability requests, most-demanded first) to decide what to file as a tracker issue. "
@@ -307,6 +348,89 @@ def _error(mid, code: int, message: str) -> dict:
 
 def _content(payload: dict) -> dict:
     return {"content": [{"type": "text", "text": json.dumps(payload)}]}
+
+
+def _tool_error(mid, text: str) -> dict:
+    """An MCP tool-level error the worker sees as isError (not a JSON-RPC fault)."""
+    return _ok(mid, {"content": [{"type": "text", "text": text}], "isError": True})
+
+
+async def _handle_repo_tool(db, company_id, agent_id, mid, name: str, args: dict) -> dict:
+    """The RFC 0003 repo tools — bundle-backed repos on the company file store.
+
+    ``get_repo`` / ``push_repo`` move opaque git bundles (base64) between the worker's
+    sandbox and the file store; ``list_repos`` enumerates them. Tenant-scoped by the
+    connection token like every other tool; no git runs here.
+    """
+    from app.integrations.files import FileProviderAuthError, FileProviderError
+    from app.models import Company
+    from app.models.enums import MemoryType
+    from app.services import memory as memory_svc
+    from app.services import repo as repo_svc
+    from app.services.integrations import (
+        clear_file_provider_credential,
+        resolve_file_provider,
+    )
+
+    if name == "list_repos":
+        repos = await repo_svc.list_repos(db, company_id=company_id)
+        return _ok(mid, _content({"repos": repos, "count": len(repos)}))
+
+    provider = await resolve_file_provider(db, company_id=company_id)
+    if provider is None:
+        return _tool_error(mid, "No file store is connected — code repos need one. Ask the "
+                           "founder to connect Google Drive in Settings.")
+    try:
+        repo = repo_svc.normalize_name(str(args.get("repo") or ""))
+    except repo_svc.RepoError as exc:
+        return _tool_error(mid, str(exc))
+
+    try:
+        if name == "get_repo":
+            content = await repo_svc.load_bundle(db, provider, company_id=company_id, repo=repo)
+            if content is None:
+                return _ok(mid, _content({"repo": repo, "exists": False, "bundle_b64": ""}))
+            return _ok(mid, _content({
+                "repo": repo, "exists": True,
+                "bundle_b64": repo_svc.encode_bundle(content),
+            }))
+
+        # push_repo
+        company = await db.get(Company, company_id)
+        if company is None:  # pragma: no cover
+            return _tool_error(mid, "company not found.")
+        content = repo_svc.decode_bundle(str(args.get("bundle_b64") or ""))
+        if not content:
+            return _tool_error(mid, "empty bundle; nothing to push.")
+        row = await repo_svc.save_bundle(
+            db, provider, company=company, repo=repo, content=content,
+            head=str(args.get("head") or "").strip() or None,
+            note=str(args.get("summary") or "").strip() or None,
+        )
+        # Breadcrumb the change + its diff so the push is auditable and recallable.
+        # Best-effort: a memory failure must never fail the code push.
+        diff = str(args.get("diff") or "").strip()
+        summary = str(args.get("summary") or "").strip() or "code change"
+        try:
+            async with db.begin_nested():
+                await memory_svc.write(
+                    db, company_id=company_id, type=MemoryType.result,
+                    title=f"Pushed to repo {repo}: {summary}"[:500],
+                    content=(f"{summary}\n\n{diff}" if diff else summary)[:8000],
+                )
+        except Exception:  # noqa: BLE001 — audit breadcrumb is non-critical
+            pass
+        await db.commit()
+        return _ok(mid, _content({"ok": True, "repo": repo, "path": f"{row.folder_path}/{row.name}"}))
+    except repo_svc.RepoError as exc:
+        return _tool_error(mid, str(exc))
+    except FileProviderAuthError:
+        await clear_file_provider_credential(db, company_id=company_id)
+        await db.commit()
+        return _tool_error(mid, "Google Drive disconnected — the stored credential expired or "
+                           "was revoked. Ask the founder to reconnect it in Settings.")
+    except FileProviderError as exc:
+        return _tool_error(mid, f"repo operation failed: {exc}")
 
 
 @router.post("/connect/business-function")
@@ -643,6 +767,9 @@ async def _call_tool(db, company_id, agent_id, mid, params: dict) -> dict:
             return _ok(mid, _content(
                 {"name": row.name, "content": clip(text, DEFAULT_MAX_OBSERVATION_CHARS)}
             ))
+
+        if name in ("list_repos", "get_repo", "push_repo"):
+            return await _handle_repo_tool(db, company_id, agent_id, mid, name, args)
 
         # ── operator-only bug lifecycle (parity with the native platform tools) ──
         # Same services + the same operator gate the native agent tools use, so the

@@ -681,6 +681,11 @@ class Settings(BaseSettings):
     openclaw_model: str = ""
     openclaw_timeout_seconds: float = 120.0
 
+    # RFC 0003 — the coding function's repos are git bundles on the file store. Cap
+    # the bundle size a connected worker may push/pull over MCP (base64 over JSON),
+    # so a runaway repo can't blow up a request. 50 MB default.
+    repo_max_bundle_bytes: int = 50_000_000
+
     # Default runtime binding for a newly *generated* functional agent (RFC 0001
     # §5 — the batteries-included, same-day binding). "native" runs the in-process
     # loop; "external" auto-binds each generated function to the managed OpenClaw
