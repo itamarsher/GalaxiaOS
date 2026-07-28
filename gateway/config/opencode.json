@@ -1,0 +1,14 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "galaxia": {
+      "type": "remote",
+      "url": "{env:GALAXIA_MCP_URL}",
+      "enabled": true,
+      "headers": {
+        "Authorization": "Bearer {env:GALAXIA_FUNCTION_TOKEN}"
+      }
+    }
+  },
+  "instructions": ["opencode-galaxia-coding.md"]
+}

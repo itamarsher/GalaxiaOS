@@ -80,3 +80,48 @@ to one agent, set `ABOS_OPENCLAW_MODEL=openclaw/default`.
 `docker compose --profile gateway up` runs it on the compose network with **no
 published port** (reachable only at `http://openclaw:18789`). Set
 `OPENCLAW_GATEWAY_TOKEN` + `ANTHROPIC_API_KEY` in your `.env`.
+
+---
+
+# Connect opencode as a coding function (pull / BYO-runtime)
+
+The Gateway above is the **push** posture (Galaxia calls *out* to a worker). A
+coding function fits the **pull** posture instead: an external
+[opencode](https://opencode.ai) agent connects *out* to Galaxia's Business-Function
+MCP, pulls its initiatives, and does the work in its **own sandbox** — so there is
+**zero opencode-specific code in Galaxia** (RFC 0003). The repo is a git *bundle* on
+the company file store; opencode never touches a git server or GitHub.
+
+`config/opencode.json` is a ready template — an opencode client config that
+registers Galaxia's MCP endpoint as a remote server, with the coding loop in
+`config/opencode-galaxia-coding.md`.
+
+## Turn it on
+
+1. **Provision the function.** Launch a company with the **Engineering** function
+   (RFC 0002 picker), so it has a coding agent to bind to.
+2. **Mint a connection token** (founder-only). Requires
+   `ABOS_FUNCTION_CONNECTION_SECRET` set on `abos-api`:
+   ```sh
+   curl -X POST \
+     "$ABOS_API/companies/$COMPANY_ID/functions/$AGENT_ID/connection" \
+     -H "Authorization: Bearer $FOUNDER_JWT"
+   # → { "function": "custom", "token": "…", "mcp_url": ".../connect/business-function" }
+   ```
+   The token binds to exactly `(company, function)`; a leak's blast radius is one
+   function of one company.
+3. **Point opencode at it.** Drop `config/opencode.json` +
+   `config/opencode-galaxia-coding.md` in the agent's project, and set the two env
+   vars the template reads (secrets stay out of the file):
+   ```sh
+   export GALAXIA_MCP_URL="<mcp_url from step 2>"
+   export GALAXIA_FUNCTION_TOKEN="<token from step 2>"
+   opencode
+   ```
+4. **Run it on a cadence.** opencode pulls `get_next_initiative`, fetches the repo
+   with `get_repo`, works, and pushes back with `push_repo` — driving the loop in
+   `opencode-galaxia-coding.md`. Schedule it (cron / opencode's own automation) so
+   the function keeps claiming and reporting initiatives.
+
+Any MCP-capable coding runtime (Claude Code, …) connects the same way — the
+template just names opencode. Governance, budget, and the repo stay Galaxia's.

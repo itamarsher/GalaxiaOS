@@ -54,6 +54,11 @@ mandate + initiative, calls `get_repo` for the bundle, does the work in its own
 sandbox, and calls `push_repo` (after a `request_decision` review when governance
 requires it). The same surface works for any MCP-capable coding runtime.
 
+A ready template ships in `gateway/config/opencode.json` (registers the MCP
+endpoint as a remote server; secrets via `{env:…}`) + `opencode-galaxia-coding.md`
+(the coding loop). See `gateway/README.md` → *Connect opencode as a coding
+function* for the mint-token → connect flow.
+
 ## What lands in slice 1 (this PR)
 
 - **`services/repo.py`** — the bundle repo store over `FileProvider`: `save_bundle`
