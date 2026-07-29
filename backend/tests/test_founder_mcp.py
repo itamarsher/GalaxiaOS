@@ -224,6 +224,71 @@ async def test_setup_tools_arm_gates_key_and_comms(session_factory, monkeypatch)
 
 
 @requires_db
+async def test_connect_storage_over_mcp(session_factory, monkeypatch):
+    """connect_storage verifies a Drive refresh token and stores it, so an agent can
+    satisfy the launch storage prerequisite without an in-app OAuth redirect."""
+    settings.master_key = base64.urlsafe_b64encode(os.urandom(32)).decode()
+    settings.google_oauth_client_id = "cid"
+    settings.google_oauth_client_secret = "csecret"
+
+    verified: list = []
+
+    async def _verify_ok(*, client_id, client_secret, refresh_token, root_folder_id="root"):
+        verified.append((refresh_token, root_folder_id))
+
+    monkeypatch.setattr(fm.integrations_svc, "verify_google_drive", _verify_ok)
+
+    async with session_factory() as db:
+        uid = await _user(db)
+        await db.commit()
+    async with session_factory() as db:
+        cid = _payload(
+            await fm._call_tool(
+                db, uid, 1,
+                {"name": "create_company",
+                 "arguments": {"mission_text": "Maintain OSS forks", "budget_cents": 5000}},
+            )
+        )["company_id"]
+
+    # Missing token → clean arg error, nothing stored.
+    async with session_factory() as db:
+        r = await fm._call_tool(
+            db, uid, 2, {"name": "connect_storage", "arguments": {"company_id": cid}}
+        )
+        assert "error" in r
+
+    # Happy path: token verified + stored (encrypted), only a boolean returned.
+    async with session_factory() as db:
+        r = await fm._call_tool(
+            db, uid, 3,
+            {"name": "connect_storage",
+             "arguments": {"company_id": cid, "refresh_token": "rt-secret", "root_folder_id": "fld1"}},
+        )
+        p = _payload(r)
+        assert p["connected"] is True and p["storage_resolves"] is True
+        assert "rt-secret" not in json.dumps(p)  # token never echoed
+    assert verified == [("rt-secret", "fld1")]  # it was actually verified before storing
+
+    async with session_factory() as db:
+        bundle = await fm.integrations_svc.get_google_drive(db, company_id=uuid.UUID(cid))
+        assert bundle and bundle["refresh_token"] == "rt-secret"
+        assert bundle["root_folder_id"] == "fld1"
+
+    # A rejected token surfaces as a JSON-RPC error, not a 500.
+    async def _verify_bad(*, client_id, client_secret, refresh_token, root_folder_id="root"):
+        raise fm.FileProviderError("bad token")
+
+    monkeypatch.setattr(fm.integrations_svc, "verify_google_drive", _verify_bad)
+    async with session_factory() as db:
+        r = await fm._call_tool(
+            db, uid, 4,
+            {"name": "connect_storage",
+             "arguments": {"company_id": cid, "refresh_token": "nope"}},
+        )
+        assert "error" in r and "rejected" in r["error"]["message"]
+
+
+@requires_db
 async def test_function_health_and_retarget_over_mcp(session_factory):
     from app.services import function_catalog as fc
     from app.services import function_health as fh

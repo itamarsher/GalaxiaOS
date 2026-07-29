@@ -299,6 +299,41 @@ async def clear_file_provider_credential(db: AsyncSession, *, company_id: uuid.U
         return cleared
 
 
+def managed_store_configured() -> bool:
+    """Whether the deployment has a platform-managed default file store set."""
+    from app.config import settings
+
+    return bool(
+        settings.r2_account_id
+        and settings.r2_access_key_id
+        and settings.r2_secret_access_key
+        and settings.r2_bucket
+    )
+
+
+def managed_store_provider(company_id: uuid.UUID) -> FileProvider | None:
+    """The platform-managed default store scoped to one company, or ``None`` if unset.
+
+    One platform-owned bucket serves every company; each is isolated under its own
+    ``companies/<id>/`` key prefix (by company **id**, so name collisions can't cross
+    tenants). This is the storage analogue of managed LLM mode — a founder's own
+    connected store always takes precedence in :func:`resolve_file_provider`.
+    """
+    if not managed_store_configured():
+        return None
+    from app.config import settings
+    from app.integrations.s3 import S3FileProvider
+
+    return S3FileProvider(
+        account_id=settings.r2_account_id,
+        access_key_id=settings.r2_access_key_id,
+        secret_access_key=settings.r2_secret_access_key,
+        bucket=settings.r2_bucket,
+        endpoint=settings.r2_endpoint or None,
+        root_prefix=f"companies/{company_id}/",
+    )
+
+
 async def resolve_file_provider(db: AsyncSession, *, company_id: uuid.UUID) -> FileProvider | None:
     """The company's file store — enabled when the founder has connected Google Drive.
 
@@ -321,7 +356,9 @@ async def resolve_file_provider(db: AsyncSession, *, company_id: uuid.UUID) -> F
         # Legacy: a Drive connected per-company on another of the founder's companies.
         creds = await _owner_google_drive(company_id)
     if creds is None:
-        return None
+        # No founder-owned store: fall back to the platform-managed default (if any),
+        # so a company launches with a working file store and zero setup of its own.
+        return managed_store_provider(company_id=company_id)
     from app.config import settings
     from app.integrations.gdrive import GoogleDriveFileProvider
 
