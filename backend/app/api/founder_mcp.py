@@ -664,6 +664,7 @@ async def _call_tool(db, user_id: uuid.UUID, mid, params: dict) -> dict:
                 _content(
                     {
                         "storage_resolves": provider is not None,
+                        "managed_default_available": integrations_svc.managed_store_configured(),
                         "connect_available": status_out.get("connect_available"),
                         "connect_hint": (
                             None

@@ -123,6 +123,21 @@ class Settings(BaseSettings):
     # it at ``anthropic`` (or any supported provider) if you'd rather fund Claude.
     platform_llm_provider: str = "openrouter"
     platform_llm_api_key: str = ""
+    # ── Managed default file store (Cloudflare R2 / any S3-compatible) ──────
+    # The storage twin of managed mode: when these are set the deployment owns
+    # ONE bucket and every company gets a working file store at launch with zero
+    # setup of its own, isolated under a per-company key prefix (companies/<id>/).
+    # A founder's own connected Drive/store always wins over this default. All
+    # four must be set for the managed store to be active; empty => no default
+    # store (companies must connect their own, as before). Cloudflare R2's S3 API
+    # is the reference target (endpoint derived from the account id); point
+    # ``r2_endpoint`` elsewhere for another S3-compatible host.
+    r2_account_id: str = ""
+    r2_access_key_id: str = ""
+    r2_secret_access_key: str = ""
+    r2_bucket: str = ""
+    r2_endpoint: str = ""  # optional override; default https://<account>.r2.cloudflarestorage.com
+
     # Per-founder lifetime free allowance of platform-funded spend (cents). Once
     # a founder's cumulative platform spend crosses this, managed capabilities
     # stop for them until they add their own key or upgrade to paid managed.
