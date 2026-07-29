@@ -27,6 +27,7 @@ from sqlalchemy import func, select
 from app.config import settings
 from app.db import set_tenant
 from app.deps import CurrentUser, DbDep
+from app.integrations.files import FileProviderError
 from app.models import (
     Agent,
     Budget,
@@ -236,6 +237,29 @@ _TOOL_SPECS = [
             "type": "object",
             "properties": {"company_id": {"type": "string"}},
             "required": ["company_id"],
+        },
+    },
+    {
+        "name": "connect_storage",
+        "description": "Connect the company's file store over MCP by supplying a Google Drive "
+        "OAuth refresh token (obtained once via Google consent). Verifies the token actually "
+        "reaches Drive, then stores it envelope-encrypted — satisfying the storage prerequisite "
+        "for launch_company without an in-app browser redirect. Optional 'root_folder_id' scopes "
+        "where files are written (defaults to the Drive root). Never returns the token.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "company_id": {"type": "string"},
+                "refresh_token": {
+                    "type": "string",
+                    "description": "A Google Drive OAuth refresh token with drive.file scope.",
+                },
+                "root_folder_id": {
+                    "type": "string",
+                    "description": "Optional Drive folder id to scope writes under (default: root).",
+                },
+            },
+            "required": ["company_id", "refresh_token"],
         },
     },
     {
@@ -644,12 +668,42 @@ async def _call_tool(db, user_id: uuid.UUID, mid, params: dict) -> dict:
                         "connect_hint": (
                             None
                             if provider is not None
-                            else "A human founder connects Drive once at "
+                            else "Connect it agent-side by calling connect_storage with a Google "
+                            "Drive OAuth refresh_token, or a human founder connects Drive once at "
                             "/auth/google/drive/connect (account-wide) or in Settings → Integrations."
                         ),
                     }
                 ),
             )
+
+        if name == "connect_storage":
+            company = await _founder_company(db, user_id, args.get("company_id"))
+            refresh_token = str(args.get("refresh_token") or "").strip()
+            if not refresh_token:
+                return _error(mid, -32602, "refresh_token is required")
+            if not (settings.google_oauth_client_id and settings.google_oauth_client_secret):
+                return _error(
+                    mid,
+                    -32000,
+                    "this deployment has no Google OAuth app configured, so a Drive refresh "
+                    "token cannot be verified here",
+                )
+            raw_root = args.get("root_folder_id")
+            root_folder_id = str(raw_root).strip() if raw_root else None
+            try:
+                await integrations_svc.verify_google_drive(
+                    client_id=settings.google_oauth_client_id,
+                    client_secret=settings.google_oauth_client_secret,
+                    refresh_token=refresh_token,
+                    root_folder_id=root_folder_id or "root",
+                )
+            except FileProviderError as exc:
+                return _error(mid, -32000, f"drive credentials rejected: {exc}")
+            await integrations_svc.set_google_drive_refresh(
+                db, company_id=company.id, refresh_token=refresh_token, root_folder_id=root_folder_id
+            )
+            await db.commit()
+            return _ok(mid, _content({"connected": True, "storage_resolves": True}))
 
         if name == "launch_company":
             company = await _founder_company(db, user_id, args.get("company_id"))
