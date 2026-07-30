@@ -430,6 +430,61 @@ async def test_list_and_read_files_over_mcp(session_factory, monkeypatch):
         assert p["encoding"] == "utf-8" and p["content"].startswith("# ForkFlow outreach")
 
 
+def test_default_playbook_forbids_fabrication_and_premature_selling():
+    from app.runtime.prompts import DEFAULT_COMPANY_PLAYBOOK
+
+    p = DEFAULT_COMPANY_PLAYBOOK.lower()
+    assert "fabricate" in p  # anti-fabrication rule present
+    assert "pilot" in p and "mvp" in p  # no-sell-before-MVP rule
+    assert "inbound" in p  # inbound/product-led preference
+
+
+@requires_db
+async def test_delete_file_over_mcp(session_factory, monkeypatch):
+    """delete_file removes the tracking row and best-effort deletes the blob."""
+    from app.models import CompanyFile
+    from app.models.enums import FileCategory
+    from app.services import files as files_mod
+
+    deleted_keys: list = []
+
+    class _StubProvider:
+        async def delete_file(self, file_id):
+            deleted_keys.append(file_id)
+
+    async def _stub(db, *, company_id):
+        return _StubProvider()
+
+    monkeypatch.setattr(files_mod, "resolve_file_provider", _stub)
+
+    async with session_factory() as db:
+        u, company = await _active_company_with_founder(db)
+        f = CompanyFile(
+            company_id=company.id,
+            category=FileCategory.artifact,
+            name="dup.md",
+            mime_type="text/markdown",
+            folder_path=".galaxia/x",
+            provider="r2",
+            external_id="k1",
+            size_bytes=1,
+        )
+        db.add(f)
+        await db.flush()
+        await db.commit()
+        uid, cid, fid = u.id, str(company.id), str(f.id)
+
+    async with session_factory() as db:
+        r = await fm._call_tool(
+            db, uid, 1, {"name": "delete_file", "arguments": {"company_id": cid, "file_id": fid}}
+        )
+        assert _payload(r)["deleted"] is True
+
+    async with session_factory() as db:
+        assert await db.get(CompanyFile, uuid.UUID(fid)) is None  # row gone
+    assert deleted_keys == ["k1"]  # blob delete attempted
+
+
 @requires_db
 async def test_function_health_and_retarget_over_mcp(session_factory):
     from app.services import function_catalog as fc
