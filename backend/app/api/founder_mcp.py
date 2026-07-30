@@ -54,6 +54,7 @@ from app.services import (
     involvement,
     onboarding,
 )
+from app.services import artifacts as artifacts_svc
 from app.services import chat as chat_svc
 from app.services import company_reset as company_reset_svc
 from app.services import governance as gov
@@ -282,6 +283,48 @@ _TOOL_SPECS = [
             "type": "object",
             "properties": {"company_id": {"type": "string"}},
             "required": ["company_id"],
+        },
+    },
+    {
+        "name": "get_decision",
+        "description": "Read ONE founder decision in full — the complete, untruncated summary plus "
+        "its structured payload (e.g. the exact outbound message body, recipient, or proposed "
+        "spend). list_decisions truncates for the list view; use this to review the actual content "
+        "before you approve_decision / reject_decision (e.g. an outbound email awaiting comms approval).",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "company_id": {"type": "string"},
+                "decision_id": {"type": "string"},
+            },
+            "required": ["company_id", "decision_id"],
+        },
+    },
+    {
+        "name": "list_artifacts",
+        "description": "List the founder-facing deliverables agents have produced (reports, briefs, "
+        "positioning docs, drafts) — id, kind, title, and when. These are internal documents the "
+        "company saved for you; read one in full with read_artifact.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "company_id": {"type": "string"},
+                "limit": {"type": "integer", "description": "Max to return (default 50)."},
+            },
+            "required": ["company_id"],
+        },
+    },
+    {
+        "name": "read_artifact",
+        "description": "Read one deliverable in full (its markdown body) by id — e.g. a positioning "
+        "one-pager or a drafted piece of outbound material an agent saved as a report.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "company_id": {"type": "string"},
+                "artifact_id": {"type": "string"},
+            },
+            "required": ["company_id", "artifact_id"],
         },
     },
     {
@@ -799,6 +842,75 @@ async def _call_tool(db, user_id: uuid.UUID, mid, params: dict) -> dict:
                             }
                             for d in pending
                         ]
+                    }
+                ),
+            )
+
+        if name == "get_decision":
+            company = await _founder_company(db, user_id, args.get("company_id"))
+            try:
+                did = uuid.UUID(str(args["decision_id"]))
+            except (ValueError, TypeError):
+                return _error(mid, -32602, "invalid decision_id")
+            d = await db.get(DecisionRequest, did)
+            if d is None or d.company_id != company.id:
+                return _error(mid, -32000, "decision not found")
+            return _ok(
+                mid,
+                _content(
+                    {
+                        "id": str(d.id),
+                        "kind": d.kind.value,
+                        "status": d.status.value,
+                        "summary": d.summary or "",
+                        "payload": d.payload,
+                        "agent_id": str(d.agent_id) if d.agent_id else None,
+                        "created_at": d.created_at.isoformat() if d.created_at else None,
+                    }
+                ),
+            )
+
+        if name == "list_artifacts":
+            company = await _founder_company(db, user_id, args.get("company_id"))
+            rows = await artifacts_svc.list_artifacts(
+                db, company_id=company.id, limit=int(args.get("limit") or 50)
+            )
+            return _ok(
+                mid,
+                _content(
+                    {
+                        "artifacts": [
+                            {
+                                "id": str(a.id),
+                                "kind": a.kind,
+                                "title": a.title,
+                                "created_at": a.created_at.isoformat() if a.created_at else None,
+                            }
+                            for a in rows
+                        ]
+                    }
+                ),
+            )
+
+        if name == "read_artifact":
+            company = await _founder_company(db, user_id, args.get("company_id"))
+            try:
+                aid = uuid.UUID(str(args["artifact_id"]))
+            except (ValueError, TypeError):
+                return _error(mid, -32602, "invalid artifact_id")
+            a = await artifacts_svc.get_artifact(db, company_id=company.id, artifact_id=aid)
+            if a is None:
+                return _error(mid, -32000, "artifact not found")
+            return _ok(
+                mid,
+                _content(
+                    {
+                        "id": str(a.id),
+                        "kind": a.kind,
+                        "title": a.title,
+                        "body_md": a.body_md,
+                        "source_agent_id": str(a.source_agent_id) if a.source_agent_id else None,
+                        "created_at": a.created_at.isoformat() if a.created_at else None,
                     }
                 ),
             )
