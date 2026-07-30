@@ -381,6 +381,56 @@ async def test_get_decision_and_artifacts_over_mcp(session_factory):
 
 
 @requires_db
+async def test_list_and_read_files_over_mcp(session_factory, monkeypatch):
+    """Founder can list and read the documents agents save to the file store —
+    e.g. a drafted outreach sequence saved as a CompanyFile in the managed store."""
+    from app.models import CompanyFile
+    from app.models.enums import FileCategory
+
+    class _StubProvider:
+        async def download_file(self, file_id):
+            assert file_id == "r2-key-1"
+            return b"# ForkFlow outreach\n\nEmail 1 body..."
+
+    async def _stub_provider(db, *, company_id):
+        return _StubProvider()
+
+    monkeypatch.setattr(fm.integrations_svc, "resolve_file_provider", _stub_provider)
+
+    async with session_factory() as db:
+        u, company = await _active_company_with_founder(db)
+        db.add(
+            CompanyFile(
+                company_id=company.id,
+                category=FileCategory.artifact,
+                name="ForkFlow_AI_Outbound_Pilot_Outreach_Sequence.md",
+                mime_type="text/markdown",
+                folder_path=".galaxia/ForkFlow AI/Artifacts",
+                provider="r2",
+                external_id="r2-key-1",
+                size_bytes=42,
+            )
+        )
+        await db.commit()
+        uid, cid = u.id, str(company.id)
+
+    async with session_factory() as db:
+        r = await fm._call_tool(db, uid, 1, {"name": "list_files", "arguments": {"company_id": cid}})
+        assert any(f["name"].startswith("ForkFlow_AI_Outbound") for f in _payload(r)["files"])
+
+    # read_file by name → full decoded content from the provider
+    async with session_factory() as db:
+        r = await fm._call_tool(
+            db, uid, 2,
+            {"name": "read_file",
+             "arguments": {"company_id": cid,
+                           "name": "ForkFlow_AI_Outbound_Pilot_Outreach_Sequence.md"}},
+        )
+        p = _payload(r)
+        assert p["encoding"] == "utf-8" and p["content"].startswith("# ForkFlow outreach")
+
+
+@requires_db
 async def test_function_health_and_retarget_over_mcp(session_factory):
     from app.services import function_catalog as fc
     from app.services import function_health as fh

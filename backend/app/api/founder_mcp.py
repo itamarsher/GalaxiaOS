@@ -32,6 +32,7 @@ from app.models import (
     Agent,
     Budget,
     Company,
+    CompanyFile,
     DecisionRequest,
     Membership,
     Objective,
@@ -57,6 +58,7 @@ from app.services import (
 from app.services import artifacts as artifacts_svc
 from app.services import chat as chat_svc
 from app.services import company_reset as company_reset_svc
+from app.services import files as files_svc
 from app.services import governance as gov
 from app.services import integrations as integrations_svc
 from app.services import runs as runs_svc
@@ -261,6 +263,35 @@ _TOOL_SPECS = [
                 },
             },
             "required": ["company_id", "refresh_token"],
+        },
+    },
+    {
+        "name": "list_files",
+        "description": "List documents the company's agents have saved to its file store (drafts, "
+        "outreach sequences, models, briefs) — id, name, category, type, size. Agents often save "
+        "deliverables here rather than as artifacts; read one in full with read_file.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "company_id": {"type": "string"},
+                "limit": {"type": "integer", "description": "Max to return (default 100)."},
+            },
+            "required": ["company_id"],
+        },
+    },
+    {
+        "name": "read_file",
+        "description": "Read one saved document in full from the company's file store — pass its "
+        "file_id (from list_files) or its name. Returns the text content (base64 if binary). Use "
+        "this to review a drafted outreach sequence, one-pager, or model an agent filed.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "company_id": {"type": "string"},
+                "file_id": {"type": "string", "description": "The file's id from list_files."},
+                "name": {"type": "string", "description": "Or match by file name (case-insensitive)."},
+            },
+            "required": ["company_id"],
         },
     },
     {
@@ -813,6 +844,81 @@ async def _call_tool(db, user_id: uuid.UUID, mid, params: dict) -> dict:
             if task_id is not None:
                 await enqueue_task(task_id)
             return _ok(mid, _content({"status": "active", "launched": task_id is not None}))
+
+        if name == "list_files":
+            company = await _founder_company(db, user_id, args.get("company_id"))
+            rows = await files_svc.list_files(
+                db, company_id=company.id, limit=int(args.get("limit") or 100)
+            )
+            return _ok(
+                mid,
+                _content(
+                    {
+                        "files": [
+                            {
+                                "id": str(f.id),
+                                "name": f.name,
+                                "category": f.category.value,
+                                "mime_type": f.mime_type,
+                                "size_bytes": f.size_bytes,
+                                "description": f.description,
+                            }
+                            for f in rows
+                        ]
+                    }
+                ),
+            )
+
+        if name == "read_file":
+            company = await _founder_company(db, user_id, args.get("company_id"))
+            f = None
+            if args.get("file_id"):
+                try:
+                    f = await db.get(CompanyFile, uuid.UUID(str(args["file_id"])))
+                except (ValueError, TypeError):
+                    return _error(mid, -32602, "invalid file_id")
+                if f is not None and f.company_id != company.id:
+                    f = None
+            elif args.get("name"):
+                f = await files_svc.find_file(db, company_id=company.id, name=str(args["name"]))
+            else:
+                return _error(mid, -32602, "provide file_id or name")
+            if f is None:
+                return _error(mid, -32000, "file not found")
+            if not f.external_id:
+                return _error(mid, -32000, "file has no stored content to read")
+            provider = await integrations_svc.resolve_file_provider(db, company_id=company.id)
+            if provider is None:
+                return _error(mid, -32000, "no file store configured for this company")
+            try:
+                raw = await provider.download_file(f.external_id)
+            except FileProviderError as exc:
+                return _error(mid, -32000, f"could not read file: {exc}")
+            max_bytes = 300_000
+            body = raw[:max_bytes]
+            try:
+                content = body.decode("utf-8")
+                encoding = "utf-8"
+            except UnicodeDecodeError:
+                import base64
+
+                content = base64.b64encode(body).decode()
+                encoding = "base64"
+            return _ok(
+                mid,
+                _content(
+                    {
+                        "id": str(f.id),
+                        "name": f.name,
+                        "category": f.category.value,
+                        "mime_type": f.mime_type,
+                        "size_bytes": f.size_bytes,
+                        "encoding": encoding,
+                        "truncated": len(raw) > max_bytes,
+                        "content": content,
+                    }
+                ),
+            )
 
         if name == "get_company_snapshot":
             company = await _founder_company(db, user_id, args.get("company_id"))
