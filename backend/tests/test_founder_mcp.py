@@ -288,6 +288,45 @@ async def test_connect_storage_over_mcp(session_factory, monkeypatch):
         assert "error" in r and "rejected" in r["error"]["message"]
 
 
+def test_connect_discovery_doc_lists_bootstrap_and_tools():
+    doc = fm._connect_doc()
+    names = {t["name"] for t in doc["tools"]}
+    assert {"create_company", "generate_org", "launch_company"} <= names
+    assert len(doc["bootstrap"]) == 4
+    assert "/auth/signup" in doc["paste_to_agent"]
+    assert "/founder/connection" in doc["paste_to_agent"]
+    assert doc["mcp_url"].endswith("/connect/founder")
+
+
+class _StubReq:
+    def __init__(self, body, auth=""):
+        self.headers = {"Authorization": auth} if auth else {}
+        self._body = body
+
+    async def json(self):
+        return self._body
+
+
+async def test_introspection_token_optional_but_calls_require_token():
+    """An agent can initialize + list tools with no token to discover the surface;
+    every tools/call still needs a valid founder token."""
+    # tools/list with no token → returns the catalog
+    r = await fm.founder_mcp(_StubReq({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}), None)
+    assert any(t["name"] == "create_company" for t in r["result"]["tools"])
+    # initialize with no token → serverInfo
+    r = await fm.founder_mcp(_StubReq({"jsonrpc": "2.0", "id": 2, "method": "initialize"}), None)
+    assert r["result"]["serverInfo"]["name"] == "abos-founder"
+    # tools/call with no token → guided error pointing at the recipe, not a 500
+    r = await fm.founder_mcp(
+        _StubReq(
+            {"jsonrpc": "2.0", "id": 3, "method": "tools/call",
+             "params": {"name": "list_companies", "arguments": {}}}
+        ),
+        None,
+    )
+    assert r["error"]["code"] == -32001 and "/connect" in r["error"]["message"]
+
+
 @requires_db
 async def test_function_health_and_retarget_over_mcp(session_factory):
     from app.services import function_catalog as fc
