@@ -14,7 +14,7 @@ Improve conversion through one disciplined, hypothesis-led change at a time — 
 1. **INSTRUMENTED — lock the baseline now.**
    - `read_metrics` for current traffic and conversion rate.
    - If no metric exists: `record_metric` immediately, then `update_company_playbook` to register it as a **persistent, ongoing KPI** — not a one-off test entry.
-   - Confirm the KPI will survive beyond this engagement before touching anything else. **Do not proceed to Step 2 without a number that is durably tracked.**
+   - Call `update_company_playbook` even when a metric already exists — confirm it is logged as an ongoing KPI, not just a snapshot. **Do not proceed to Step 2 without a durable, playbook-registered number.**
 2. **Diagnose friction.** Walk the page as the visitor: value proposition clear in 5 seconds? One obvious CTA? Proof matches promise? Name the top 1–3 friction points.
 3. **Form one hypothesis.** "Changing X will improve conversion because Y." One variable only — result must be attributable. `write_memory` (type `experiment`).
 4. **Make the isolated change.** Rewrite copy (`draft_document`), swap a visual (`generate_image`), or `dispatch_task` for structural edits. Touch nothing else.
@@ -31,6 +31,7 @@ Order by impact × traffic: headline and primary CTA move the needle most. Don't
 
 ## Common failure modes
 - **KPI not registered as persistent.** The leading failure: `record_metric` for the test window without calling `update_company_playbook` = not INSTRUMENTED. This is why companies run campaigns with zero measured outcomes.
+- **Skipping `update_company_playbook` when a metric already exists.** A metric recorded outside the playbook silently dies — always confirm it is logged as an ongoing KPI, even if conversion rate was readable at Step 1.
 - **Skipping the baseline.** A number must exist before you touch anything.
 - **Changing multiple things at once.** You learn nothing about what worked.
 - **Calling it early.** Small samples produce noise, not signal.
