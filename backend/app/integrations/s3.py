@@ -247,6 +247,10 @@ class S3FileProvider:
         resp = await self._send(method="GET", canonical_uri=self._key_uri(file_id))
         return resp.content
 
+    async def delete_file(self, file_id: str) -> None:
+        """Delete an object. S3 DELETE is idempotent — a missing key still returns 2xx."""
+        await self._send(method="DELETE", canonical_uri=self._key_uri(file_id))
+
     async def check_access(self) -> None:
         """Prove the credentials + bucket are reachable (a 1-key list). Raises
         :class:`FileProviderError` / :class:`FileProviderAuthError` on failure."""

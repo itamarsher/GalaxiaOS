@@ -295,6 +295,20 @@ _TOOL_SPECS = [
         },
     },
     {
+        "name": "delete_file",
+        "description": "Delete one saved document from the company's file store by file_id (from "
+        "list_files) — removes the tracking row and best-effort deletes the stored blob. Use to "
+        "clean up superseded drafts / duplicate versions so there's one source of truth.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "company_id": {"type": "string"},
+                "file_id": {"type": "string"},
+            },
+            "required": ["company_id", "file_id"],
+        },
+    },
+    {
         "name": "get_company_snapshot",
         "description": "A live snapshot of a company: status, objectives, budget/spend, cycle "
         "state, live agents, active task count, and pending founder decisions. This is your main "
@@ -919,6 +933,18 @@ async def _call_tool(db, user_id: uuid.UUID, mid, params: dict) -> dict:
                     }
                 ),
             )
+
+        if name == "delete_file":
+            company = await _founder_company(db, user_id, args.get("company_id"))
+            try:
+                fid = uuid.UUID(str(args["file_id"]))
+            except (ValueError, TypeError):
+                return _error(mid, -32602, "invalid file_id")
+            deleted = await files_svc.delete_file(db, company_id=company.id, file_id=fid)
+            if not deleted:
+                return _error(mid, -32000, "file not found")
+            await db.commit()
+            return _ok(mid, _content({"deleted": True, "file_id": str(fid)}))
 
         if name == "get_company_snapshot":
             company = await _founder_company(db, user_id, args.get("company_id"))

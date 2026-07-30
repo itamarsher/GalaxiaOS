@@ -38,7 +38,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.integrations.files import FileProvider
+from app.integrations.files import FileProvider, FileProviderError
 from app.models import Company, CompanyFile
 from app.models.enums import FileCategory
 from app.services import data_policy
@@ -241,3 +241,26 @@ async def find_file(db: AsyncSession, *, company_id: uuid.UUID, name: str) -> Co
         if row.name.lower().startswith(target):
             return row
     return None
+
+
+async def delete_file(db: AsyncSession, *, company_id: uuid.UUID, file_id: uuid.UUID) -> bool:
+    """Remove a filed document: drop its tracking row and best-effort delete the blob.
+
+    Returns ``False`` if no such file belongs to the company. A blob that can't be
+    deleted (provider has no delete, or a transient error) is left orphaned rather
+    than failing the call — the row is what agents and ``list_files`` see, so removing
+    it is what "cleaned up" means; an orphaned object is at worst a little dead storage.
+    """
+    row = await db.get(CompanyFile, file_id)
+    if row is None or row.company_id != company_id:
+        return False
+    if row.external_id:
+        provider = await resolve_file_provider(db, company_id=company_id)
+        deleter = getattr(provider, "delete_file", None) if provider is not None else None
+        if deleter is not None:
+            try:
+                await deleter(row.external_id)
+            except FileProviderError:
+                pass
+    await db.delete(row)
+    return True
