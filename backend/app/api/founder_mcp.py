@@ -450,11 +450,58 @@ async def _founder_company(db, user_id: uuid.UUID, company_id_raw: object) -> Co
     return company
 
 
+def _connect_doc() -> dict:
+    """The public agent-onboarding recipe: how to register, mint a founder token,
+    connect this MCP server, and operate — plus the live tool catalog and a
+    ready-to-paste block. Everything an agent needs to bootstrap without reading source."""
+    base = settings.public_api_base_url.rstrip("/") if settings.public_api_base_url else ""
+    mcp_url = f"{base}/connect/founder" if base else "/connect/founder"
+    b = base or "https://<your-abos-host>"
+    paste = (
+        "Register and operate a company on ABOS via its MCP server.\n"
+        f"Base URL: {b}\n\n"
+        f'1. Create an account:  POST {b}/auth/signup  {{"email":"you@example.com","password":"…"}}'
+        "  → save access_token  (already have one? POST /auth/login)\n"
+        f"2. Mint a founder token:  POST {b}/founder/connection  "
+        'with header  Authorization: Bearer <access_token>  → save "token"\n'
+        f"3. Add this MCP server to your agent:  URL {mcp_url}  "
+        "header  Authorization: Bearer <token>\n"
+        "4. Operate:  create_company → generate_org → launch_company;  then steer with "
+        "get_company_snapshot, list_decisions, approve_decision / reject_decision."
+    )
+    return {
+        "server": _SERVER_INFO,
+        "base_url": base or None,
+        "mcp_url": mcp_url,
+        "bootstrap": [
+            {"step": 1, "action": "create account", "method": "POST", "path": "/auth/signup",
+             "body": {"email": "you@example.com", "password": "…"}, "returns": "access_token"},
+            {"step": 2, "action": "mint founder token", "method": "POST",
+             "path": "/founder/connection", "auth": "Bearer <access_token>",
+             "returns": "founder connection token"},
+            {"step": 3, "action": "connect this MCP server", "mcp_url": mcp_url,
+             "auth": "Bearer <founder token>"},
+            {"step": 4, "action": "operate",
+             "tools": ["create_company", "generate_org", "launch_company"]},
+        ],
+        "tools": [{"name": t["name"], "description": t["description"]} for t in _TOOL_SPECS],
+        "paste_to_agent": paste,
+    }
+
+
+@router.get("/connect")
+async def connect_discovery():
+    """Public, unauthenticated: point an AI agent here to learn how to register,
+    connect, and operate a company over MCP — no source-reading required."""
+    return _connect_doc()
+
+
 @router.post("/connect/founder")
 async def founder_mcp(request: Request, db: DbDep):
+    # Introspection (initialize / tools/list) is token-optional so an agent can point
+    # at this URL and discover the surface; every tools/call still requires a valid
+    # founder token (minted at POST /founder/connection — see GET /connect).
     user_id = founder_token.verify(_bearer(request))
-    if user_id is None:
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid founder connection token")
 
     try:
         message = await request.json()
@@ -481,6 +528,14 @@ async def founder_mcp(request: Request, db: DbDep):
     if method == "tools/list":
         return _ok(mid, {"tools": _TOOL_SPECS})
     if method == "tools/call":
+        if user_id is None:
+            return _error(
+                mid,
+                -32001,
+                "authenticate first: create an account (POST /auth/signup), mint a founder "
+                "token (POST /founder/connection with your access token), then set header "
+                "Authorization: Bearer <token>. Full recipe: GET /connect.",
+            )
         return await _call_tool(db, user_id, mid, params)
     return _error(mid, -32601, f"method not found: {method}")
 

@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { api, fmtUsd, type CatalogFunction, type Company, type GenerationProgress, type InvestmentReview, type ManagedStatus, type Preview, type ReusableCredential } from "@/lib/api";
+import { api, apiBaseUrl, fmtUsd, type CatalogFunction, type Company, type GenerationProgress, type InvestmentReview, type ManagedStatus, type Preview, type ReusableCredential } from "@/lib/api";
 import { CloudflareCard, GoogleDriveCard, ReuseCredentialsCard } from "@/lib/connectors";
 
 type Step = "loading" | "auth" | "businesses" | "mission" | "key" | "generating" | "review";
@@ -332,6 +332,7 @@ export default function Home() {
       )}
 
       {step === "auth" && (
+        <>
         <div className="card">
           <div className="step">Step 0 · Account</div>
 
@@ -361,6 +362,8 @@ export default function Home() {
             <button className="ghost" disabled={busy} onClick={() => doAuth(false)}>Log in</button>
           </div>
         </div>
+        <AgentConnectCard />
+        </>
       )}
 
       {step === "businesses" && (
@@ -794,6 +797,66 @@ function GeneratingCard({ progress }: { progress: GenerationProgress | null }) {
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+// A copyable "connect your AI agent over MCP" recipe, shown to logged-out users.
+// The point: a founder can paste this into any MCP-capable agent (Claude Code,
+// Cursor, …) and have it register + run a company without reading any docs.
+function AgentConnectCard() {
+  const [copied, setCopied] = useState(false);
+  const base = apiBaseUrl;
+  const block =
+    `Register and operate a company on ABOS via its MCP server.\n` +
+    `Base URL: ${base}\n\n` +
+    `1. Create an account:  POST ${base}/auth/signup  {"email":"you@example.com","password":"…"}  -> save access_token\n` +
+    `   (already have one? POST ${base}/auth/login)\n` +
+    `2. Mint a founder token:  POST ${base}/founder/connection  (header: Authorization: Bearer <access_token>)  -> save "token"\n` +
+    `3. Add this MCP server to your agent:  URL ${base}/connect/founder   header  Authorization: Bearer <token>\n` +
+    `4. Operate:  create_company -> generate_org -> launch_company;  steer with get_company_snapshot, list_decisions, approve_decision.`;
+
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(block);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1800);
+    } catch {
+      /* clipboard blocked — the text is selectable in the block below */
+    }
+  }
+
+  return (
+    <div className="card">
+      <div className="step" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <span>Or connect your AI agent</span>
+        <button style={{ marginTop: 0, padding: "6px 12px", fontSize: 13 }} onClick={copy}>
+          {copied ? "Copied ✓" : "Copy"}
+        </button>
+      </div>
+      <p className="muted" style={{ fontSize: 13, marginTop: 6 }}>
+        Prefer to drive ABOS from your own agent? Paste this into any tool that speaks MCP
+        (Claude Code, Cursor, …) and it will register, connect, and run a company for you — no UI needed.
+      </p>
+      <pre
+        style={{
+          whiteSpace: "pre-wrap",
+          wordBreak: "break-word",
+          fontSize: 12,
+          lineHeight: 1.5,
+          background: "var(--panel, rgba(255,255,255,0.04))",
+          border: "1px solid var(--border, rgba(255,255,255,0.12))",
+          borderRadius: 8,
+          padding: 12,
+          margin: "10px 0 0",
+          overflowX: "auto",
+        }}
+      >
+        {block}
+      </pre>
+      <p className="muted" style={{ fontSize: 12, margin: "8px 0 0" }}>
+        Full machine-readable recipe (endpoints + live tool catalog): <code>{base}/connect</code>
+      </p>
     </div>
   );
 }

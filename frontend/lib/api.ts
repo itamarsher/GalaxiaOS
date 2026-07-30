@@ -25,6 +25,10 @@ function resolveBase(): string {
 
 const BASE = resolveBase();
 
+/** The resolved API origin (no trailing slash) — e.g. for building agent/MCP
+ * connect instructions that reference this deployment's endpoints. */
+export const apiBaseUrl = BASE;
+
 function token(): string | null {
   if (typeof window === "undefined") return null;
   return window.localStorage.getItem("abos_token");
