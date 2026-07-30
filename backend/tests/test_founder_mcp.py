@@ -328,6 +328,59 @@ async def test_introspection_token_optional_but_calls_require_token():
 
 
 @requires_db
+async def test_get_decision_and_artifacts_over_mcp(session_factory):
+    """Founder can read a decision's FULL body + payload and agent-produced artifacts —
+    the content review path that list_decisions (truncated) can't serve."""
+    from app.services import artifacts as artifacts_svc
+
+    big = "OUTBOUND EMAIL DRAFT. " * 60  # > 600 chars, so truncation would hide the tail
+    async with session_factory() as db:
+        u, company = await _active_company_with_founder(db)
+        agent = Agent(company_id=company.id, role=AgentRole.ceo, name="CEO")
+        db.add(agent)
+        await db.flush()
+        decision = DecisionRequest(
+            company_id=company.id,
+            agent_id=agent.id,
+            kind=DecisionKind.plan_approval,
+            summary=big,
+            payload={"to": "cto@acme.com", "email_body": "Hi — fork toil…"},
+            status=DecisionStatus.pending,
+        )
+        db.add(decision)
+        art = await artifacts_svc.create_artifact(
+            db,
+            company_id=company.id,
+            kind="one_pager",
+            title="ForkFlow positioning",
+            body_md="# ForkFlow AI\n\nThe full one-pager body.",
+            source_agent_id=agent.id,
+        )
+        await db.commit()
+        uid, cid, did, aid = u.id, str(company.id), str(decision.id), str(art.id)
+
+    # get_decision: full (untruncated) summary + structured payload
+    async with session_factory() as db:
+        r = await fm._call_tool(
+            db, uid, 1, {"name": "get_decision", "arguments": {"company_id": cid, "decision_id": did}}
+        )
+        p = _payload(r)
+        assert len(p["summary"]) == len(big)  # not truncated to 600
+        assert p["payload"]["to"] == "cto@acme.com"
+
+    # list_artifacts + read_artifact
+    async with session_factory() as db:
+        r = await fm._call_tool(db, uid, 2, {"name": "list_artifacts", "arguments": {"company_id": cid}})
+        assert any(a["id"] == aid and a["title"] == "ForkFlow positioning"
+                   for a in _payload(r)["artifacts"])
+    async with session_factory() as db:
+        r = await fm._call_tool(
+            db, uid, 3, {"name": "read_artifact", "arguments": {"company_id": cid, "artifact_id": aid}}
+        )
+        assert _payload(r)["body_md"].startswith("# ForkFlow AI")
+
+
+@requires_db
 async def test_function_health_and_retarget_over_mcp(session_factory):
     from app.services import function_catalog as fc
     from app.services import function_health as fh
