@@ -534,8 +534,9 @@ class FakeFileProvider:
 class _FakeDB:
     """Minimal async session stand-in: records adds, no-op flush, returns company."""
 
-    def __init__(self, company=None):
+    def __init__(self, company=None, existing=None):
         self.company = company
+        self.existing = existing  # returned by scalar() to simulate a same-named row
         self.added: list = []
 
     def add(self, obj):
@@ -546,6 +547,9 @@ class _FakeDB:
 
     async def get(self, model, ident):
         return self.company
+
+    async def scalar(self, *_a, **_k):
+        return self.existing
 
 
 def test_fake_provider_is_a_file_provider():
@@ -576,6 +580,39 @@ async def test_archive_files_into_category_folder_and_indexes():
     assert db.added == [row]
     # The file actually reached the (fake) provider.
     assert (provider.folders[folder], "cap table.md") in provider.files
+
+
+@pytest.mark.asyncio
+async def test_archive_updates_same_named_row_in_place():
+    """Re-filing a same-named doc updates the existing manifest row, not a duplicate."""
+    provider = FakeFileProvider()
+    company = _Company("Acme")
+    prior = files_svc.CompanyFile(
+        company_id=company.id,
+        category=FileCategory.data_room,
+        name="cap table.md",
+        description="old",
+        mime_type="text/markdown",
+        folder_path="old/path",
+        provider="google_drive",
+        external_id="old-id",
+        size_bytes=1,
+    )
+    db = _FakeDB(company, existing=prior)
+    row = await files_svc.archive(
+        db,
+        provider,
+        company=company,
+        category=FileCategory.data_room,
+        name="cap table",
+        content=b"new-and-longer",
+        description="fresh",
+    )
+    assert row is prior  # same row, updated in place
+    assert db.added == []  # no duplicate inserted
+    assert row.external_id == "file-folder-1-cap table.md"  # content refreshed
+    assert row.size_bytes == len(b"new-and-longer")
+    assert row.description == "fresh"
 
 
 @pytest.mark.asyncio

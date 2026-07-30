@@ -152,20 +152,49 @@ async def archive(
     stored = await provider.upload_file(
         folder_id=folder.folder_id, name=filename, content=content, mime_type=mime
     )
+    resolved_name = stored.name or filename
+    # Classify for data segmentation: explicit labels win, else a default from
+    # the category so every stored file is labelled (RFC 0001).
+    resolved_labels = (
+        labels if labels is not None else data_policy.default_labels_for_category(category.value)
+    )
+    resolved_size = stored.size_bytes if stored.size_bytes is not None else len(content)
+
+    # Re-filing a same-named document in the same category updates the manifest row
+    # in place — matching the provider's replace-in-place upload — so the store stays
+    # a single source of truth instead of accumulating duplicate rows for each save.
+    existing = await db.scalar(
+        select(CompanyFile).where(
+            CompanyFile.company_id == company.id,
+            CompanyFile.category == category,
+            CompanyFile.name == resolved_name,
+        )
+    )
+    if existing is not None:
+        existing.labels = resolved_labels
+        existing.mime_type = stored.mime_type or mime
+        existing.folder_path = folder.path
+        existing.external_id = stored.file_id
+        existing.web_url = stored.web_url
+        existing.size_bytes = resolved_size
+        existing.source_task_id = source_task_id
+        if description is not None:
+            existing.description = description
+        await db.flush()
+        return existing
+
     row = CompanyFile(
         company_id=company.id,
         category=category,
-        # Classify for data segmentation: explicit labels win, else a default from
-        # the category so every stored file is labelled (RFC 0001).
-        labels=labels if labels is not None else data_policy.default_labels_for_category(category.value),
-        name=stored.name or filename,
+        labels=resolved_labels,
+        name=resolved_name,
         description=description,
         mime_type=stored.mime_type or mime,
         folder_path=folder.path,
         provider="google_drive",
         external_id=stored.file_id,
         web_url=stored.web_url,
-        size_bytes=stored.size_bytes if stored.size_bytes is not None else len(content),
+        size_bytes=resolved_size,
         source_task_id=source_task_id,
     )
     db.add(row)
