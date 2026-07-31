@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import uuid
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Agent, Budget, SpendEntry
@@ -201,6 +201,28 @@ async def release_reservation(
         budget.reserved_cents = max(0, budget.reserved_cents - reserved_cents)
         budget.version += 1
         await db.flush()
+
+
+async def reclaim_stale_reservations(db: AsyncSession) -> int:
+    """Zero every budget's outstanding reservation and return how many were adjusted.
+
+    A reservation lives only for the duration of one in-process reserve→commit call
+    (a single LLM/external charge, seconds long). So any ``reserved_cents`` that
+    survives a worker restart is stale — its task was killed mid-call (job-timeout
+    cancellation, OOM, or a redeploy) before the release ran. Called once at worker
+    startup, before pending work is recovered, so leaked reservations can't
+    accumulate across restarts and strand a company at ``available == 0``.
+
+    Assumes the platform's single in-process worker model; with concurrent workers
+    sharing one database this could clear a sibling's genuinely in-flight reservation,
+    so it must run only at startup (when nothing is in flight), never on a timer.
+    """
+    result = await db.execute(
+        update(Budget)
+        .where(Budget.reserved_cents != 0)
+        .values(reserved_cents=0, version=Budget.version + 1)
+    )
+    return result.rowcount or 0
 
 
 async def spend_by_category(db: AsyncSession, company_id: uuid.UUID) -> dict[str, int]:

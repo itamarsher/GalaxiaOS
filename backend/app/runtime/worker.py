@@ -35,6 +35,7 @@ from app.runtime import orchestrator
 from app.runtime.context import RuntimeContext
 from app.runtime.cost_meter import CostMeter
 from app.runtime.queue import redis_settings
+from app.services import budget as budget_svc
 
 _log = get_logger("abos.worker")
 
@@ -77,6 +78,21 @@ async def startup(ctx: dict) -> None:
         provider=get_provider("anthropic"),
         enqueue_task=enqueue_task,
     )
+
+    # Reclaim budget reservations stranded by the last shutdown BEFORE recovering
+    # work. Reservations are ephemeral (one reserve→commit call); any that survive a
+    # restart are stale — their task was killed mid-call — and, left in
+    # ``reserved_cents``, they accumulate across restarts until a company deadlocks
+    # at ``available == 0`` (every reserve fails BudgetExceeded). Best effort: a
+    # failure here must not prevent the worker from booting.
+    try:
+        async with SessionLocal() as db:
+            reclaimed = await budget_svc.reclaim_stale_reservations(db)
+            await db.commit()
+        if reclaimed:
+            _log.info("reclaimed_stale_reservations", extra={"extra_fields": {"budgets": reclaimed}})
+    except Exception:  # noqa: BLE001
+        _log.exception("reclaim_stale_reservations_failed")
 
     if settings.recover_on_startup:
         # Rebuild the ephemeral Redis queue from durable Postgres state. Best

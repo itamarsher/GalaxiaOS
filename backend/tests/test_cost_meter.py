@@ -79,6 +79,60 @@ async def test_llm_and_external_share_one_budget(session_factory, company_with_b
     assert by_cat["external"] == 300
 
 
+class RaisingProvider(FakeProvider):
+    """Provider whose call blows up mid-reservation (like a timeout/API error)."""
+
+    async def complete(self, **_kw):
+        raise RuntimeError("provider exploded")
+
+
+@requires_db
+async def test_failed_llm_call_releases_its_reservation(session_factory, company_with_budget):
+    """A provider error inside the reserve→commit window must not strand the
+    reservation — otherwise reserved_cents leaks and eventually deadlocks the company."""
+    company_id = company_with_budget
+    meter = CostMeter(session_factory)
+    with pytest.raises(RuntimeError):
+        await meter.run_llm(
+            RaisingProvider(in_tokens=1_000_000, out_tokens=100_000),
+            api_key="sk-test",
+            company_id=company_id,
+            agent_id=None,
+            task_id=None,
+            model="claude-haiku-4-5",
+            system="s",
+            messages=[Message(role="user", content="hi")],
+            max_tokens=100_000,
+        )
+    async with session_factory() as db:
+        budget = await budget_svc.get_active_budget(db, company_id)
+        assert budget.reserved_cents == 0  # released, not leaked
+        assert budget.spent_cents == 0  # nothing committed
+
+
+@requires_db
+async def test_reclaim_stale_reservations_zeroes_leaked_reservations(
+    session_factory, company_with_budget
+):
+    """Startup reclaim frees reservations stranded by a prior crash/restart."""
+    company_id = company_with_budget
+    async with session_factory() as db:
+        budget = await budget_svc.get_active_budget(db, company_id)
+        budget.reserved_cents = 4242  # simulate a leak surviving a restart
+        await db.commit()
+        before_version = budget.version
+
+    async with session_factory() as db:
+        n = await budget_svc.reclaim_stale_reservations(db)
+        await db.commit()
+        assert n >= 1
+
+    async with session_factory() as db:
+        budget = await budget_svc.get_active_budget(db, company_id)
+        assert budget.reserved_cents == 0
+        assert budget.version > before_version  # optimistic-lock version bumped
+
+
 @requires_db
 async def test_over_budget_raises_and_releases(session_factory, company_with_budget):
     company_id = company_with_budget

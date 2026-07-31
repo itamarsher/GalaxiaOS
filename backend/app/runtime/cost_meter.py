@@ -12,6 +12,7 @@ for tool charges, and there is no other path to ``budgets``.
 
 from __future__ import annotations
 
+import asyncio
 import time
 import uuid
 from collections.abc import Awaitable, Callable
@@ -55,12 +56,20 @@ class CostMeter:
             yield res, committed
         finally:
             if not committed["done"]:
-                async with self._sf() as db:
-                    await set_tenant(db, company_id)
-                    await budget_svc.release_reservation(
-                        db, budget_id=res.budget_id, reserved_cents=res.reserved_cents
-                    )
-                    await db.commit()
+                # Shield the release so an arq job-timeout cancellation (which
+                # cancels this coroutine at its next await) still completes it —
+                # otherwise the reservation is stranded in ``reserved_cents``
+                # forever and, accumulated across cancellations, deadlocks the
+                # company at ``available == 0``.
+                await asyncio.shield(self._release(company_id, res))
+
+    async def _release(self, company_id: uuid.UUID, res: _Reservation) -> None:
+        async with self._sf() as db:
+            await set_tenant(db, company_id)
+            await budget_svc.release_reservation(
+                db, budget_id=res.budget_id, reserved_cents=res.reserved_cents
+            )
+            await db.commit()
 
     async def run_llm(
         self,
