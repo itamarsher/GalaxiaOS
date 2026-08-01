@@ -455,6 +455,41 @@ def test_connect_doc_explains_verified_over_described_principle():
 
 
 @requires_db
+async def test_set_budget_raises_the_cap(session_factory):
+    """A founder can top up a company's monthly budget cap so a low-runway fleet keeps running."""
+    from app.models import Budget
+    from app.models.enums import BudgetPeriod
+
+    async with session_factory() as db:
+        u, company = await _active_company_with_founder(db)
+        db.add(Budget(company_id=company.id, period=BudgetPeriod.monthly,
+                      limit_cents=30_000, spent_cents=29_500))
+        await db.commit()
+        uid, cid = u.id, str(company.id)
+
+    async with session_factory() as db:
+        r = await fm._call_tool(
+            db, uid, 1,
+            {"name": "set_budget", "arguments": {"company_id": cid, "limit_cents": 60_000}},
+        )
+        p = _payload(r)
+        assert p["limit_cents"] == 60_000
+        assert p["available_cents"] == 60_000 - 29_500  # room restored
+
+    async with session_factory() as db:
+        b = await db.scalar(select(Budget).where(Budget.company_id == uuid.UUID(cid)))
+        assert b.limit_cents == 60_000
+
+    # Can't set the cap below what's already spent.
+    async with session_factory() as db:
+        r = await fm._call_tool(
+            db, uid, 2,
+            {"name": "set_budget", "arguments": {"company_id": cid, "limit_cents": 100}},
+        )
+        assert "error" in r and "below already-spent" in r["error"]["message"]
+
+
+@requires_db
 async def test_connect_function_delegates_to_external_and_mints_token(session_factory, monkeypatch):
     """connect_function flips a function to the external backend and mints a
     Business-Function connection token so a coding runtime can pull its work."""
