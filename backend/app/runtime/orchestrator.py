@@ -237,6 +237,27 @@ async def run_task(ctx: RuntimeContext, task_id: uuid.UUID) -> dict:
         if task.status not in (TaskStatus.queued, TaskStatus.waiting_approval):
             return {"status": f"skipped:{task.status.value}"}
 
+        # Claim the task row before dispatch: two concurrent ``run_task`` invocations
+        # for the same task_id (a redelivered arq job, or ``enqueue_task`` firing
+        # twice — see the comment in queue.py) must not both pass the status gate
+        # above and both dispatch the backend. Lock the row and re-check status
+        # under the lock so only the first claimant proceeds. ``populate_existing``
+        # is required here: ``task`` is already in this session's identity map from
+        # the unlocked ``db.get`` above, so without it SQLAlchemy would hand back
+        # that cached (possibly stale) object instead of refreshing it from the
+        # locked read.
+        task = await db.scalar(
+            select(Task)
+            .where(Task.id == task_id)
+            .with_for_update()
+            .limit(1)
+            .execution_options(populate_existing=True)
+        )
+        if task is None:
+            return {"status": "missing"}
+        if task.status not in (TaskStatus.queued, TaskStatus.waiting_approval):
+            return {"status": f"skipped:{task.status.value}"}
+
         verdict = await breakers.check_before_task(db, task)
         if not verdict.ok:
             await breakers.block_task(db, task, verdict.reason or "blocked")
