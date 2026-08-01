@@ -11,9 +11,9 @@ from sqlalchemy import func, select
 
 from app.models import Agent, ChatChannel, ChatParticipant, Company
 from app.models.enums import AgentRole, ChatChannelKind
-from app.services import chat
+from app.services import chat, function_catalog
 from app.services.company_reset import dedupe_singleton_roles
-from app.services.onboarding import _fleet_specs, provision_fleet
+from app.services.onboarding import provision_fleet
 from tests.conftest import make_company_with_fleet, requires_db
 
 
@@ -21,9 +21,9 @@ from tests.conftest import make_company_with_fleet, requires_db
 async def test_provision_fleet_is_idempotent_by_role(session_factory, company_with_budget):
     async with session_factory() as db:
         company = await db.get(Company, company_with_budget)
-        await provision_fleet(db, company=company, specs=_fleet_specs([]), total_budget_cents=10_000)
+        await provision_fleet(db, company=company, specs=function_catalog.resolve_selection(function_catalog.default_selection()), total_budget_cents=10_000)
         # A second provision must NOT duplicate any singleton role.
-        await provision_fleet(db, company=company, specs=_fleet_specs([]), total_budget_cents=10_000)
+        await provision_fleet(db, company=company, specs=function_catalog.resolve_selection(function_catalog.default_selection()), total_budget_cents=10_000)
         await db.commit()
 
     async with session_factory() as db:
@@ -32,8 +32,14 @@ async def test_provision_fleet_is_idempotent_by_role(session_factory, company_wi
         ).all()
     ceos = [a for a in agents if a.role is AgentRole.ceo]
     assert len(ceos) == 1
-    roles = [a.role for a in agents]
-    assert len(roles) == len(set(roles))  # one agent per role
+    # Singleton (oversight) roles are never duplicated…
+    singletons = {AgentRole.ceo, AgentRole.governance, AgentRole.data, AgentRole.platform}
+    for r in singletons:
+        assert len([a for a in agents if a.role is r]) <= 1
+    # …and each business FUNCTION is staffed once, even though several share the
+    # ``custom`` role (idempotent by config.function, not just by role).
+    fns = [(a.config or {}).get("function") for a in agents if (a.config or {}).get("function")]
+    assert len(fns) == len(set(fns))
 
 
 @requires_db

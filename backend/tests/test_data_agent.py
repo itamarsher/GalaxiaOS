@@ -20,7 +20,6 @@ from app.models.enums import (
 from app.runtime.tools import execute_tool
 from app.runtime.tools.code import _REPO_ROOT
 from app.services import governance as gov
-from app.services.onboarding import _fleet_specs
 from tests.conftest import requires_db
 
 # ── Capability (a): codebase readability (no DB needed) ───────────────────────
@@ -72,14 +71,19 @@ async def test_list_repo_files_relative_and_excludes_junk():
 # ── Default fleet membership ──────────────────────────────────────────────────
 
 
-def test_data_agent_in_default_fleet():
-    roles = {s["role"] for s in _fleet_specs([])}
-    assert "data" in roles
+def test_data_agent_in_default_function_fleet():
+    from app.services import function_catalog
+
+    roles = {s["role"] for s in function_catalog.resolve_selection(function_catalog.default_selection())}
+    assert "data" in roles  # data is guaranteed oversight, appended to any selection
 
 
-def test_data_agent_backfilled_when_omitted():
-    # An LLM-provided fleet that omits data still gets one appended.
-    roles = {s["role"] for s in _fleet_specs([{"role": "ceo"}, {"role": "growth"}])}
+def test_data_agent_guaranteed_even_with_no_picks():
+    from app.services import function_catalog
+
+    # resolve_selection always appends the oversight blocks, so data is present even
+    # when the founder picked nothing.
+    roles = {s["role"] for s in function_catalog.resolve_selection([])}
     assert "data" in roles
 
 

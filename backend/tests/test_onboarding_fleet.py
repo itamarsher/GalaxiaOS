@@ -52,25 +52,24 @@ async def test_start_captures_founder_involvement(session_factory):
         assert m2.involvement is None
 
 
-def test_fleet_specs_backfills_empty_llm_output():
-    # Nothing usable from the model -> full default fleet.
-    roles = [s["role"] for s in onboarding._fleet_specs([])]
-    assert roles[0] == "ceo"
+def test_default_function_selection_provisions_oversight():
+    # No fixed default AGENT fleet anymore: a company is its default set of
+    # FUNCTIONS, each self-staffing, with the oversight blocks always appended.
+    from app.services import function_catalog
+
+    roles = [s["role"] for s in
+             function_catalog.resolve_selection(function_catalog.default_selection())]
+    assert "ceo" in roles
     assert "governance" in roles
+    assert "data" in roles and "platform" in roles
     assert len(roles) >= 4
 
 
-def test_fleet_specs_guarantees_ceo_governance_and_auditor():
-    roles = [s["role"] for s in onboarding._fleet_specs([{"role": "growth", "name": "G"}])]
-    assert "ceo" in roles
-    assert "growth" in roles
-    assert "governance" in roles
-    # The auditor is a must-have role (financial records + paper trail).
-    assert "auditor" in roles
+def test_resolve_selection_guarantees_oversight_even_with_no_picks():
+    from app.services import function_catalog
 
-
-def test_default_fleet_includes_auditor():
-    assert any(s["role"] == "auditor" for s in onboarding._DEFAULT_FLEET)
+    roles = [s["role"] for s in function_catalog.resolve_selection([])]
+    assert {"ceo", "governance", "data", "platform"} <= set(roles)
 
 
 def test_weighted_split_sums_to_total_and_weights_ceo_lower():

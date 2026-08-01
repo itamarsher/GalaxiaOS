@@ -26,7 +26,6 @@ from app.models.enums import (
 )
 from app.runtime.tools import TOOL_SPECS, execute_tool
 from app.runtime.tools.core import SPECS as CORE_SPECS
-from app.services.onboarding import _fleet_specs
 from tests.conftest import requires_db
 
 
@@ -434,12 +433,17 @@ async def test_open_issue_explains_repo_not_found():
 
 
 def test_platform_agent_in_default_fleet():
-    roles = {s["role"] for s in _fleet_specs([])}
+    from app.services import function_catalog
+
+    roles = {s["role"] for s in
+             function_catalog.resolve_selection(function_catalog.default_selection())}
     assert "platform" in roles
 
 
-def test_platform_agent_backfilled_when_omitted():
-    roles = {s["role"] for s in _fleet_specs([{"role": "ceo"}, {"role": "growth"}])}
+def test_platform_agent_guaranteed_even_with_no_picks():
+    from app.services import function_catalog
+
+    roles = {s["role"] for s in function_catalog.resolve_selection([])}
     assert "platform" in roles
 
 

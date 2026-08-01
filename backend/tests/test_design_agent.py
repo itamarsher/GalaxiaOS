@@ -16,9 +16,13 @@ def test_design_role_exists_and_has_a_prompt():
 
 
 def test_default_fleet_includes_graphic_designer():
-    designers = [s for s in onboarding._DEFAULT_FLEET if s["role"] == "design"]
-    assert len(designers) == 1
-    assert "Nano Banana" in designers[0]["responsibility"]
+    # The brand/creative function is staffed by the design role, and it is in the
+    # default set of functions a company starts with.
+    from app.services import function_catalog
+
+    brand = function_catalog.get("brand")
+    assert brand is not None and brand.role is AgentRole.design
+    assert "brand" in function_catalog.default_selection()
 
 
 def test_design_role_has_a_budget_weight():
