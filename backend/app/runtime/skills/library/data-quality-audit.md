@@ -2,7 +2,7 @@
 name: data-quality-audit
 title: Data Quality Audit
 description: Systematically check that the data driving decisions is accurate, complete, and consistent.
-roles: data, auditor
+roles: data
 ---
 # Data Quality Audit
 

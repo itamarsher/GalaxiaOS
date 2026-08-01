@@ -2,11 +2,11 @@
 name: financial-spend-audit
 title: Financial Spend Audit
 description: Independently audit the fleet's spending to confirm every charge was budgeted, justified, and recorded.
-roles: auditor, finance
+roles: finance
 ---
 # Financial Spend Audit
 
-The auditor role exists to independently verify the company's spending is legitimate. This playbook audits
+Finance independently verifies the company's spending is legitimate. This playbook audits
 the fleet's charges — confirming each was within budget, justified, and correctly recorded — as a check on
 the operators, not a rubber stamp.
 
@@ -23,7 +23,7 @@ the operators, not a rubber stamp.
 5. **Hunt for anomalies.** Duplicate charges, unexpected recurring costs, spend spikes, or anything
    circumventing controls. `flag_legal_risk` / `request_decision` on anything suggesting misuse or a broken control.
 6. **Report independently.** `create_report` (kind `financial_report`) with findings and severity; `audit_task`
-   the specific problem tasks; `write_memory` (type `result`). The auditor reports what it finds, plainly — its
+   the specific problem tasks; `write_memory` (type `result`). Finance reports what it finds, plainly — its
    value is independence, not agreement.
 
 ## Decision framework — independence over harmony

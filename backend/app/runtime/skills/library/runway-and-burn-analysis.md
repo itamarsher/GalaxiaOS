@@ -2,7 +2,7 @@
 name: runway-and-burn-analysis
 title: Runway & Burn Analysis
 description: Calculate real burn and runway from measured spend, and surface the date the company must act by.
-roles: finance, ceo, auditor
+roles: finance, ceo
 ---
 # Runway & Burn Analysis
 

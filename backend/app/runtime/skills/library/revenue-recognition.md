@@ -2,7 +2,7 @@
 name: revenue-recognition
 title: Revenue Recognition
 description: Recognize revenue in the period it's earned, not merely when cash arrives, for honest financials.
-roles: finance, auditor
+roles: finance
 ---
 # Revenue Recognition
 

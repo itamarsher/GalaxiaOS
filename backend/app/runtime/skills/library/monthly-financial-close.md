@@ -2,7 +2,7 @@
 name: monthly-financial-close
 title: Monthly Financial Close
 description: Reconcile the month's transactions into a clean, trustworthy set of financials.
-roles: finance, auditor
+roles: finance
 ---
 # Monthly Financial Close
 
