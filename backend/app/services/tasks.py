@@ -207,6 +207,23 @@ async def begin_auditing(
     child_agent = await db.get(Agent, child.agent_id) if child.agent_id else None
     role_name = child_agent.role.value if child_agent else "agent"
     rounds = int((child.input or {}).get("audit_rounds", 0))
+    # A code deliverable is verified by EXECUTION, not by reading a summary — no
+    # native agent can run code, so accepting a coding result on its prose is how
+    # broken code (conflict markers, dropped patches) slips through. When the audited
+    # work came from the coding function, the audit must route verification back to a
+    # runtime that can actually run it (function="engineering"): clone the repo and
+    # run its build + tests, and accept only on a green run.
+    is_code = bool(child_agent) and (child_agent.config or {}).get("function") == "engineering"
+    code_directive = (
+        "\n\nThis is a CODE deliverable. Reading the summary is NOT verification — you "
+        "cannot run code, and code that merely looks right routinely fails to build. "
+        "Before you approve: dispatch a verification initiative to "
+        "`dispatch_task(function=\"engineering\", ...)` to `get_repo` the affected repo, "
+        "run its build and tests, and report the real pass/fail. Accept ONLY on a green, "
+        "executed run (or clearly-cited passing test evidence); otherwise `reopen` with the "
+        "failing output. Never approve a code result on its description alone."
+        if is_code else ""
+    )
     goal = (
         f"AUDIT the result of a {role_name} task before it is accepted.\n\n"
         f"Task: {child.goal}\n\n"
@@ -216,7 +233,7 @@ async def begin_auditing(
         "decision 'approve'. If it falls short, challenge it: `audit_task` with "
         "decision 'reopen' and specific comments on what to fix — your comments are "
         "handed to the agent as its first instruction when it resumes with its full "
-        "prior context. Then finish with `report_result`."
+        "prior context. Then finish with `report_result`." + code_directive
     )
     audit = Task(
         company_id=child.company_id,

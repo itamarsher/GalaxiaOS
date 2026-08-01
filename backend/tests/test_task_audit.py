@@ -131,6 +131,55 @@ async def test_begin_auditing_parks_child_and_spawns_ceo_task(
         assert str(child.id) in a.goal
 
 
+@requires_db
+async def test_begin_auditing_demands_executed_verification_for_code(
+    session_factory, company_with_budget
+):
+    """A coding-function deliverable's audit must route verification to an executor
+    (function=engineering), not let the CEO approve code on its summary alone."""
+    company_id = company_with_budget
+    async with session_factory() as db:
+        ceo = Agent(company_id=company_id, role=AgentRole.ceo, name="CEO")
+        eng = Agent(company_id=company_id, role=AgentRole.custom, name="Engineering",
+                    config={"function": "engineering"})
+        db.add_all([ceo, eng])
+        await db.flush()
+        run = AgentRun(company_id=company_id, trigger=RunTrigger.scheduled, status=RunStatus.running)
+        db.add(run)
+        await db.flush()
+        run.root_run_id = run.id
+        child = Task(company_id=company_id, run_id=run.id, root_run_id=run.id,
+                     agent_id=eng.id, depth=1, goal="implement the fix", status=TaskStatus.running,
+                     transcript=[{"role": "user", "content": "go"}])
+        db.add(child)
+        await db.commit()
+        cid = child.id
+
+    async with session_factory() as db:
+        audit_id = await task_svc.begin_auditing(db, child_id=cid, output={"summary": "fixed it"})
+        await db.commit()
+    async with session_factory() as db:
+        goal = (await db.get(Task, audit_id)).goal
+        assert 'function="engineering"' in goal  # verification routed to the executor
+        assert "NOT verification" in goal
+        assert "executed" in goal.lower()
+
+
+@requires_db
+async def test_begin_auditing_non_code_has_no_execution_directive(
+    session_factory, company_with_budget
+):
+    """A normal (non-coding) deliverable's audit is unchanged — no execution directive."""
+    ceo, growth, parent, child = await _scaffold(session_factory, company_with_budget)
+    async with session_factory() as db:
+        audit_id = await task_svc.begin_auditing(db, child_id=child.id, output={"summary": "draft"})
+        await db.commit()
+    async with session_factory() as db:
+        goal = (await db.get(Task, audit_id)).goal
+        assert 'function="engineering"' not in goal
+        assert "CODE deliverable" not in goal
+
+
 # ── audit_task: approve / reopen ─────────────────────────────────────────────
 async def _put_child_auditing(session_factory, child_id, summary="meh"):
     async with session_factory() as db:
