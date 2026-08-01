@@ -11,9 +11,8 @@ from sqlalchemy import func, select
 
 from app.models import Agent, ChatChannel, ChatParticipant, Company
 from app.models.enums import AgentRole, ChatChannelKind
-from app.services import chat
+from app.services import chat, function_catalog
 from app.services.company_reset import dedupe_singleton_roles
-from app.services import function_catalog
 from app.services.onboarding import provision_fleet
 from tests.conftest import make_company_with_fleet, requires_db
 
