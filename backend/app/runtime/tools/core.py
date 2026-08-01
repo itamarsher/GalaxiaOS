@@ -195,7 +195,7 @@ SPECS: list[ToolSpec] = [
                                     "design",
                                     "finance",
                                     "governance",
-                                                "data",
+                                    "data",
                                 ],
                                 "description": "A standard role; use `function` for a custom block.",
                             },
