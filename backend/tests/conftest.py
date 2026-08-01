@@ -30,7 +30,8 @@ async def make_company_with_fleet(db, *, is_platform: bool = True):
     (with a CEO + oversight roles) call this, passing ``is_platform`` to designate
     the platform company for gate tests.
     """
-    from app.services.onboarding import _fleet_specs, provision_fleet
+    from app.services import function_catalog
+    from app.services.onboarding import provision_fleet
 
     user = User(email=f"{uuid.uuid4()}@t.io", hashed_password="x")
     db.add(user)
@@ -54,7 +55,9 @@ async def make_company_with_fleet(db, *, is_platform: bool = True):
     await db.flush()
     company.mission_id = mission.id
     await provision_fleet(
-        db, company=company, specs=_fleet_specs([]), total_budget_cents=50_000
+        db, company=company,
+        specs=function_catalog.resolve_selection(function_catalog.default_selection()),
+        total_budget_cents=50_000,
     )
     await db.flush()
     return company.id

@@ -41,7 +41,8 @@ from app.models.enums import (
     CompanyStatus,
 )
 from app.observability import get_logger
-from app.services.onboarding import _fleet_specs, provision_fleet
+from app.services import function_catalog
+from app.services.onboarding import provision_fleet
 
 _log = get_logger("abos.company_reset")
 
@@ -263,10 +264,13 @@ async def reset_company(
     fresh.mission_id = new_mission.id
 
     await restore_api_keys(db, company_id, saved_keys)
-    # The default fleet (no LLM) — guarantees a CEO + the oversight roles, wired
-    # under the CEO with the monthly budget split by role.
+    # Rebuild the fleet from the default set of FUNCTIONS (each self-staffing) —
+    # resolve_selection appends the guaranteed oversight blocks, so the company comes
+    # back with a CEO + oversight, wired under the CEO with the monthly budget split.
     await provision_fleet(
-        db, company=fresh, specs=_fleet_specs([]), total_budget_cents=budget_cents
+        db, company=fresh,
+        specs=function_catalog.resolve_selection(function_catalog.default_selection()),
+        total_budget_cents=budget_cents,
     )
     await dedupe_singleton_roles(db, company_id)
     await db.flush()

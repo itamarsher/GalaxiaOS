@@ -46,8 +46,6 @@ from app.runtime.cost_meter import CostMeter
 from app.runtime.prompts import (
     MISSION_TO_PLAN_SCHEMA,
     MISSION_TO_PLAN_SYSTEM,
-    PLAN_TO_ORG_SCHEMA,
-    PLAN_TO_ORG_SYSTEM,
     REFINE_SCHEMA,
     REFINE_SYSTEM,
     generation_language_directive,
@@ -273,108 +271,6 @@ def _clean_company_name(name: object, fallback: str) -> str:
     return cleaned[:80]
 
 
-# A sensible default fleet, used to backfill whatever the org-design LLM omits so
-# the company is never left without a working org (it must at least have a CEO to
-# plan/dispatch and a Governance agent to oversee).
-_DEFAULT_FLEET: list[dict] = [
-    {
-        "role": "ceo",
-        "name": "CEO",
-        "responsibility": "Own strategy: decompose the mission into initiatives and dispatch them to the team.",
-        "autonomy_level": "approve_required",
-    },
-    {
-        "role": "growth",
-        "name": "Growth Lead",
-        "responsibility": "Own customer acquisition and demand generation.",
-        "autonomy_level": "approve_required",
-    },
-    {
-        "role": "research",
-        "name": "Research Lead",
-        "responsibility": "Own market and competitive intelligence.",
-        "autonomy_level": "approve_required",
-    },
-    {
-        "role": "product",
-        "name": "Product Lead",
-        "responsibility": "Own product planning and roadmap.",
-        "autonomy_level": "approve_required",
-    },
-    {
-        "role": "design",
-        "name": "Graphic Designer",
-        "responsibility": (
-            "Own the company's visual identity and brand creative. Generate on-brand "
-            "photos and short videos with Google's Nano Banana, keep the brand & design "
-            "guidelines current, and deliver imagery for marketing, social, and the product."
-        ),
-        "autonomy_level": "approve_required",
-    },
-    {
-        "role": "finance",
-        "name": "Finance Lead",
-        "responsibility": "Own budget monitoring and unit economics.",
-        "autonomy_level": "approve_required",
-    },
-    {
-        "role": "auditor",
-        "name": "Auditor",
-        "responsibility": "Keep the financial records audited and the invoice/receipt paper trail accurate.",
-        "autonomy_level": "approve_required",
-    },
-    {
-        "role": "governance",
-        "name": "Governance Lead",
-        "responsibility": "Own safety, compliance, and oversight.",
-        "autonomy_level": "approve_required",
-    },
-    {
-        "role": "data",
-        "name": "Data Lead",
-        "responsibility": (
-            "Own the company's data: make sure every internal agent can reach the data it "
-            "needs, and control what data is shared with anyone outside the company."
-        ),
-        "autonomy_level": "approve_required",
-    },
-    {
-        "role": "platform",
-        "name": "Platform Engineer",
-        "responsibility": (
-            "Stay dormant until another agent reports a bug or requests a capability; then "
-            "turn it into a precise tracker issue — investigating the code for bugs, and "
-            "capturing the business case and product requirement (not the implementation) "
-            "for capability requests — so the platform can be fixed or extended."
-        ),
-        "autonomy_level": "approve_required",
-    },
-]
-
-
-def _fleet_specs(parsed: list[dict]) -> list[dict]:
-    """Return the agent specs to build, backfilling a usable fleet.
-
-    The org-design LLM can return an empty or partial ``agents`` list (the JSON
-    schema permits it). Rather than ship an empty org, fall back to the default
-    fleet when nothing usable came back, and always guarantee a CEO + Governance.
-    """
-    specs = [s for s in parsed if s.get("role")]
-    if not specs:
-        return [dict(s) for s in _DEFAULT_FLEET]
-    roles = {str(s.get("role")) for s in specs}
-    defaults = {s["role"]: s for s in _DEFAULT_FLEET}
-    if "ceo" not in roles:
-        specs.insert(0, dict(defaults["ceo"]))
-    # Must-have oversight roles: governance, the financial auditor, the data
-    # agent (data access for internal agents + control over external sharing),
-    # and the platform agent (dormant escalation target for bug/feature reports).
-    for required in ("auditor", "governance", "data", "platform"):
-        if required not in roles:
-            specs.append(dict(defaults[required]))
-    return specs
-
-
 # Relative share of the monthly budget by role. Coordination/oversight roles
 # (Governance) carry a smaller operational share than the functional agents
 # that actually spend on the world (Growth runs the most spend-heavy work:
@@ -492,21 +388,25 @@ async def provision_fleet(
 ) -> dict[str, uuid.UUID]:
     """Persist an agent fleet, wire it under a single CEO, and split the budget.
 
-    Shared by LLM generation and the deterministic Galaxia bootstrap so both
-    produce an identically-wired org chart — functional agents reporting to the
-    CEO, with the monthly budget allocated by role. ``specs`` is the already-
-    resolved fleet; run it through :func:`_fleet_specs` first to guarantee the
-    oversight roles (incl. the platform agent). Returns a ``role -> agent_id`` map.
+    Shared by function-first generation, the Galaxia bootstrap, and company reset so
+    they produce an identically-wired org chart — functional agents reporting to the
+    CEO, with the monthly budget allocated by role. ``specs`` is the already-resolved
+    fleet (use :func:`function_catalog.resolve_selection`, which appends the guaranteed
+    oversight blocks). Returns a ``role -> agent_id`` map.
     """
     # Idempotent by role: a non-``custom`` role the company already has is reused
     # rather than duplicated, so calling this on a non-empty fleet can never create
     # a second CEO (or governance/auditor/etc.). ``custom`` agents are always added.
     existing: dict[str, Agent] = {}
+    by_function: dict[str, Agent] = {}
     for a in (
         await db.scalars(select(Agent).where(Agent.company_id == company.id))
     ).all():
         if a.role is not AgentRole.custom:
             existing.setdefault(a.role.value, a)
+        fn = (a.config or {}).get("function")
+        if fn:
+            by_function.setdefault(fn, a)
 
     role_to_agent: dict[str, uuid.UUID] = {}
     for spec in specs:
@@ -514,6 +414,13 @@ async def provision_fleet(
             role = AgentRole(spec.get("role", "custom"))
         except ValueError:
             role = AgentRole.custom
+        # Idempotent by FUNCTION first (several blocks share the ``custom`` role, so
+        # role alone can't dedup them): a function the company already staffs is
+        # reused, so re-provisioning (e.g. company reset) never duplicates it.
+        fn_key = (spec.get("config") or {}).get("function")
+        if fn_key and fn_key in by_function:
+            role_to_agent[role.value] = by_function[fn_key].id
+            continue
         if role is not AgentRole.custom and role.value in existing:
             role_to_agent[role.value] = existing[role.value].id
             continue
@@ -538,6 +445,8 @@ async def provision_fleet(
         role_to_agent[role.value] = agent.id
         if role is not AgentRole.custom:
             existing[role.value] = agent
+        if fn_key:
+            by_function[fn_key] = agent
 
     # Wire functional agents under the CEO.
     ceo_id = role_to_agent.get("ceo")
@@ -700,59 +609,25 @@ async def generate(db: AsyncSession, *, company: Company) -> dict:
                 )
             )
 
-    # ── Spin up the functions (RFC 0002: function-first, else LLM org design) ──
+    # ── Spin up the functions (RFC 0002: function-first is the ONLY model) ──────
+    # A company is composed of the functions it needs; each function provisions and
+    # owns its own staffing agent. There is no central "default fleet of agents": when
+    # the plan recommends no functions, we fall back to a sensible DEFAULT SET OF
+    # FUNCTIONS (each self-staffing), and the guaranteed oversight blocks are appended
+    # by resolve_selection.
     recommended = [k for k in (plan.get("recommended_functions") or []) if isinstance(k, str)]
-    picked = function_catalog.picked_selectable(recommended)
+    picked = function_catalog.picked_selectable(recommended) or function_catalog.default_selection()
     cost_estimate: int | None = None
-    if picked:
-        # Function-first: the recommended building blocks ARE the fleet. GalaxiaOS
-        # spins up each one's component in-house (oversight appended), so no second
-        # LLM call and no third-party signup for the native functions.
-        set_progress(
-            company.id, phase="org", pct=60, message="Spinning up the functions you need"
-        )
-        role_to_agent = await provision_fleet(
-            db, company=company,
-            specs=function_catalog.resolve_selection(picked),
-            total_budget_cents=budget.limit_cents,
-        )
-    else:
-        # Fallback: no recommended functions → today's LLM org designer.
-        set_progress(company.id, phase="org", pct=55, message="Designing the agent fleet")
-        org_input = json.dumps(
-            {
-                "mission": mission.raw_text,
-                "objectives": plan.get("objectives", []),
-                "monthly_budget_cents": budget.limit_cents,
-            },
-            ensure_ascii=False,
-        )
-        org_resp = await meter.run_llm(
-            provider,
-            api_key=api_key,
-            company_id=company.id,
-            agent_id=None,
-            task_id=None,
-            model=planner_model,
-            system=PLAN_TO_ORG_SYSTEM + generation_language_directive(language),
-            messages=[Message(role="user", content=org_input)],
-            max_tokens=gen_max_tokens,
-            json_schema=PLAN_TO_ORG_SCHEMA,
-            funding_user_id=funding_user_id,
-        )
-        org = _parse_llm_json(org_resp)
-        cost_estimate = _as_int(org.get("monthly_cost_estimate_cents"), None)
-        role_to_agent = await provision_fleet(
-            db,
-            company=company,
-            specs=_fleet_specs(_as_dicts(org.get("agents"), "role")),
-            total_budget_cents=budget.limit_cents,
-        )
+    set_progress(company.id, phase="org", pct=60, message="Spinning up the functions you need")
+    role_to_agent = await provision_fleet(
+        db, company=company,
+        specs=function_catalog.resolve_selection(picked),
+        total_budget_cents=budget.limit_cents,
+    )
     set_progress(company.id, phase="wiring", pct=80, message="Wiring the org chart")
-    if picked:
-        # Seed formal health KRs — business KPIs per function + agent-based KPIs —
-        # so targets are first-class and the improvement cycle can detect off-target.
-        await function_health.sync_health_krs(db, company=company)
+    # Seed formal health KRs — business KPIs per function + agent-based KPIs — so
+    # targets are first-class and the improvement cycle can detect off-target.
+    await function_health.sync_health_krs(db, company=company)
 
     # ── Investment review (best-effort; never breaks generation) ──────────────
     investor_reviews = 0
@@ -770,8 +645,9 @@ async def generate(db: AsyncSession, *, company: Company) -> dict:
         "cost_estimate_cents": cost_estimate,
         "agent_roles": list(role_to_agent.keys()),
         "investor_reviews": investor_reviews,
-        # Function-first picks + the external ones the founder must connect (billing →
-        # Stripe); in-house blocks need nothing. Empty on the LLM-org fallback path.
+        # The functions this company is composed of (each self-staffing) + the
+        # external ones the founder must connect (billing → Stripe); in-house
+        # blocks need nothing.
         "functions": picked,
         "functions_needing_connection": function_catalog.external_functions(picked),
     }

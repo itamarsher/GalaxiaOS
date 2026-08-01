@@ -48,7 +48,7 @@ def _f(**kw) -> BusinessFunction:
 
 
 # Selectable blocks the founder picks from, then the oversight blocks GalaxiaOS
-# guarantees on every company (mirroring ``onboarding._fleet_specs``).
+# guarantees on every company (appended by :func:`resolve_selection`).
 _CATALOG: tuple[BusinessFunction, ...] = (
     _f(key="website", title="Web Presence & Conversion", category="acquisition",
        summary="Own the marketing site and turn visitors into signups.",
@@ -146,6 +146,25 @@ def selectable_functions() -> list[BusinessFunction]:
     return [f for f in _CATALOG if not f.core]
 
 
+#: The lean default set of business functions a company starts with when the plan
+#: recommends none — a general go-to-market + operations core. NOT a fixed roster of
+#: agents: each of these functions provisions and owns its own staffing agent (RFC
+#: 0002), and the guaranteed oversight blocks are appended by ``resolve_selection``.
+_DEFAULT_SELECTION: tuple[str, ...] = (
+    "website",
+    "outbound",
+    "inbound",
+    "customer_service",
+    "brand",
+    "finance",
+)
+
+
+def default_selection() -> list[str]:
+    """The default set of function keys when a plan recommends none (self-staffing)."""
+    return list(_DEFAULT_SELECTION)
+
+
 def core_functions() -> list[BusinessFunction]:
     """Oversight blocks GalaxiaOS guarantees on every company regardless of picks."""
     return [f for f in _CATALOG if f.core]
@@ -206,7 +225,7 @@ def spec_for(key: str) -> dict:
 
     The seam where "GalaxiaOS spins up the component" maps onto existing
     org-provisioning: the dict is shaped exactly like the org-designer /
-    ``_DEFAULT_FLEET`` entries ``onboarding.provision_fleet`` consumes (plus a
+    spec dicts ``onboarding.provision_fleet`` consumes (plus a
     ``config`` blob it now passes through), so a founder's pick provisions through
     one code path — carrying the function's identity, health target, and skills.
     """

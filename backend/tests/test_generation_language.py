@@ -98,19 +98,15 @@ def test_mission_to_plan_asks_for_and_schemas_the_language():
     assert MISSION_TO_PLAN_SCHEMA["properties"]["language"] == {"type": "string"}
 
 
-# ── the later stages thread the detected language + stop escaping the text ─────
-def test_generate_threads_language_into_org_stage():
+# ── the later stages thread the detected language ─────────────────────────────
+def test_generate_detects_and_persists_language():
     from app.services import onboarding
 
     src = inspect.getsource(onboarding.generate)
-    # Language is detected from the plan and stored on the mission…
+    # Language is detected from the plan and stored on the mission so downstream
+    # stages (and the running agents) speak the founder's language.
     assert 'plan.get("language")' in src
     assert "mission.language = language" in src
-    # …then handed to the org designer by name, alongside the raw mission, without
-    # ascii-escaping the founder's (possibly non-Latin) text.
-    assert "generation_language_directive(language)" in src
-    assert "ensure_ascii=False" in src
-    assert '"mission": mission.raw_text' in src
 
 
 def test_refine_threads_language():
