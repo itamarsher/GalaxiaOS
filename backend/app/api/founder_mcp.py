@@ -59,6 +59,7 @@ from app.services import (
     onboarding,
 )
 from app.services import artifacts as artifacts_svc
+from app.services import budget as budget_svc
 from app.services import chat as chat_svc
 from app.services import company_reset as company_reset_svc
 from app.services import files as files_svc
@@ -434,6 +435,24 @@ _TOOL_SPECS = [
         },
     },
     {
+        "name": "set_budget",
+        "description": "Raise (or set) the company's monthly budget cap, in cents — the founder's "
+        "lever to top up a company running low on runway so its agents keep operating (a budget "
+        "deadlock stalls the whole fleet). Sets the active budget's absolute limit; returns the new "
+        "limit, spent, reserved, and available. Use when a company escalates a low-runway decision.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "company_id": {"type": "string"},
+                "limit_cents": {
+                    "type": "integer",
+                    "description": "New monthly budget cap, in cents (absolute, not a delta).",
+                },
+            },
+            "required": ["company_id", "limit_cents"],
+        },
+    },
+    {
         "name": "run_cycle",
         "description": "Kick off one business cycle on demand (the CEO reviews state and dispatches "
         "the next initiatives). No-ops if a cycle is already running.",
@@ -756,6 +775,38 @@ async def _call_tool(db, user_id: uuid.UUID, mid, params: dict) -> dict:
                             {"id": str(c.id), "name": c.name, "status": c.status.value}
                             for c in rows
                         ]
+                    }
+                ),
+            )
+
+        if name == "set_budget":
+            company = await _founder_company(db, user_id, args.get("company_id"))
+            try:
+                new_limit = int(args["limit_cents"])
+            except (ValueError, TypeError):
+                return _error(mid, -32602, "limit_cents must be an integer")
+            if new_limit <= 0:
+                return _error(mid, -32000, "limit_cents must be positive")
+            budget = await budget_svc.get_active_budget(db, company.id)
+            if budget is None:
+                return _error(mid, -32000, "no active budget for this company")
+            if new_limit < budget.spent_cents:
+                return _error(
+                    mid, -32000,
+                    f"new limit {new_limit} is below already-spent {budget.spent_cents}",
+                )
+            budget.limit_cents = new_limit
+            await db.commit()
+            return _ok(
+                mid,
+                _content(
+                    {
+                        "limit_cents": budget.limit_cents,
+                        "spent_cents": budget.spent_cents,
+                        "reserved_cents": budget.reserved_cents,
+                        "available_cents": budget.limit_cents
+                        - budget.spent_cents
+                        - budget.reserved_cents,
                     }
                 ),
             )
