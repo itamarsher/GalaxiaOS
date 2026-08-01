@@ -32,7 +32,7 @@ from app.models.enums import (
 )
 from app.observability import get_logger
 from app.runtime import breakers, prompts
-from app.runtime.backends import get_backend
+from app.runtime.backends import external_push_available, get_backend
 from app.runtime.context import RuntimeContext
 from app.runtime.tools.base import DEFAULT_MAX_OBSERVATION_CHARS, clip
 from app.services import budget as budget_svc
@@ -255,6 +255,17 @@ async def run_task(ctx: RuntimeContext, task_id: uuid.UUID) -> dict:
             # pull, claim, and report through the human-worker surface. This is the
             # async-first lifecycle applied to a human worker (RFC 0001 step 6).
             return {"status": "awaiting_human"}
+
+        if agent.backend_type is AgentBackendType.external and not external_push_available():
+            # No PUSH worker (e.g. an OpenClaw Gateway) is bound, so this function is
+            # staffed by a PULL worker that claims initiatives on its own cadence over
+            # the Business-Function MCP — a connected coding runtime (opencode / Claude
+            # Code) for the delegated engineering function (RFC 0003). Leave the
+            # initiative offered (queued) for it to claim, exactly like the human path;
+            # never push-dispatch to a worker that isn't there (which would fail the
+            # task with "no runtime connected"). Reclaimed if a claim's lease lapses
+            # (release_expired_claims / reclaim_expired_initiatives).
+            return {"status": "awaiting_worker"}
 
         task.status = TaskStatus.running
         await event_counters.record(

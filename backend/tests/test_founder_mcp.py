@@ -455,6 +455,45 @@ def test_connect_doc_explains_verified_over_described_principle():
 
 
 @requires_db
+async def test_connect_function_delegates_to_external_and_mints_token(session_factory, monkeypatch):
+    """connect_function flips a function to the external backend and mints a
+    Business-Function connection token so a coding runtime can pull its work."""
+    from app.models import Agent
+    from app.models.enums import AgentBackendType, AgentRole
+    from app.services import function_token
+
+    monkeypatch.setattr(settings, "function_connection_secret", "test-secret")
+    monkeypatch.setattr(settings, "public_api_base_url", "https://api.example")
+
+    async with session_factory() as db:
+        u, company = await _active_company_with_founder(db)
+        eng = Agent(
+            company_id=company.id, role=AgentRole.custom, name="Engineering",
+            config={"function": "engineering"}, backend_type=AgentBackendType.native,
+        )
+        db.add(eng)
+        await db.flush()
+        await db.commit()
+        uid, cid, eid = u.id, str(company.id), eng.id
+
+    # Identify the function by its catalog key.
+    async with session_factory() as db:
+        r = await fm._call_tool(
+            db, uid, 1,
+            {"name": "connect_function", "arguments": {"company_id": cid, "function": "engineering"}},
+        )
+        p = _payload(r)
+        assert p["backend_type"] == "external"
+        assert p["mcp_url"].endswith("/connect/business-function")
+        # The minted token verifies back to exactly this (company, function).
+        assert function_token.verify(p["token"]) == (uuid.UUID(cid), eid)
+
+    # The agent was actually flipped to the external (pull) backend.
+    async with session_factory() as db:
+        assert (await db.get(Agent, eid)).backend_type is AgentBackendType.external
+
+
+@requires_db
 async def test_write_file_over_mcp(session_factory, monkeypatch):
     """Founder can seed a knowledge bundle into the company's file store: write_file
     archives it (provider upload + CompanyFile row) so agents can read it back."""

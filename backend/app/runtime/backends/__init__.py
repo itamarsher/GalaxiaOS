@@ -43,3 +43,16 @@ def get_backend(backend_type: str) -> AgentBackend:
             f"Agent backend {backend_type!r} is not available yet."
         )
     return backend
+
+
+def external_push_available() -> bool:
+    """Whether the ``external`` backend has a bound PUSH worker (e.g. an OpenClaw
+    Gateway) that Galaxia can invoke and await.
+
+    When ``False``, an ``external`` function is staffed by a PULL worker that claims
+    initiatives on its own cadence over the Business-Function MCP (a connected
+    coding runtime — opencode / Claude Code — under RFC 0003). The orchestrator uses
+    this to decide whether to push-dispatch an ``external`` task or leave it queued
+    for the pull worker to claim."""
+    backend = _BACKENDS.get("external")
+    return isinstance(backend, ConnectedBackend) and backend.has_worker()

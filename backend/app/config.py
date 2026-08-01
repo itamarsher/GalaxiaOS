@@ -717,6 +717,17 @@ class Settings(BaseSettings):
     # runs natively regardless (it orchestrates the company).
     default_agent_backend: str = "native"
 
+    # Delegate the CODING function specifically to an EXTERNAL coding runtime by
+    # default (RFC 0003): a freshly generated `engineering` function binds to the
+    # `external` backend so a connected agent (opencode / Claude Code) pulls its
+    # initiatives over the Business-Function MCP, rather than the in-process loop
+    # writing code it can never compile or run. Unlike `default_agent_backend`, this
+    # needs NO OpenClaw Gateway — an `external` function with no bound push worker
+    # leaves its initiatives QUEUED for a pull worker to claim (orchestrator.run_task),
+    # so coding is delegated even in a pull-only deployment. Set false to keep the
+    # coding function on the native in-process loop.
+    delegate_coding_external: bool = True
+
     # Secret that signs per-(company, function) connection tokens for the
     # Business-Function MCP endpoint (RFC 0001 pull transport). Empty => the
     # endpoint is disabled and all connection attempts are rejected, so the pull

@@ -8,7 +8,7 @@ from __future__ import annotations
 from sqlalchemy import select
 
 from app.models import Agent, Budget, Company
-from app.models.enums import AgentRole, CompanyStatus
+from app.models.enums import AgentBackendType, AgentRole, CompanyStatus
 from app.services import function_catalog as fc
 from app.services import onboarding
 from app.services.onboarding import provision_fleet
@@ -48,6 +48,40 @@ async def test_selected_functions_provision_with_config_and_health_target(
     roles = {a.role for a in agents}
     assert {AgentRole.ceo, AgentRole.governance, AgentRole.auditor,
             AgentRole.data, AgentRole.platform} <= roles
+
+
+@requires_db
+async def test_engineering_function_provisions_as_external_by_default(
+    session_factory, company_with_budget, monkeypatch
+):
+    """Picking the coding function binds it to the external/pull runtime by default
+    (RFC 0003), while a sibling in-house block stays native — no gateway required."""
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "delegate_coding_external", True)
+    monkeypatch.setattr(settings, "openclaw_base_url", "")  # no push gateway
+
+    async with session_factory() as db:
+        company = await db.get(Company, company_with_budget)
+        await provision_fleet(
+            db, company=company,
+            specs=fc.resolve_selection(["engineering", "website"]),
+            total_budget_cents=10_000,
+        )
+        await db.commit()
+
+    async with session_factory() as db:
+        agents = (
+            await db.scalars(select(Agent).where(Agent.company_id == company_with_budget))
+        ).all()
+    by_fn = {(a.config or {}).get("function"): a for a in agents}
+    # The coding function is delegated to an external worker…
+    assert by_fn["engineering"].backend_type is AgentBackendType.external
+    # …while a normal in-house function stays on the native loop…
+    assert by_fn["website"].backend_type is AgentBackendType.native
+    # …and the CEO always runs natively.
+    ceo = next(a for a in agents if a.role is AgentRole.ceo)
+    assert ceo.backend_type is AgentBackendType.native
 
 
 @requires_db

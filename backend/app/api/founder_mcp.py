@@ -40,6 +40,7 @@ from app.models import (
     User,
 )
 from app.models.enums import (
+    AgentBackendType,
     AgentRole,
     AgentStatus,
     CompanyStatus,
@@ -53,6 +54,7 @@ from app.services import (
     founder_token,
     function_health,
     function_improvement,
+    function_token,
     involvement,
     onboarding,
 )
@@ -461,6 +463,26 @@ _TOOL_SPECS = [
         "inputSchema": {
             "type": "object",
             "properties": {"company_id": {"type": "string"}},
+            "required": ["company_id"],
+        },
+    },
+    {
+        "name": "connect_function",
+        "description": "Delegate one function to an EXTERNAL agent runtime (opencode / Claude "
+        "Code) and mint its Business-Function connection token. This flips the function to the "
+        "`external` backend — so its initiatives are offered (queued) for the connected worker "
+        "to pull, claim, do, and report over MCP — and returns a bearer token + the MCP URL to "
+        "configure that worker with. Use it to connect a coding agent to the engineering "
+        "function. Identify the function by agent_id (from list_agents) or by catalog key "
+        "(e.g. 'engineering'). The token is shown once — save it. Coding is already delegated by "
+        "default for newly generated companies; use this to connect an existing one.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "company_id": {"type": "string"},
+                "agent_id": {"type": "string", "description": "The function's agent id (from list_agents)."},
+                "function": {"type": "string", "description": "Or the catalog key, e.g. 'engineering'."},
+            },
             "required": ["company_id"],
         },
     },
@@ -1196,6 +1218,61 @@ async def _call_tool(db, user_id: uuid.UUID, mid, params: dict) -> dict:
                             }
                             for a in agents
                         ]
+                    }
+                ),
+            )
+
+        if name == "connect_function":
+            company = await _founder_company(db, user_id, args.get("company_id"))
+            agent = None
+            if args.get("agent_id"):
+                try:
+                    aid = uuid.UUID(str(args["agent_id"]))
+                except (ValueError, TypeError):
+                    return _error(mid, -32602, "invalid agent_id")
+                agent = await db.get(Agent, aid)
+                if agent is not None and agent.company_id != company.id:
+                    agent = None
+            elif args.get("function"):
+                key = str(args["function"]).strip().lower()
+                rows = (
+                    await db.scalars(
+                        select(Agent).where(
+                            Agent.company_id == company.id,
+                            Agent.status == AgentStatus.active,
+                        )
+                    )
+                ).all()
+                # Match on the catalog function key first (several blocks share the
+                # `custom` role, so the key is the reliable identity); fall back to role.
+                agent = next(
+                    (a for a in rows if (a.config or {}).get("function") == key), None
+                ) or next((a for a in rows if a.role.value == key), None)
+            else:
+                return _error(mid, -32602, "provide agent_id or function")
+            if agent is None:
+                return _error(mid, -32000, "function not found")
+            if agent.backend_type is AgentBackendType.marketplace:
+                return _error(mid, -32000, "a hired (marketplace) agent can't be reassigned to an external worker")
+            try:
+                token = function_token.mint(company_id=company.id, agent_id=agent.id)
+            except function_token.TokensDisabled as exc:
+                return _error(mid, -32000, str(exc))
+            # Connecting an external worker means this function is externally staffed:
+            # flip it to `external` so its initiatives are offered for the worker to pull.
+            agent.backend_type = AgentBackendType.external
+            await db.commit()
+            base = settings.public_api_base_url.rstrip("/") if settings.public_api_base_url else ""
+            return _ok(
+                mid,
+                _content(
+                    {
+                        "function": agent.role.value,
+                        "agent_id": str(agent.id),
+                        "name": agent.name,
+                        "backend_type": agent.backend_type.value,
+                        "token": token,
+                        "mcp_url": f"{base}/connect/business-function" if base else "/connect/business-function",
                     }
                 ),
             )
