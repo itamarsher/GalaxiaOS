@@ -280,7 +280,6 @@ def _clean_company_name(name: object, fallback: str) -> str:
 _DEFAULT_BUDGET_WEIGHT = 2.0
 _ROLE_BUDGET_WEIGHTS: dict[AgentRole, float] = {
     AgentRole.governance: 1.0,
-    AgentRole.auditor: 1.0,
     # The platform agent is idle most of the time (only wakes when triggered), so
     # it carries the smallest operational share.
     AgentRole.platform: 1.0,
@@ -396,7 +395,7 @@ async def provision_fleet(
     """
     # Idempotent by role: a non-``custom`` role the company already has is reused
     # rather than duplicated, so calling this on a non-empty fleet can never create
-    # a second CEO (or governance/auditor/etc.). ``custom`` agents are always added.
+    # a second CEO (or governance/data/etc.). ``custom`` agents are always added.
     existing: dict[str, Agent] = {}
     by_function: dict[str, Agent] = {}
     for a in (

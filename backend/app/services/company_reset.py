@@ -100,7 +100,6 @@ async def restore_api_keys(
 _SINGLETON_ROLES = (
     AgentRole.ceo,
     AgentRole.governance,
-    AgentRole.auditor,
     AgentRole.data,
     AgentRole.platform,
 )

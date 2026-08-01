@@ -46,7 +46,7 @@ async def test_selected_functions_provision_with_config_and_health_target(
     assert "external provider" in by_fn["billing"].system_prompt
     # Oversight is guaranteed regardless of what was picked.
     roles = {a.role for a in agents}
-    assert {AgentRole.ceo, AgentRole.governance, AgentRole.auditor,
+    assert {AgentRole.ceo, AgentRole.governance,
             AgentRole.data, AgentRole.platform} <= roles
 
 
