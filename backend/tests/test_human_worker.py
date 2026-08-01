@@ -201,3 +201,40 @@ async def test_orchestrator_leaves_external_pull_task_offered(session_factory, m
     # Sanity: the registry helper reports no push worker in a plain (gateway-less)
     # deployment, which is what makes the pull posture the default.
     assert isinstance(orchestrator.get_backend("external"), ConnectedBackend)
+
+
+@requires_db
+async def test_pull_staffed_function_beats_a_configured_push_gateway(session_factory, monkeypatch):
+    """A function a founder connected a pull worker to (config.worker == 'pull') keeps
+    its initiatives queued for that worker EVEN WHEN a global push Gateway is bound —
+    the connected agent, not the Gateway, gets the work (connect_function precedence)."""
+    from app.models import Agent
+    from app.runtime import orchestrator
+    from app.runtime.context import RuntimeContext
+
+    # A push Gateway IS available — without the pull mark this would push-dispatch.
+    monkeypatch.setattr(orchestrator, "external_push_available", lambda: True)
+
+    ids = await _seed(session_factory, backend=AgentBackendType.external)
+    # Mark the external function pull-staffed, as connect_function does.
+    async with session_factory() as db:
+        a = await db.get(Agent, ids.human_agent_id)
+        a.config = {**(a.config or {}), "worker": "pull"}
+        await db.commit()
+
+    engine = create_async_engine(os.environ["ABOS_TEST_DATABASE_URL"], future=True)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    async def _noop_enqueue(task_id, *, delay_seconds=0):  # pragma: no cover - unused here
+        raise AssertionError("a pull-staffed task must not be push-enqueued")
+
+    ctx = RuntimeContext(
+        session_factory=factory, cost_meter=None, provider=None, enqueue_task=_noop_enqueue
+    )
+    try:
+        result = await orchestrator.run_task(ctx, ids.task_id)
+        assert result["status"] == "awaiting_worker"  # queued for the pull worker, not pushed
+        async with factory() as db:
+            assert (await db.get(Task, ids.task_id)).status is TaskStatus.queued
+    finally:
+        await engine.dispose()

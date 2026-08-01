@@ -1259,8 +1259,13 @@ async def _call_tool(db, user_id: uuid.UUID, mid, params: dict) -> dict:
             except function_token.TokensDisabled as exc:
                 return _error(mid, -32000, str(exc))
             # Connecting an external worker means this function is externally staffed:
-            # flip it to `external` so its initiatives are offered for the worker to pull.
+            # flip it to `external` so its initiatives are offered for the worker to
+            # pull, and mark it pull-staffed so the orchestrator offers its initiatives
+            # to THIS connected worker even when a global push Gateway is configured
+            # (the connected agent, not the Gateway, gets the work). Reassign config so
+            # the JSONB change is detected.
             agent.backend_type = AgentBackendType.external
+            agent.config = {**(agent.config or {}), "worker": "pull"}
             await db.commit()
             base = settings.public_api_base_url.rstrip("/") if settings.public_api_base_url else ""
             return _ok(
