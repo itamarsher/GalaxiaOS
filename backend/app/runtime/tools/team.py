@@ -50,8 +50,10 @@ _MAX_PLAYBOOK_CHARS = 8000
 #: Cap on a single agent's directive.
 _MAX_DIRECTIVE_CHARS = 4000
 
-# Roles the CEO may hire into (the CEO can't hire another CEO).
-_HIREABLE_ROLES = [r.value for r in AgentRole if r is not AgentRole.ceo]
+# Roles the CEO may hire into. Excludes the CEO (only one), and the auditor —
+# which is no longer a real role (no role prompt, no catalog function, not
+# dispatchable), kept only as an enum value for backward-compatible data.
+_HIREABLE_ROLES = [r.value for r in AgentRole if r not in (AgentRole.ceo, AgentRole.auditor)]
 
 SPECS: list[ToolSpec] = [
     ToolSpec(
