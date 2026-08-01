@@ -177,6 +177,13 @@ class Settings(BaseSettings):
     # window (long enough that a just-created decision/wait is never raced).
     orphaned_approval_grace_minutes: int = 15
 
+    # Same safety net for a task stranded in ``auditing``: a delegated result parks
+    # there while a review task audits it, but a worker restart loses the review job
+    # (recover_pending_work only re-enqueues running/queued tasks), leaving the parent
+    # active forever so the cycle never winds down. Audits are bounded (max_audit_rounds)
+    # and fast, so a generous grace only ever reaps genuinely orphaned ones.
+    orphaned_audit_grace_minutes: int = 30
+
     # Human-backed web search: when no automated web-search provider is connected,
     # route an agent's web_search/web_fetch to the FOUNDER (a DM the founder — or
     # their AI operator — answers with the findings) instead of reporting the
