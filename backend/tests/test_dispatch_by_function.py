@@ -65,11 +65,63 @@ async def test_dispatch_by_function_reaches_the_right_custom_block(
     # The initiative landed on the engineering block, not the other custom one.
     async with session_factory() as db:
         rows = (await db.scalars(
-            select(Task).where(Task.company_id == company_id, Task.goal == "fix and re-verify the MVP")
+            select(Task).where(Task.company_id == company_id, Task.agent_id == eng_id)
         )).all()
-        assert len(rows) == 1
-        assert rows[0].agent_id == eng_id
-        assert rows[0].agent_id != cs_id
+        # The dispatched child (excluding the CEO's own root task).
+        children = [t for t in rows if t.goal.startswith("fix and re-verify the MVP")]
+        assert len(children) == 1
+        assert children[0].agent_id == eng_id
+        assert children[0].agent_id != cs_id
+        # The handoff carried the excellence contract structurally.
+        assert "The bar (non-negotiable)" in children[0].goal
+
+
+@requires_db
+async def test_handoff_carries_excellence_contract_and_audit_enforces_it(
+    session_factory, company_with_budget
+):
+    """Every dispatch carries an excellence mandate structurally; a CEO-set `standard`
+    rides into the doer's goal AND is stored so the audit gate enforces that bar."""
+    from app.services import tasks as task_svc
+
+    company_id = company_with_budget
+    async with session_factory() as db:
+        db.add(Agent(company_id=company_id, role=AgentRole.growth, name="Growth"))
+        await db.commit()
+    ceo, task = await _ceo_task(session_factory, company_id)
+
+    async with session_factory() as db:
+        outcome = await execute_tool(
+            db, _Ctx(), agent=ceo, task=task, name="dispatch_task",
+            args={"role": "growth", "goal": "write the launch post",
+                  "standard": "10x better than a generic blog post; a named, measurable hook"},
+        )
+        await db.commit()
+    assert outcome.is_error is False
+
+    async with session_factory() as db:
+        child = (await db.scalars(
+            select(Task).where(Task.company_id == company_id,
+                               Task.goal.like("write the launch post%"))
+        )).one()
+        # Structural mandate + the CEO's specific bar both ride into the doer's goal.
+        assert "The bar (non-negotiable)" in child.goal
+        assert "10x better than a generic blog post" in child.goal
+        # The bar is stored so the audit can enforce it.
+        assert child.input["standard"].startswith("10x better")
+        cid = child.id
+
+    # The audit gate holds the result to that excellence bar.
+    async with session_factory() as db:
+        c = await db.get(Task, cid)
+        c.status = TaskStatus.running  # eligible to audit
+        await db.commit()
+        audit_id = await task_svc.begin_auditing(db, child_id=cid, output={"summary": "a post"})
+        await db.commit()
+    async with session_factory() as db:
+        goal = (await db.get(Task, audit_id)).goal
+        assert "EXCELLENT bar" in goal
+        assert "10x better than a generic blog post" in goal  # the handoff bar is enforced
 
 
 @requires_db
