@@ -213,6 +213,20 @@ async def begin_auditing(
     # work came from the coding function, the audit must route verification back to a
     # runtime that can actually run it (function="engineering"): clone the repo and
     # run its build + tests, and accept only on a green run.
+    # Excellence contract (set at handoff in _spawn_child): the audit gate enforces
+    # the bar the CEO set for this initiative, and holds even an un-barred result to
+    # an EXCELLENT standard — so acceptance pushes functions toward their best work
+    # rather than waving through the merely-adequate.
+    standard = (child.input or {}).get("standard")
+    excellence_directive = (
+        "\n\nHold this to an EXCELLENT bar, not 'meets best practices' or 'good enough' — "
+        "the audit exists to push the function to its best. If the result is competent but "
+        "unremarkable, or leaves obvious upside on the table, `reopen` it and name the "
+        "specific higher bar it must hit."
+    )
+    if standard and str(standard).strip():
+        excellence_directive += f"\nThe bar set for this initiative at handoff: {str(standard).strip()}"
+
     is_code = bool(child_agent) and (child_agent.config or {}).get("function") == "engineering"
     code_directive = (
         "\n\nThis is a CODE deliverable. Reading the summary is NOT verification — you "
@@ -233,7 +247,7 @@ async def begin_auditing(
         "decision 'approve'. If it falls short, challenge it: `audit_task` with "
         "decision 'reopen' and specific comments on what to fix — your comments are "
         "handed to the agent as its first instruction when it resumes with its full "
-        "prior context. Then finish with `report_result`." + code_directive
+        "prior context. Then finish with `report_result`." + excellence_directive + code_directive
     )
     audit = Task(
         company_id=child.company_id,

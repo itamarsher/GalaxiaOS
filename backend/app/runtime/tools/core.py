@@ -151,6 +151,13 @@ SPECS: list[ToolSpec] = [
                     "addresses a specific block. Takes precedence over `role`.",
                 },
                 "goal": {"type": "string", "description": "What that agent should accomplish."},
+                "standard": {
+                    "type": "string",
+                    "description": "The bar for an EXCELLENT result on THIS initiative — the "
+                    "concrete, high standard the function must clear, not just 'do X'. Push "
+                    "the function toward its best work: name what exceptional looks like and "
+                    "the criteria it will be judged (and audited) against. Always set this.",
+                },
                 "objective": {
                     "type": "integer",
                     "description": (
@@ -202,6 +209,12 @@ SPECS: list[ToolSpec] = [
                             "goal": {
                                 "type": "string",
                                 "description": "What that agent should accomplish.",
+                            },
+                            "standard": {
+                                "type": "string",
+                                "description": "The bar for an EXCELLENT result on this "
+                                "initiative — the high standard it must clear and be audited "
+                                "against, not just 'do X'. Always set this.",
                             },
                             "objective": {
                                 "type": "integer",
@@ -433,6 +446,26 @@ def _normalized_goal(goal: str) -> str:
     return " ".join((goal or "").split()).lower()
 
 
+def _excellence_mandate(standard: str | None) -> str:
+    """The excellence contract appended to every dispatched initiative's goal.
+
+    Structural, not advisory: it rides on EVERY handoff so a function is pushed
+    toward its best result — not a competent, best-practice-following one — whether
+    or not the CEO articulated a bar. When the CEO supplies a specific ``standard``,
+    it is named so the doer works to that concrete bar and the audit enforces it.
+    """
+    mandate = (
+        "\n\n── The bar (non-negotiable) ──\n"
+        "Deliver the BEST result this function can produce, not one that is merely "
+        "adequate or 'follows best practices'. Decide what an exceptional version of "
+        "this looks like, then clear that bar; name what you deliberately traded off "
+        "and why. Competent-but-unremarkable work will be sent back for another pass."
+    )
+    if standard and standard.strip():
+        mandate += f"\nThe bar for THIS initiative: {standard.strip()}"
+    return mandate
+
+
 async def _spawn_child(
     db,
     ctx,
@@ -442,6 +475,7 @@ async def _spawn_child(
     goal: str,
     objective_id: uuid.UUID | None = None,
     function: str | None = None,
+    standard: str | None = None,
 ) -> str:
     """Enqueue a sub-task for the earliest active agent of ``role`` (or ``function``).
 
@@ -493,7 +527,11 @@ async def _spawn_child(
         )
     ).all()
     for other in inflight:
-        same_goal = _normalized_goal(other.goal) == norm
+        # Dedup on the RAW goal (dispatched text), not the stored goal — the stored
+        # goal carries the appended excellence mandate, so compare the raw goal we
+        # recorded in input (falling back to the stored goal for older tasks).
+        other_raw = (other.input or {}).get("raw_goal") or other.goal
+        same_goal = _normalized_goal(other_raw) == norm
         same_slot = (
             effective_objective is not None
             and other.objective_id == effective_objective
@@ -509,7 +547,16 @@ async def _spawn_child(
         parent_task_id=parent.id,
         objective_id=effective_objective,
         depth=parent.depth + 1,
-        goal=goal,
+        # The handoff carries an excellence CONTRACT, not just a goal: every
+        # dispatched initiative gets a standing "deliver your best, not merely
+        # adequate" mandate (plus the CEO's specific bar when given), and the same
+        # bar is stored so the audit gate enforces it. This is structural — applied
+        # to every handoff in code — so pushing functions toward excellence doesn't
+        # depend on the CEO remembering to.
+        goal=goal + _excellence_mandate(standard),
+        # Keep the raw goal (for dedup, which must compare pre-mandate text) and the
+        # excellence bar (for the audit gate to enforce).
+        input={"raw_goal": goal, **({"standard": standard} if standard else {})},
         status=TaskStatus.queued,
         loop_signature=loop_signature(child_agent.id, goal),
     )
@@ -603,7 +650,8 @@ async def _dispatch_task(db, ctx, *, agent: Agent, task: Task, args: dict) -> To
         )
     target = function or role
     result = await _spawn_child(
-        db, ctx, task, agent, role, args["goal"], objective_id, function=function
+        db, ctx, task, agent, role, args["goal"], objective_id, function=function,
+        standard=args.get("standard"),
     )
     if result == _NO_AGENT:
         return ToolOutcome(
@@ -674,7 +722,8 @@ async def _dispatch_tasks(db, ctx, *, agent: Agent, task: Task, args: dict) -> T
         role = entry.get("role")
         target = function or role
         result = await _spawn_child(
-            db, ctx, task, agent, role, entry["goal"], objective_id, function=function
+            db, ctx, task, agent, role, entry["goal"], objective_id, function=function,
+            standard=entry.get("standard"),
         )
         if result == _DISPATCHED:
             dispatched.append(f"{target}: {str(entry['goal'])[:60]}")
