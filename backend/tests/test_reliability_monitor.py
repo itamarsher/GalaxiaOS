@@ -42,10 +42,10 @@ async def test_failed_task_becomes_a_platform_investigation_once(session_factory
         await db.commit()
 
     async with session_factory() as db:
-        growth = await db.scalar(
-            select(Agent).where(Agent.company_id == cid, Agent.role == AgentRole.growth)
+        finance = await db.scalar(
+            select(Agent).where(Agent.company_id == cid, Agent.role == AgentRole.finance)
         )
-        ft = await _failed_task(db, cid, growth.id)
+        ft = await _failed_task(db, cid, finance.id)
         await db.commit()
         ft_id = ft.id
 
@@ -89,8 +89,8 @@ async def test_only_failed_tasks_are_reviewed(session_factory):
         await db.commit()
 
     async with session_factory() as db:
-        growth = await db.scalar(
-            select(Agent).where(Agent.company_id == cid, Agent.role == AgentRole.growth)
+        finance = await db.scalar(
+            select(Agent).where(Agent.company_id == cid, Agent.role == AgentRole.finance)
         )
         # A completed (non-failed) task must be ignored.
         run = AgentRun(company_id=cid, trigger=RunTrigger.scheduled, status=RunStatus.running)
@@ -98,7 +98,7 @@ async def test_only_failed_tasks_are_reviewed(session_factory):
         await db.flush()
         run.root_run_id = run.id
         done = Task(
-            company_id=cid, run_id=run.id, root_run_id=run.id, agent_id=growth.id,
+            company_id=cid, run_id=run.id, root_run_id=run.id, agent_id=finance.id,
             goal="ok", status=TaskStatus.done, output={"result": "fine"},
         )
         db.add(done)
