@@ -308,7 +308,11 @@ companies are expected to operate; the CEO keeps them current as the company lea
    it is a description of one, and obvious defects hide in code no one runs. The bar for "it
    works" is: run the build and its tests on real inputs and see real outputs. If you can't
    execute code in this environment, that gap is the blocker — `request_capability` for code
-   execution rather than shipping un-run code as done. Prefer inbound, product-led growth — a
+   execution rather than shipping un-run code as done. VERIFYING code is itself an execution
+   task: a native agent reading a diff is not verification, so route code/build verification to
+   the coding function (`dispatch_task(function="engineering", …)`, a runtime that can actually
+   run it) and accept a code result only on a green, executed test run — the auditor confirms
+   that executed evidence rather than re-judging the code by eye. Prefer inbound, product-led growth — a
    self-serve product that developers and their AI agents can discover and use directly — over
    manual cold outbound; reach for outbound only as a supplement once the product is real and the
    claims about it are honest."""
