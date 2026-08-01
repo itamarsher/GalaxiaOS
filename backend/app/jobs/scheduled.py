@@ -83,6 +83,58 @@ async def reap_orphaned_approvals(ctx: dict) -> dict:
     return {"reaped": reaped}
 
 
+async def reap_orphaned_audits_for_company(db, company_id) -> int:
+    """Fail the tenant's tasks stranded in ``auditing`` with nothing left to advance them.
+
+    A delegated result parks in ``auditing`` while a review task audits it; when the
+    review finishes it advances the parent. If the worker restarts mid-audit the review
+    job is lost — ``recover_pending_work`` only re-enqueues ``running``/``queued`` tasks
+    — so the parent sits in ``auditing`` forever, and because that is an active status
+    the continuous business cycle never winds down: the whole company silently
+    deadlocks ("cycle active" with dead tasks). Past a generous grace window (audits are
+    bounded by ``max_audit_rounds`` and complete in minutes, so a legitimate audit is
+    never raced) this fails such tasks, letting the run wind down and the next cycle
+    start. Operates on the passed (tenant-scoped) session and does NOT commit — the cron
+    wrapper owns the transaction. Returns how many tasks it reaped.
+    """
+    from datetime import UTC, datetime, timedelta
+
+    from app.models import Task
+    from app.models.enums import TaskStatus
+
+    cutoff = datetime.now(UTC) - timedelta(minutes=settings.orphaned_audit_grace_minutes)
+    stuck = (
+        await db.scalars(
+            select(Task).where(
+                Task.company_id == company_id,
+                Task.status == TaskStatus.auditing,
+                Task.updated_at < cutoff,
+            )
+        )
+    ).all()
+    for task in stuck:
+        task.status = TaskStatus.failed
+        task.output = {
+            **(task.output or {}),
+            "error": (
+                "Reaped: stranded in auditing with no review to advance it "
+                "(orphaned by a worker restart; would deadlock the company)."
+            ),
+        }
+    return len(stuck)
+
+
+async def reap_orphaned_audits(ctx: dict) -> dict:
+    """Cron: reap orphaned ``auditing`` tasks across every active company."""
+    reaped = 0
+    for company_id in await _active_company_ids():
+        async with SessionLocal() as db:
+            await set_tenant(db, company_id)
+            reaped += await reap_orphaned_audits_for_company(db, company_id)
+            await db.commit()
+    return {"reaped": reaped}
+
+
 async def reap_stale_chat_waits_for_company(db, company_id) -> list:
     """Time out reply-waits that never got an answer, so silence can't deadlock a task.
 

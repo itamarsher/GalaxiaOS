@@ -21,6 +21,7 @@ from app.jobs.scheduled import (
     promote_feature_backlog,
     reap_expired_web_search_memory,
     reap_orphaned_approvals,
+    reap_orphaned_audits,
     reap_stale_chat_waits,
     reclaim_expired_initiatives,
     recompute_runway,
@@ -140,6 +141,10 @@ class WorkerSettings:
         # park-without-a-decision can't silently deadlock the whole company. Every 5
         # minutes; only acts on tasks past the grace window.
         cron(reap_orphaned_approvals, minute=set(range(4, 60, 5))),
+        # Reap tasks stranded in ``auditing`` when a worker restart lost the review
+        # job (recover_pending_work only re-enqueues running/queued) — auditing is an
+        # active status, so a stuck one deadlocks the whole cycle. Every 5 min (:06).
+        cron(reap_orphaned_audits, minute=set(range(6, 60, 5))),
         # Time out chat reply-waits that never got an answer (founder away, teammate
         # crashed) so silence can't deadlock a task forever — resumes it with a
         # "proceed or escalate" note. Every 5 minutes (offset :03); only past grace.
