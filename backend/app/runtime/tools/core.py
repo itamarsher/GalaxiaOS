@@ -806,12 +806,20 @@ async def _submit_plan(db, ctx, *, agent: Agent, task: Task, args: dict) -> Tool
     # founder in duplicate "approve this plan" decisions. Don't create another; tell
     # the agent to wait on the open one. This task keeps running (no park) so it can
     # wrap up rather than deadlock on a decision it doesn't own.
+    # Scoped to tasks still actually waiting on that decision: if the owning task
+    # terminated some other way (crash recovery, admin reset, ...) the
+    # ``DecisionRequest`` can be left ``pending`` forever with nothing left to
+    # resolve it, and this gate would otherwise block the agent's every future
+    # ``submit_plan`` call across all subsequent tasks (the "stale gate" bug).
     agent_pending = await db.scalar(
-        select(DecisionRequest).where(
+        select(DecisionRequest)
+        .join(Task, Task.id == DecisionRequest.task_id)
+        .where(
             DecisionRequest.company_id == task.company_id,
             DecisionRequest.agent_id == agent.id,
             DecisionRequest.kind == DecisionKind.plan_approval,
             DecisionRequest.status == DecisionStatus.pending,
+            Task.status == TaskStatus.waiting_approval,
         )
     )
     if agent_pending is not None:

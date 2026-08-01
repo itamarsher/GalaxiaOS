@@ -314,6 +314,60 @@ async def test_submit_plan_coalesces_across_tasks(session_factory, company_with_
 
 
 @requires_db
+async def test_submit_plan_coalesce_clears_when_owning_task_terminates(
+    session_factory, company_with_budget
+):
+    """The cross-task coalesce gate must not block forever once the task that owns
+    the pending decision has terminated by some route other than resolve_decision
+    (e.g. crash recovery, an admin reset) — see issue #371."""
+    company_id = company_with_budget
+    agent, first_task = await _make_running_task(session_factory, company_id)
+
+    async with session_factory() as db:
+        outcome = await execute_tool(
+            db, object(), agent=agent, task=first_task,
+            name="submit_plan", args={"plan": "## Obj 1\n- do the thing"},
+        )
+        await db.commit()
+    assert outcome.park is True  # first plan parks awaiting approval
+
+    # The owning task is terminated by something other than resolve_decision /
+    # consume_approval_grant — its DecisionRequest is left dangling as `pending`.
+    async with session_factory() as db:
+        row = await db.get(Task, first_task.id)
+        row.status = TaskStatus.failed
+        await db.commit()
+
+    # A brand-new task for the SAME agent (e.g. the next business cycle) submits.
+    async with session_factory() as db:
+        run = AgentRun(
+            company_id=company_id, trigger=RunTrigger.scheduled, status=RunStatus.running
+        )
+        db.add(run)
+        await db.flush()
+        run.root_run_id = run.id
+        second = Task(
+            company_id=company_id, run_id=run.id, root_run_id=run.id,
+            agent_id=agent.id, goal="business cycle", status=TaskStatus.running,
+        )
+        db.add(second)
+        await db.commit()
+        second_detached = await db.get(Task, second.id)
+
+    async with session_factory() as db:
+        outcome2 = await execute_tool(
+            db, object(), agent=agent, task=second_detached,
+            name="submit_plan", args={"plan": "## Obj 1\n- do the thing again"},
+        )
+        await db.commit()
+
+    # The stale decision (owning task no longer waiting_approval) no longer blocks —
+    # the second task's plan is accepted and parks awaiting approval.
+    assert outcome2.is_error is not True
+    assert outcome2.park is True
+
+
+@requires_db
 async def test_submit_plan_refused_when_ancestor_plan_approved(
     session_factory, company_with_budget
 ):
