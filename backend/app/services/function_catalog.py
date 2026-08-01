@@ -99,8 +99,10 @@ _CATALOG: tuple[BusinessFunction, ...] = (
        health_signals=("contracts_reviewed", "compliance_issues_open"),
        default_skills=("legal-risk-flagging", "contract-negotiation-prep", "compliance-check-workflow")),
     _f(key="finance", title="Finance", category="operations",
-       summary="Own budget, runway, and unit economics.",
-       responsibility="Own budget monitoring, runway, and unit economics.",
+       summary="Own budget, runway, unit economics, and the audited financial records.",
+       responsibility="Own budget monitoring, runway, and unit economics, AND the integrity of "
+       "the financial records: record every revenue and expense, keep the invoice/receipt paper "
+       "trail accurate, and reconcile the books against the budget ledger.",
        role=AgentRole.finance,
        health_signals=("runway_months", "gross_margin", "burn_rate"),
        default_skills=("monthly-financial-close", "runway-and-burn-analysis", "unit-economics-analysis")),
@@ -119,10 +121,6 @@ _CATALOG: tuple[BusinessFunction, ...] = (
        summary="Own safety, compliance, and oversight.",
        responsibility="Own safety, compliance, and oversight.",
        role=AgentRole.governance, core=True),
-    _f(key="auditor", title="Auditor", category="oversight",
-       summary="Keep the financial records audited and the paper trail accurate.",
-       responsibility="Keep the financial records audited and the invoice/receipt paper trail accurate.",
-       role=AgentRole.auditor, core=True),
     _f(key="data", title="Data", category="oversight",
        summary="Own data access internally and what's shared externally.",
        responsibility="Own the company's data: make sure every internal agent can reach the data it needs, and control what is shared outside the company.",
@@ -260,7 +258,7 @@ def recommendation_directive() -> str:
         "building blocks THIS mission needs, most important first. Keep it in-house "
         "first — prefer the native blocks below; only add \"billing\" when the business "
         "must charge customers itself. Do NOT list oversight "
-        "(ceo/governance/auditor/data/platform); it is always added automatically.\n"
+        "(ceo/governance/data/platform); it is always added automatically.\n"
         "Catalog:\n" + lines
     )
 

@@ -71,7 +71,6 @@ _ROLE_ACCESS: dict[str, list[str]] = {
     "design": ["product", "marketing", "strategy"],
     "finance": ["financial", "strategy"],
     "governance": ["legal", "strategy"],
-    "auditor": ["financial", "legal", "strategy", "product", "customers"],
     "data": ["customers", "product", "strategy"],
     "platform": ["product", "strategy"],
 }

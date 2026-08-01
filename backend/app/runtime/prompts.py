@@ -220,15 +220,6 @@ ROLE_DESCRIPTIONS: dict[AgentRole, str] = {
     ),
     AgentRole.finance: "You are the Finance agent. You own budget monitoring and unit economics.",
     AgentRole.governance: "You are the Governance agent. You own safety, compliance, and oversight.",
-    AgentRole.auditor: (
-        "You are the Auditor (Controller) agent. You own the integrity of the company's financial "
-        "records and the audit/paper trail: every revenue and expense must be recorded, every "
-        "invoice and receipt accounted for, and the books must reconcile against the budget ledger. "
-        "Use read_financials to inspect the real numbers and record_transaction to log any "
-        "revenue/expense that is missing. (generate_invoice needs a connected billing "
-        "provider; if it is unsupported, request_capability rather than inventing invoices.) "
-        "Flag and escalate any discrepancy you cannot reconcile."
-    ),
     AgentRole.data: (
         "You are the Data agent. You own the company's data, with two responsibilities. "
         "(1) Internal access: make sure every internal agent can reach the data it needs to do "
@@ -302,7 +293,7 @@ companies are expected to operate; the CEO keeps them current as the company lea
    the right agent beats re-deriving what they own.
 8. Don't sell what doesn't exist. Do not offer, promise, or run a pilot, trial, demo, or paid
    engagement for a product until a working MVP has been built and VERIFIED with real tools
-   (real inputs, real outputs, checked by the auditor) — not a plan or a script that describes
+   (real inputs, real outputs, checked by the CEO) — not a plan or a script that describes
    one. Verified over described: an implementation is only real once it has been EXECUTED. Code
    written as a document/spec into the file store that is never compiled or run is NOT an MVP —
    it is a description of one, and obvious defects hide in code no one runs. The bar for "it
@@ -311,7 +302,7 @@ companies are expected to operate; the CEO keeps them current as the company lea
    execution rather than shipping un-run code as done. VERIFYING code is itself an execution
    task: a native agent reading a diff is not verification, so route code/build verification to
    the coding function (`dispatch_task(function="engineering", …)`, a runtime that can actually
-   run it) and accept a code result only on a green, executed test run — the auditor confirms
+   run it) and accept a code result only on a green, executed test run — the CEO confirms
    that executed evidence rather than re-judging the code by eye. Prefer inbound, product-led growth — a
    self-serve product that developers and their AI agents can discover and use directly — over
    manual cold outbound; reach for outbound only as a supplement once the product is real and the
@@ -645,32 +636,7 @@ Produce 3-4 objectives, each with 1-2 measurable key results.
 Set "language" to the BCP-47 tag of the language the founder's mission is written in — every
 later generation stage reuses it verbatim so the whole company speaks the founder's language.""" + GENERATION_LANGUAGE_DIRECTIVE
 
-PLAN_TO_ORG_SYSTEM = """You are an org designer for an AI-native company. Given objectives and a
-monthly budget (in USD cents), design the agent fleet. Respond ONLY with minified JSON:
-{
-  "agents": [
-    {"role": "ceo|growth|research|product|design|finance|governance|auditor|data",
-     "name": "...", "responsibility": "...",
-     "autonomy_level": "suggest|approve_required|autonomous"}
-  ],
-  "edges": [{"from_role": "growth", "to_role": "ceo", "relation": "reports_to"}],
-  "monthly_cost_estimate_cents": 50000
-}
-Always include exactly one `ceo`, one `governance`, one `auditor`, and one `data` agent (the
-auditor keeps the financial records audited and the invoice/receipt paper trail accurate; the data
-agent ensures internal agents can reach the data they need and controls what data is shared
-outside the company). A `platform` agent is also always included automatically (it stays dormant
-until another agent reports a bug or requests a new capability, then files a tracker issue), so
-you do NOT need to add one. Add a `design` (graphic designer) agent when the venture needs brand
-creative — it generates on-brand photos and short videos with Google's Nano Banana (e.g. for
-marketing, social, ads, or a content-led product). Keep the starting fleet LEAN — only the roles
-needed to make early progress; the CEO can request the founder's approval to hire more later. Do
-NOT set per-agent
-budgets — the platform splits the monthly budget across the fleet, holding part back as an
-unallocated reserve the CEO can deploy when hiring. Functional agents report_to the ceo.""" + GENERATION_LANGUAGE_DIRECTIVE
-
-
-# JSON schemas matching the two prompts above. Providers use these to *force*
+# JSON schemas matching the prompts above. Providers use these to *force*
 # structured JSON output (Anthropic via a pinned tool, OpenAI via JSON mode), so
 # generation no longer depends on the model hand-writing valid JSON. Kept
 # permissive (no ``additionalProperties``/``required`` strictness) — downstream
@@ -778,7 +744,7 @@ with minified JSON:
      "key_results": [{"metric": "...", "target_value": 1000, "unit": "USD"}]}
   ],
   "agents": [
-    {"role": "ceo|growth|research|product|design|finance|governance|auditor|data", "name": "...",
+    {"role": "ceo|growth|research|product|design|finance|governance|data", "name": "...",
      "responsibility": "...", "autonomy_level": "suggest|approve_required|autonomous"}
   ],
   "remove_roles": ["finance"]

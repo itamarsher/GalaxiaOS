@@ -22,7 +22,7 @@ def test_selectable_excludes_core_which_is_guaranteed_oversight():
     selectable = {f.key for f in fc.selectable_functions()}
     core = {f.key for f in fc.core_functions()}
     assert selectable.isdisjoint(core)
-    assert {"ceo", "governance", "auditor", "data", "platform"} <= core
+    assert {"ceo", "governance", "data", "platform"} <= core
     assert "ceo" not in selectable  # never an à-la-carte pick
 
 
@@ -88,10 +88,10 @@ def test_resolve_selection_dedupes_drops_bogus_and_always_adds_oversight():
     names = [s["name"] for s in specs]
     assert names.count("Web Presence & Conversion") == 1  # duplicate collapsed
     assert "bogus" not in roles  # unknown dropped
-    for oversight in ("ceo", "governance", "auditor", "data", "platform"):
+    for oversight in ("ceo", "governance", "data", "platform"):
         assert oversight in roles
 
 
 def test_empty_selection_still_launches_a_governed_company():
     roles = [s["role"] for s in fc.resolve_selection([])]
-    assert {"ceo", "governance", "auditor", "data", "platform"} <= set(roles)
+    assert {"ceo", "governance", "data", "platform"} <= set(roles)
