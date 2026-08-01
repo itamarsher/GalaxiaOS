@@ -43,6 +43,39 @@ def test_default_external_falls_back_to_native_without_a_gateway(monkeypatch):
     assert worker_binding.default_backend_for(AgentRole.growth) is AgentBackendType.native
 
 
+def test_coding_function_defaults_to_external_without_a_gateway(monkeypatch):
+    # The engineering (coding) function is delegated to an external PULL runtime by
+    # default — no OpenClaw Gateway required (an unbound external function parks its
+    # initiatives for a pull worker, so it never strands). RFC 0003.
+    monkeypatch.setattr(settings, "default_agent_backend", "native")
+    monkeypatch.setattr(settings, "openclaw_base_url", "")
+    monkeypatch.setattr(settings, "delegate_coding_external", True)
+    assert (
+        worker_binding.default_backend_for(AgentRole.custom, "engineering")
+        is AgentBackendType.external
+    )
+    # A different custom function is unaffected — it stays native.
+    assert (
+        worker_binding.default_backend_for(AgentRole.custom, "customer_service")
+        is AgentBackendType.native
+    )
+    # The CEO always runs natively, even if it somehow carried the coding key.
+    assert (
+        worker_binding.default_backend_for(AgentRole.ceo, "engineering")
+        is AgentBackendType.native
+    )
+
+
+def test_coding_delegation_can_be_disabled(monkeypatch):
+    monkeypatch.setattr(settings, "default_agent_backend", "native")
+    monkeypatch.setattr(settings, "openclaw_base_url", "")
+    monkeypatch.setattr(settings, "delegate_coding_external", False)
+    assert (
+        worker_binding.default_backend_for(AgentRole.custom, "engineering")
+        is AgentBackendType.native
+    )
+
+
 def test_persona_route_is_per_function():
     # Each function routes to its own persona (isolated workspace in the gateway);
     # a different function => a different persona. (Ids are colon/slash-free so

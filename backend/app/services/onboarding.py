@@ -524,7 +524,11 @@ async def provision_fleet(
             system_prompt=str(spec.get("responsibility") or ""),
             autonomy_level=_parse_autonomy(spec.get("autonomy_level")),
             access_labels=data_policy.default_access_labels_for_role(role.value),
-            backend_type=worker_binding.default_backend_for(role),
+            # Pass the catalog function key so the coding function (engineering) can
+            # default to the external/pull runtime even though it shares `custom`.
+            backend_type=worker_binding.default_backend_for(
+                role, (spec.get("config") or {}).get("function")
+            ),
             # Catalog specs (RFC 0002) carry a config blob — the function key, its
             # health target, and skills; None for the LLM/default-fleet path.
             config=spec.get("config"),
@@ -990,7 +994,9 @@ async def refine(db: AsyncSession, *, company: Company, message: str) -> dict:
                     system_prompt=str(spec.get("responsibility") or ""),
                     autonomy_level=_parse_autonomy(spec.get("autonomy_level")),
                     access_labels=data_policy.default_access_labels_for_role(role.value),
-                    backend_type=worker_binding.default_backend_for(role),
+                    backend_type=worker_binding.default_backend_for(
+                        role, (spec.get("config") or {}).get("function")
+                    ),
                     reports_to_agent_id=ceo.id if (ceo and role is not AgentRole.ceo) else None,
                 )
                 db.add(agent)

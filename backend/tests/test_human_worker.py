@@ -165,3 +165,39 @@ async def test_orchestrator_leaves_human_task_offered(session_factory):
             assert (await db.get(Task, ids.task_id)).status is TaskStatus.queued
     finally:
         await engine.dispose()
+
+
+@requires_db
+async def test_orchestrator_leaves_external_pull_task_offered(session_factory, monkeypatch):
+    """An `external` function with no bound PUSH worker (pull posture — a connected
+    coding runtime) must not be push-dispatched to a missing gateway; its initiative
+    stays queued for the worker to claim over the Business-Function MCP (RFC 0003)."""
+    from app.runtime import orchestrator
+    from app.runtime.backends import ConnectedBackend
+    from app.runtime.context import RuntimeContext
+
+    # No push worker bound → external is pull-mode.
+    monkeypatch.setattr(orchestrator, "external_push_available", lambda: False)
+
+    ids = await _seed(session_factory, backend=AgentBackendType.external)
+    engine = create_async_engine(os.environ["ABOS_TEST_DATABASE_URL"], future=True)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    async def _noop_enqueue(task_id, *, delay_seconds=0):  # pragma: no cover - unused here
+        raise AssertionError("a pull-mode external task should never be push-enqueued")
+
+    ctx = RuntimeContext(
+        session_factory=factory, cost_meter=None, provider=None, enqueue_task=_noop_enqueue
+    )
+    try:
+        result = await orchestrator.run_task(ctx, ids.task_id)
+        assert result["status"] == "awaiting_worker"
+        async with factory() as db:
+            # Still offered (queued) — not flipped to running and not failed.
+            assert (await db.get(Task, ids.task_id)).status is TaskStatus.queued
+    finally:
+        await engine.dispose()
+
+    # Sanity: the registry helper reports no push worker in a plain (gateway-less)
+    # deployment, which is what makes the pull posture the default.
+    assert isinstance(orchestrator.get_backend("external"), ConnectedBackend)

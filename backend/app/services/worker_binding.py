@@ -12,10 +12,17 @@ Two invariants keep this safe:
 
 - **The CEO always runs natively.** It orchestrates the company; its loop stays
   in-process regardless of the default.
-- **``external`` only when a Gateway is actually bound.** If the default is set to
-  ``external`` but no ``openclaw_base_url`` is configured, we fall back to ``native``
-  so a mis-set default can never strand a function with an ``external`` runtime and
+- **The GLOBAL ``external`` default only takes effect when a Gateway is bound.** If
+  ``default_agent_backend=external`` but no ``openclaw_base_url`` is configured, we
+  fall back to ``native`` so a mis-set default can never strand a PUSH function with
   no worker (which would fail its tasks with "no runtime connected").
+
+The **coding** function is the deliberate exception: it binds to ``external`` by
+default (``delegate_coding_external``) with NO Gateway required, because an external
+function with no bound push worker now parks its initiatives for a PULL worker to
+claim over the Business-Function MCP instead of failing (``orchestrator.run_task``).
+That is how a connected coding runtime (opencode / Claude Code) staffs the
+engineering function by default (RFC 0003).
 """
 
 from __future__ import annotations
@@ -24,10 +31,23 @@ from app.config import settings
 from app.models.enums import AgentBackendType, AgentRole
 
 
-def default_backend_for(role: AgentRole) -> AgentBackendType:
-    """The runtime a freshly generated agent in ``role`` should bind to."""
+def default_backend_for(role: AgentRole, function: str | None = None) -> AgentBackendType:
+    """The runtime a freshly generated agent should bind to.
+
+    ``function`` is the catalog key of the block this agent staffs (e.g.
+    ``"engineering"``), when known — several blocks share the ``custom`` role, so the
+    role alone can't identify the coding function.
+    """
     if role is AgentRole.ceo:
         return AgentBackendType.native
+    # Coding is delegated to an EXTERNAL coding runtime by default (RFC 0003): a
+    # connected agent (opencode / Claude Code) pulls the engineering function's
+    # initiatives over the Business-Function MCP, instead of the in-process loop
+    # writing code it can never compile or run. Safe without a push Gateway — an
+    # external function with no bound worker parks its initiatives for a pull worker
+    # to claim (``orchestrator.run_task``), so it never strands.
+    if function == "engineering" and settings.delegate_coding_external:
+        return AgentBackendType.external
     if settings.default_agent_backend == "external" and settings.openclaw_base_url:
         return AgentBackendType.external
     return AgentBackendType.native

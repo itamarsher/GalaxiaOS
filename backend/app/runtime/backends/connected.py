@@ -64,6 +64,15 @@ class ConnectedBackend:
         # silently doing nothing. A follow-up binds a real OpenClaw client here.
         self._worker = worker
 
+    def has_worker(self) -> bool:
+        """Whether a PUSH worker (e.g. an OpenClaw Gateway) is bound.
+
+        When ``False`` the ``external`` backend can't be push-dispatched — the
+        function is staffed by a PULL worker claiming initiatives over the
+        Business-Function MCP, so the orchestrator leaves its initiatives queued
+        rather than calling :meth:`run` (which would fail with "no worker")."""
+        return self._worker is not None
+
     async def run(self, ctx: RuntimeContext, agent: Agent, task: Task) -> dict:
         if self._worker is None:
             return await self._fail(
