@@ -203,23 +203,26 @@ async def release_reservation(
         await db.flush()
 
 
-async def reclaim_stale_reservations(db: AsyncSession) -> int:
-    """Zero every budget's outstanding reservation and return how many were adjusted.
+async def reclaim_stale_reservations(db: AsyncSession, *, company_id: uuid.UUID) -> int:
+    """Zero the given company's outstanding budget reservation; return rows adjusted.
 
     A reservation lives only for the duration of one in-process reserve→commit call
     (a single LLM/external charge, seconds long). So any ``reserved_cents`` that
     survives a worker restart is stale — its task was killed mid-call (job-timeout
-    cancellation, OOM, or a redeploy) before the release ran. Called once at worker
-    startup, before pending work is recovered, so leaked reservations can't
-    accumulate across restarts and strand a company at ``available == 0``.
+    cancellation, OOM, or a redeploy) before the release ran. Called once per active
+    company at worker startup, before pending work is recovered, so leaked
+    reservations can't accumulate across restarts and strand a company at
+    ``available == 0``.
 
-    Assumes the platform's single in-process worker model; with concurrent workers
-    sharing one database this could clear a sibling's genuinely in-flight reservation,
-    so it must run only at startup (when nothing is in flight), never on a timer.
+    Scoped to one ``company_id`` (not a cross-tenant sweep) because the budgets
+    table is under RLS: the caller must ``set_tenant`` for this company first, and a
+    tenant-less ``UPDATE`` would silently match zero rows. Assumes the platform's
+    single in-process worker model; it must run only at startup (nothing in flight),
+    never on a timer, so it can't clear a genuinely in-flight reservation.
     """
     result = await db.execute(
         update(Budget)
-        .where(Budget.reserved_cents != 0)
+        .where(Budget.company_id == company_id, Budget.reserved_cents != 0)
         .values(reserved_cents=0, version=Budget.version + 1)
     )
     return result.rowcount or 0

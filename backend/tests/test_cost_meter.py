@@ -11,6 +11,7 @@ import asyncio
 
 import pytest
 
+from app.db import set_tenant
 from app.providers.base import LLMProvider, LLMResponse, Message, Price, ToolSpec, Usage
 from app.runtime.cost_meter import CostMeter
 from app.services import budget as budget_svc
@@ -123,9 +124,12 @@ async def test_reclaim_stale_reservations_zeroes_leaked_reservations(
         before_version = budget.version
 
     async with session_factory() as db:
-        n = await budget_svc.reclaim_stale_reservations(db)
+        # Scoped to the company with the tenant set, exactly as worker startup runs
+        # it (the budgets table is under RLS; a tenant-less UPDATE matches nothing).
+        await set_tenant(db, company_id)
+        n = await budget_svc.reclaim_stale_reservations(db, company_id=company_id)
         await db.commit()
-        assert n >= 1
+        assert n == 1
 
     async with session_factory() as db:
         budget = await budget_svc.get_active_budget(db, company_id)

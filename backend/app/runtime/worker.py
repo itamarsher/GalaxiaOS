@@ -7,7 +7,7 @@ import uuid
 from arq import cron
 
 from app.config import settings
-from app.db import SessionLocal
+from app.db import SessionLocal, set_tenant
 from app.jobs.recovery import recover_pending_work
 from app.jobs.scheduled import (
     backfill_memory_embeddings,
@@ -83,12 +83,19 @@ async def startup(ctx: dict) -> None:
     # work. Reservations are ephemeral (one reserve→commit call); any that survive a
     # restart are stale — their task was killed mid-call — and, left in
     # ``reserved_cents``, they accumulate across restarts until a company deadlocks
-    # at ``available == 0`` (every reserve fails BudgetExceeded). Best effort: a
-    # failure here must not prevent the worker from booting.
+    # at ``available == 0`` (every reserve fails BudgetExceeded). Per company with
+    # ``set_tenant`` (the budgets table is under RLS, so a tenant-less UPDATE matches
+    # nothing), mirroring ``recover_pending_work``. Best effort: a failure here must
+    # not prevent the worker from booting.
     try:
-        async with SessionLocal() as db:
-            reclaimed = await budget_svc.reclaim_stale_reservations(db)
-            await db.commit()
+        from app.jobs.scheduled import _active_company_ids
+
+        reclaimed = 0
+        for company_id in await _active_company_ids():
+            async with SessionLocal() as db:
+                await set_tenant(db, company_id)
+                reclaimed += await budget_svc.reclaim_stale_reservations(db, company_id=company_id)
+                await db.commit()
         if reclaimed:
             _log.info("reclaimed_stale_reservations", extra={"extra_fields": {"budgets": reclaimed}})
     except Exception:  # noqa: BLE001
