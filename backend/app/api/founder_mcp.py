@@ -44,6 +44,7 @@ from app.models.enums import (
     AgentStatus,
     CompanyStatus,
     DecisionStatus,
+    FileCategory,
     TaskStatus,
 )
 from app.runtime.queue import enqueue_task
@@ -277,6 +278,33 @@ _TOOL_SPECS = [
                 "limit": {"type": "integer", "description": "Max to return (default 100)."},
             },
             "required": ["company_id"],
+        },
+    },
+    {
+        "name": "write_file",
+        "description": "Write (or replace) a document in the company's file store, so the founder "
+        "can seed reference material the agents will read — a knowledge bundle, a playbook, a spec, "
+        "a policy. Re-writing a same-named document in the same category replaces it in place (one "
+        "source of truth). 'content' is UTF-8 text by default; set encoding='base64' for binary. "
+        "'category' is one of artifact, financial, data_room, brand, inbox, communications, "
+        "knowledge, code (default: knowledge). Returns the filed document's id, name, and size.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "company_id": {"type": "string"},
+                "name": {"type": "string", "description": "File name (extension optional)."},
+                "content": {"type": "string", "description": "File body (UTF-8, or base64 if set)."},
+                "category": {
+                    "type": "string",
+                    "description": "Folder to file under (default: knowledge).",
+                },
+                "description": {"type": "string", "description": "Optional one-line description."},
+                "encoding": {
+                    "type": "string",
+                    "description": "'utf-8' (default) or 'base64' for binary content.",
+                },
+            },
+            "required": ["company_id", "name", "content"],
         },
     },
     {
@@ -555,12 +583,28 @@ def _connect_doc() -> dict:
         f"3. Add this MCP server to your agent:  URL {mcp_url}  "
         "header  Authorization: Bearer <token>\n"
         "4. Operate:  create_company → generate_org → launch_company;  then steer with "
-        "get_company_snapshot, list_decisions, approve_decision / reject_decision."
+        "get_company_snapshot, list_decisions, approve_decision / reject_decision, and seed "
+        "reference material for the agents with write_file.\n\n"
+        "Operating principle — verified over described: an implementation is only real once it "
+        "has been EXECUTED. Code written as a document/spec that is never compiled or run is not "
+        "an MVP, it is a description of one. A company must not offer a pilot, demo, or paid "
+        "engagement until a real, runnable build has been produced and checked by RUNNING it "
+        "(build + tests, real inputs → real outputs). If the fleet can't execute code, it should "
+        "request that capability, not ship un-run code as done."
+    )
+    principle = (
+        "Verified over described. An implementation is only real once it has been executed. "
+        "Code filed as a spec/markdown document that is never compiled or run is not an MVP — "
+        "it is a description of one. Don't sell, pilot, or demo a product until a runnable build "
+        "exists and has been checked by RUNNING it (build + tests, real inputs → real outputs). "
+        "When the fleet can't execute code, request that capability rather than shipping un-run "
+        "code as done."
     )
     return {
         "server": _SERVER_INFO,
         "base_url": base or None,
         "mcp_url": mcp_url,
+        "operating_principle": principle,
         "bootstrap": [
             {"step": 1, "action": "create account", "method": "POST", "path": "/auth/signup",
              "body": {"email": "you@example.com", "password": "…"}, "returns": "access_token"},
@@ -570,7 +614,7 @@ def _connect_doc() -> dict:
             {"step": 3, "action": "connect this MCP server", "mcp_url": mcp_url,
              "auth": "Bearer <founder token>"},
             {"step": 4, "action": "operate",
-             "tools": ["create_company", "generate_org", "launch_company"]},
+             "tools": ["create_company", "generate_org", "launch_company", "write_file"]},
         ],
         "tools": [{"name": t["name"], "description": t["description"]} for t in _TOOL_SPECS],
         "paste_to_agent": paste,
@@ -858,6 +902,51 @@ async def _call_tool(db, user_id: uuid.UUID, mid, params: dict) -> dict:
             if task_id is not None:
                 await enqueue_task(task_id)
             return _ok(mid, _content({"status": "active", "launched": task_id is not None}))
+
+        if name == "write_file":
+            company = await _founder_company(db, user_id, args.get("company_id"))
+            try:
+                category = FileCategory(str(args.get("category") or "knowledge"))
+            except ValueError:
+                return _error(mid, -32602, f"unknown category: {args.get('category')}")
+            raw = str(args["content"])
+            encoding = str(args.get("encoding") or "utf-8").lower()
+            if encoding == "base64":
+                import base64
+
+                try:
+                    body = base64.b64decode(raw, validate=True)
+                except Exception:  # noqa: BLE001
+                    return _error(mid, -32602, "content is not valid base64")
+            else:
+                body = raw.encode("utf-8")
+            provider = await integrations_svc.resolve_file_provider(db, company_id=company.id)
+            if provider is None:
+                return _error(mid, -32000, "no file store configured for this company")
+            try:
+                filed = await files_svc.archive(
+                    db,
+                    provider,
+                    company=company,
+                    category=category,
+                    name=str(args["name"]),
+                    content=body,
+                    description=(str(args["description"]) if args.get("description") else None),
+                )
+            except FileProviderError as exc:
+                return _error(mid, -32000, f"could not write file: {exc}")
+            await db.commit()
+            return _ok(
+                mid,
+                _content(
+                    {
+                        "id": str(filed.id),
+                        "name": filed.name,
+                        "category": filed.category.value,
+                        "size_bytes": filed.size_bytes,
+                    }
+                ),
+            )
 
         if name == "list_files":
             company = await _founder_company(db, user_id, args.get("company_id"))

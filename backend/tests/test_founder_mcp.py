@@ -12,6 +12,8 @@ import json
 import os
 import uuid
 
+from sqlalchemy import select
+
 from app.api import founder_mcp as fm
 from app.config import settings
 from app.models import (
@@ -437,6 +439,81 @@ def test_default_playbook_forbids_fabrication_and_premature_selling():
     assert "fabricate" in p  # anti-fabrication rule present
     assert "pilot" in p and "mvp" in p  # no-sell-before-MVP rule
     assert "inbound" in p  # inbound/product-led preference
+    # verified-over-described: code isn't an MVP until it's been executed/run
+    assert "executed" in p and "request_capability" in p
+
+
+def test_connect_doc_explains_verified_over_described_principle():
+    """The agentic self-onboarding surfaces the 'code isn't real until run' concept,
+    so an agent bootstrapping a company inherits it before it ships anything."""
+    doc = fm._connect_doc()
+    principle = doc["operating_principle"].lower()
+    assert "executed" in principle
+    assert "not an mvp" in principle
+    assert "write_file" in doc["paste_to_agent"]
+    assert any(t["name"] == "write_file" for t in doc["tools"])
+
+
+@requires_db
+async def test_write_file_over_mcp(session_factory, monkeypatch):
+    """Founder can seed a knowledge bundle into the company's file store: write_file
+    archives it (provider upload + CompanyFile row) so agents can read it back."""
+    from app.integrations.files import FolderRef, StoredFile
+    from app.models import CompanyFile
+    from app.models.enums import FileCategory
+
+    uploaded: dict = {}
+
+    class _StubProvider:
+        async def ensure_folder(self, path):
+            return FolderRef(folder_id="fld-1", path="/".join(path))
+
+        async def upload_file(self, *, folder_id, name, content, mime_type):
+            uploaded["name"] = name
+            uploaded["content"] = content
+            return StoredFile(
+                file_id="key-1", name=name, mime_type=mime_type, size_bytes=len(content)
+            )
+
+    async def _stub_provider(db, *, company_id):
+        return _StubProvider()
+
+    monkeypatch.setattr(fm.integrations_svc, "resolve_file_provider", _stub_provider)
+
+    async with session_factory() as db:
+        u, company = await _active_company_with_founder(db)
+        await db.commit()
+        uid, cid = u.id, str(company.id)
+
+    async with session_factory() as db:
+        r = await fm._call_tool(
+            db,
+            uid,
+            1,
+            {
+                "name": "write_file",
+                "arguments": {
+                    "company_id": cid,
+                    "name": "ForkFlow_Lessons",
+                    "content": "# Verified over described\n\nRun the code.",
+                    "description": "root-cause bundle",
+                },
+            },
+        )
+        p = _payload(r)
+        assert p["category"] == "knowledge"  # default folder
+        assert p["name"].endswith(".md")  # extension inferred
+        assert p["size_bytes"] > 0
+
+    assert uploaded["content"] == b"# Verified over described\n\nRun the code."
+
+    # The bundle is now listable/readable like any filed document.
+    async with session_factory() as db:
+        row = await db.scalar(
+            select(CompanyFile).where(CompanyFile.company_id == uuid.UUID(cid))
+        )
+        assert row is not None and row.category is FileCategory.knowledge
+        assert row.description == "root-cause bundle"
 
 
 @requires_db
