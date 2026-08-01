@@ -272,7 +272,13 @@ async def _list_team(db, ctx, *, agent: Agent, task: Task, args: dict) -> ToolOu
             alloc = "uncapped"
         else:
             alloc = f"{_usd(used)}/{_usd(a.monthly_budget_cents)}"
-        lines.append(f"- {a.name} ({a.role.value}, {a.status.value}): spend {alloc}")
+        # Surface the function key so the CEO can address a specific block with
+        # dispatch_task(function=…) — the reliable way to reach one of several
+        # 'custom' functions (role alone can't distinguish them). Coding →
+        # function 'engineering'.
+        fn = (a.config or {}).get("function")
+        ident = f"{a.role.value}, function={fn}" if fn else a.role.value
+        lines.append(f"- {a.name} ({ident}, {a.status.value}): spend {alloc}")
     roster = "\n".join(lines) or "(no agents)"
     if overview is None:
         return ToolOutcome(observation=f"Team:\n{roster}\n\nNo budget configured.")

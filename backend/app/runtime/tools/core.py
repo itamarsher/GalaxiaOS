@@ -123,7 +123,11 @@ SPECS: list[ToolSpec] = [
     ),
     ToolSpec(
         name="dispatch_task",
-        description="Delegate a sub-task to another functional agent by role.",
+        description="Delegate a sub-task to another function. Address it by `role` for a "
+        "standard role, OR by `function` (a function key from list_team, e.g. 'engineering', "
+        "'customer_service') to reach a specific business function — required for the blocks "
+        "that share the 'custom' role, since role alone can't tell them apart. Coding work goes "
+        "to `function: 'engineering'`.",
         input_schema={
             "type": "object",
             "properties": {
@@ -139,6 +143,12 @@ SPECS: list[ToolSpec] = [
                         "auditor",
                         "data",
                     ],
+                    "description": "A standard role. Use `function` instead to reach a custom block.",
+                },
+                "function": {
+                    "type": "string",
+                    "description": "A function key from list_team (e.g. 'engineering'); "
+                    "addresses a specific block. Takes precedence over `role`.",
                 },
                 "goal": {"type": "string", "description": "What that agent should accomplish."},
                 "objective": {
@@ -150,7 +160,7 @@ SPECS: list[ToolSpec] = [
                     ),
                 },
             },
-            "required": ["role", "goal", "objective"],
+            "required": ["goal", "objective"],
         },
     ),
     ToolSpec(
@@ -158,7 +168,9 @@ SPECS: list[ToolSpec] = [
         description=(
             "Delegate SEVERAL sub-tasks at once — they run in PARALLEL. Prefer this "
             "over multiple separate dispatch_task calls whenever the initiatives are "
-            "independent: the run finishes sooner. Use collect_results to converge."
+            "independent: the run finishes sooner. Use collect_results to converge. "
+            "Address each by `role` OR by `function` key (from list_team) — use "
+            "`function` (e.g. 'engineering') to reach a specific 'custom' block."
         ),
         input_schema={
             "type": "object",
@@ -180,6 +192,12 @@ SPECS: list[ToolSpec] = [
                                     "auditor",
                                     "data",
                                 ],
+                                "description": "A standard role; use `function` for a custom block.",
+                            },
+                            "function": {
+                                "type": "string",
+                                "description": "A function key from list_team (e.g. 'engineering'); "
+                                "takes precedence over `role`.",
                             },
                             "goal": {
                                 "type": "string",
@@ -193,7 +211,7 @@ SPECS: list[ToolSpec] = [
                                 ),
                             },
                         },
-                        "required": ["role", "goal", "objective"],
+                        "required": ["goal", "objective"],
                     },
                 }
             },
@@ -420,30 +438,39 @@ async def _spawn_child(
     ctx,
     parent: Task,
     agent: Agent,
-    role: str,
+    role: str | None,
     goal: str,
     objective_id: uuid.UUID | None = None,
+    function: str | None = None,
 ) -> str:
-    """Enqueue a sub-task for the earliest active agent of ``role``.
+    """Enqueue a sub-task for the earliest active agent of ``role`` (or ``function``).
 
-    Returns one of :data:`_DISPATCHED`, :data:`_NO_AGENT` (no active agent of that
-    role — callers surface this as a loud error rather than silently dropping the
+    Targeting: pass ``function`` (a catalog function key, e.g. ``"engineering"``) to
+    address a specific business function — the reliable way to reach a block that
+    shares the ``custom`` role with several others (the role alone can't distinguish
+    them). Otherwise ``role`` selects by :class:`AgentRole`.
+
+    Returns one of :data:`_DISPATCHED`, :data:`_NO_AGENT` (no active agent matched —
+    callers surface this as a loud error rather than silently dropping the
     initiative), or :data:`_DUPLICATE` (a matching initiative is already in flight,
     so this one is skipped instead of doubling the work).
     """
-    # Prefer an active agent of the role: paused agents are parked (their work is
-    # blocked anyway), and after the CEO hires extra capacity there may be more
-    # than one — dispatch to the earliest-created active one for determinism.
-    child_agent = await db.scalar(
-        select(Agent)
-        .where(
-            Agent.company_id == parent.company_id,
-            Agent.role == AgentRole(role),
-            Agent.status == AgentStatus.active,
-        )
-        .order_by(Agent.created_at)
-        .limit(1)
+    # Prefer an active agent: paused agents are parked (their work is blocked
+    # anyway), and after the CEO hires extra capacity there may be more than one —
+    # dispatch to the earliest-created active one for determinism. Resolve by
+    # function key when given (addresses one of several `custom` blocks), else role.
+    base = select(Agent).where(
+        Agent.company_id == parent.company_id,
+        Agent.status == AgentStatus.active,
     )
+    if function:
+        base = base.where(Agent.config["function"].astext == function)
+    else:
+        try:
+            base = base.where(Agent.role == AgentRole(role))
+        except ValueError:
+            return _NO_AGENT
+    child_agent = await db.scalar(base.order_by(Agent.created_at).limit(1))
     if child_agent is None:
         return _NO_AGENT
     # The dispatcher's chosen objective, else inherit the parent's — so an
@@ -567,13 +594,23 @@ async def _dispatch_task(db, ctx, *, agent: Agent, task: Task, args: dict) -> To
     objective_id = await _resolve_dispatch_objective(db, task, args.get("objective"))
     if objective_id is _MISSING_OBJECTIVE:
         return ToolOutcome(observation=_OBJECTIVE_REQUIRED, is_error=True)
-    result = await _spawn_child(db, ctx, task, agent, args["role"], args["goal"], objective_id)
+    function = (args.get("function") or "").strip() or None
+    role = args.get("role")
+    if not function and not role:
+        return ToolOutcome(
+            observation="dispatch_task needs a `role` or a `function` key to address.",
+            is_error=True,
+        )
+    target = function or role
+    result = await _spawn_child(
+        db, ctx, task, agent, role, args["goal"], objective_id, function=function
+    )
     if result == _NO_AGENT:
         return ToolOutcome(
             observation=(
-                f"No active '{args['role']}' agent exists in this company — the "
-                "initiative was NOT dispatched. Call list_team to see the roles "
-                "actually available, then replan against your real roster."
+                f"No active '{target}' function exists in this company — the "
+                "initiative was NOT dispatched. Call list_team to see the roles and "
+                "function keys actually available, then replan against your real roster."
             ),
             is_error=True,
         )
@@ -585,7 +622,7 @@ async def _dispatch_task(db, ctx, *, agent: Agent, task: Task, args: dict) -> To
                 "collect_results to check on it instead."
             )
         )
-    return ToolOutcome(observation=f"dispatched {args['role']}: {args['goal'][:80]}")
+    return ToolOutcome(observation=f"dispatched {target}: {args['goal'][:80]}")
 
 
 async def _dispatch_tasks(db, ctx, *, agent: Agent, task: Task, args: dict) -> ToolOutcome:
@@ -611,8 +648,10 @@ async def _dispatch_tasks(db, ctx, *, agent: Agent, task: Task, args: dict) -> T
     resolved: list[tuple[dict, object]] = []
     untagged: list[int] = []
     for i, entry in enumerate(entries):
-        if not isinstance(entry, dict) or "role" not in entry or "goal" not in entry:
+        if not isinstance(entry, dict) or "goal" not in entry:
             continue
+        if not (entry.get("function") or entry.get("role")):
+            continue  # needs a role or function key to address; skip malformed entry
         objective_id = await _resolve_dispatch_objective(db, task, entry.get("objective"))
         if objective_id is _MISSING_OBJECTIVE:
             untagged.append(i + 1)
@@ -631,13 +670,18 @@ async def _dispatch_tasks(db, ctx, *, agent: Agent, task: Task, args: dict) -> T
     missing_roles: set[str] = set()
     duplicates: list[str] = []
     for entry, objective_id in resolved:
-        result = await _spawn_child(db, ctx, task, agent, entry["role"], entry["goal"], objective_id)
+        function = (entry.get("function") or "").strip() or None
+        role = entry.get("role")
+        target = function or role
+        result = await _spawn_child(
+            db, ctx, task, agent, role, entry["goal"], objective_id, function=function
+        )
         if result == _DISPATCHED:
-            dispatched.append(f"{entry['role']}: {str(entry['goal'])[:60]}")
+            dispatched.append(f"{target}: {str(entry['goal'])[:60]}")
         elif result == _DUPLICATE:
-            duplicates.append(f"{entry['role']}: {str(entry['goal'])[:60]}")
+            duplicates.append(f"{target}: {str(entry['goal'])[:60]}")
         else:
-            missing_roles.add(entry["role"])
+            missing_roles.add(target)
     lines = []
     if dispatched:
         body = "\n".join(f"- {d}" for d in dispatched)
