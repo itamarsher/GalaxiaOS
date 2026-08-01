@@ -488,9 +488,13 @@ async def test_connect_function_delegates_to_external_and_mints_token(session_fa
         # The minted token verifies back to exactly this (company, function).
         assert function_token.verify(p["token"]) == (uuid.UUID(cid), eid)
 
-    # The agent was actually flipped to the external (pull) backend.
+    # The agent was actually flipped to the external (pull) backend and marked
+    # pull-staffed so it takes precedence over any global push Gateway.
     async with session_factory() as db:
-        assert (await db.get(Agent, eid)).backend_type is AgentBackendType.external
+        row = await db.get(Agent, eid)
+        assert row.backend_type is AgentBackendType.external
+        assert (row.config or {}).get("worker") == "pull"
+        assert (row.config or {}).get("function") == "engineering"  # existing config preserved
 
 
 @requires_db
