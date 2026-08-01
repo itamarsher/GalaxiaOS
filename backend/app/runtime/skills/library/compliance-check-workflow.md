@@ -2,7 +2,7 @@
 name: compliance-check-workflow
 title: Compliance Check Workflow
 description: Run a structured compliance check on an action or artifact before it creates legal or regulatory exposure.
-roles: governance, auditor
+roles: governance
 ---
 # Compliance Check Workflow
 

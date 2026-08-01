@@ -17,7 +17,7 @@ defines it sharply, and adds it within budget and oversight — the ABOS analog 
 3. **Justify the budget.** Every agent consumes budget (LLM + actions). Confirm the runway supports it
    (`runway-and-burn-analysis`) and size its allocation. `request_budget` / `request_decision` for the
    founder's sign-off on a material addition.
-4. **Respect governance.** Ensure oversight roles (governance, auditor, data) still exist and aren't
+4. **Respect governance.** Ensure oversight roles (governance, data) still exist and aren't
    diluted — the fleet must keep its guardrails. Don't add operators at the expense of oversight.
 5. **Onboard with a directive.** `hire_agent` with a clear `set_agent_directive` and `set_agent_budget`.
    Give it its first concrete objective and success metric so it starts grounded.

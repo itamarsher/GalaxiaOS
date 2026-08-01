@@ -55,10 +55,11 @@ def test_all_skills_are_wellformed() -> None:
 
 
 def test_every_operating_role_has_skills() -> None:
-    # Each canonical operating role gets a non-empty skill index (custom is a
-    # user-defined catch-all and may legitimately have none of its own).
+    # Each canonical operating role gets a non-empty skill index. `custom` is a
+    # user-defined catch-all, and `auditor` is a retained-but-unused enum value (the
+    # role was removed; audits are the CEO's job) — neither is an operating role.
     for role in AgentRole:
-        if role is AgentRole.custom:
+        if role in (AgentRole.custom, AgentRole.auditor):
             continue
         idx = skills_lib.index_for_role(role.value)
         assert idx.startswith("- "), f"role {role.value} has no skills indexed"

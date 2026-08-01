@@ -2,7 +2,7 @@
 name: task-outcome-audit
 title: Task Outcome Audit
 description: Independently verify that completed tasks actually achieved their stated outcome, not just reported success.
-roles: auditor, governance
+roles: ceo, governance
 ---
 # Task Outcome Audit
 
