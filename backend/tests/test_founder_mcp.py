@@ -455,6 +455,42 @@ def test_connect_doc_explains_verified_over_described_principle():
 
 
 @requires_db
+async def test_reset_company_over_mcp_threads_delete_files(session_factory, monkeypatch):
+    """The reset_company MCP tool resets the company and passes delete_files through."""
+    captured = {}
+
+    async def _fake_reset(db, *, company, mission_text=None, constraints=None, delete_files=False):
+        captured["delete_files"] = delete_files
+        company.status = CompanyStatus.draft
+        return company
+
+    monkeypatch.setattr(fm.company_reset_svc, "reset_company", _fake_reset)
+
+    async with session_factory() as db:
+        u, company = await _active_company_with_founder(db)
+        await db.commit()
+        uid, cid = u.id, str(company.id)
+
+    # delete_files=True is threaded through and reflected in the result.
+    async with session_factory() as db:
+        r = await fm._call_tool(
+            db, uid, 1,
+            {"name": "reset_company", "arguments": {"company_id": cid, "delete_files": True}},
+        )
+        p = _payload(r)
+        assert p["status"] == "draft" and p["deleted_files"] is True
+    assert captured["delete_files"] is True
+
+    # Default (omitted) is False — a reset keeps files unless asked to purge.
+    async with session_factory() as db:
+        r = await fm._call_tool(
+            db, uid, 2, {"name": "reset_company", "arguments": {"company_id": cid}}
+        )
+        assert _payload(r)["deleted_files"] is False
+    assert captured["delete_files"] is False
+
+
+@requires_db
 async def test_set_budget_raises_the_cap(session_factory):
     """A founder can top up a company's monthly budget cap so a low-runway fleet keeps running."""
     from app.models import Budget

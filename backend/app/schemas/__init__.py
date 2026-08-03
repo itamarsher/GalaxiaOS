@@ -78,6 +78,9 @@ class ResetCompanyRequest(BaseModel):
 
     mission_text: str | None = Field(default=None, min_length=4)
     constraints: list[str] | None = None
+    # Also delete the company's stored files from the file provider. Off by default so
+    # a reset keeps files unless the founder explicitly asks to purge them.
+    delete_files: bool = False
 
 
 class CompanyUpdateRequest(BaseModel):

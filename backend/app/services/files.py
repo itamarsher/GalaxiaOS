@@ -293,3 +293,31 @@ async def delete_file(db: AsyncSession, *, company_id: uuid.UUID, file_id: uuid.
                 pass
     await db.delete(row)
     return True
+
+
+async def purge_company_files(db: AsyncSession, *, company_id: uuid.UUID) -> int:
+    """Best-effort delete of EVERY stored blob for a company from the provider.
+
+    Returns how many blobs were deleted. The :class:`CompanyFile` rows themselves are
+    NOT dropped here — callers that also wipe the DB (e.g. the cascade delete in
+    ``company_reset``) handle that; this only removes the external objects that a
+    row-only delete would otherwise orphan in the store. Never raises: a provider
+    that can't delete (or a transient error) leaves that blob orphaned rather than
+    failing the whole purge.
+    """
+    rows = await list_files(db, company_id=company_id, limit=100_000)
+    blobs = [r.external_id for r in rows if r.external_id]
+    if not blobs:
+        return 0
+    provider = await resolve_file_provider(db, company_id=company_id)
+    deleter = getattr(provider, "delete_file", None) if provider is not None else None
+    if deleter is None:
+        return 0
+    deleted = 0
+    for external_id in blobs:
+        try:
+            await deleter(external_id)
+            deleted += 1
+        except FileProviderError:
+            pass
+    return deleted

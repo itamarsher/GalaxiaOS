@@ -116,6 +116,88 @@ async def test_reset_company(session_factory):
 
 
 @requires_db
+async def test_reset_delete_files_purges_blobs_only_when_requested(session_factory, monkeypatch):
+    """delete_files=True deletes the company's stored blobs from the provider; the
+    default (False) leaves them (only the DB rows go with the cascade)."""
+    from app.models import CompanyFile
+    from app.models.enums import FileCategory
+    from app.services import files as files_svc
+
+    deleted: list = []
+
+    class _StubProvider:
+        async def delete_file(self, external_id):
+            deleted.append(external_id)
+
+    async def _stub(db, *, company_id):
+        return _StubProvider()
+
+    monkeypatch.setattr(files_svc, "resolve_file_provider", _stub)
+
+    async def _seed_files(db, cid):
+        for i in range(3):
+            db.add(CompanyFile(
+                company_id=cid, category=FileCategory.knowledge, name=f"f{i}.md",
+                mime_type="text/markdown", folder_path=".galaxia/x", provider="r2",
+                external_id=f"key-{i}", size_bytes=1,
+            ))
+        await db.flush()
+
+    # Default reset: blobs are NOT purged.
+    async with session_factory() as db:
+        cid = await _make_company(db)
+        await _seed_files(db, cid)
+        company = await db.get(Company, cid)
+        await reset_company(db, company=company)
+        await db.commit()
+    assert deleted == []  # files survive a plain reset
+
+    # delete_files=True: every blob is deleted.
+    async with session_factory() as db:
+        cid = await _make_company(db)
+        await _seed_files(db, cid)
+        company = await db.get(Company, cid)
+        await reset_company(db, company=company, delete_files=True)
+        await db.commit()
+    assert sorted(deleted) == ["key-0", "key-1", "key-2"]
+
+
+@requires_db
+async def test_purge_company_files_helper(session_factory, monkeypatch):
+    """purge_company_files deletes all blobs and returns the count; no-ops with none."""
+    from app.models import CompanyFile
+    from app.models.enums import FileCategory
+    from app.services import files as files_svc
+
+    deleted: list = []
+
+    class _StubProvider:
+        async def delete_file(self, external_id):
+            deleted.append(external_id)
+
+    async def _stub(db, *, company_id):
+        return _StubProvider()
+
+    monkeypatch.setattr(files_svc, "resolve_file_provider", _stub)
+
+    async with session_factory() as db:
+        cid = await _make_company(db)
+        # no files → 0, no provider call
+        assert await files_svc.purge_company_files(db, company_id=cid) == 0
+        db.add(CompanyFile(company_id=cid, category=FileCategory.artifact, name="a.md",
+                           mime_type="text/markdown", folder_path="x", provider="r2",
+                           external_id="k1", size_bytes=1))
+        # a row with no external_id is skipped (nothing to delete in the store)
+        db.add(CompanyFile(company_id=cid, category=FileCategory.artifact, name="b.md",
+                           mime_type="text/markdown", folder_path="x", provider="r2",
+                           external_id=None, size_bytes=1))
+        await db.flush()
+        n = await files_svc.purge_company_files(db, company_id=cid)
+        await db.commit()
+    assert n == 1 and deleted == ["k1"]
+
+
+@requires_db
 async def test_reset_preserves_member_involvement_and_access(session_factory):
     """A reset must keep each member's involvement + access config, not just (user, role).
 
