@@ -41,6 +41,7 @@ from app.models.enums import (
     CompanyStatus,
 )
 from app.observability import get_logger
+from app.services import files as files_svc
 from app.services import function_catalog
 from app.services.onboarding import provision_fleet
 
@@ -173,6 +174,7 @@ async def reset_company(
     company: Company,
     mission_text: str | None = None,
     constraints: list[str] | None = None,
+    delete_files: bool = False,
 ) -> Company:
     """Wipe a company's generated + operational state and re-provision a draft.
 
@@ -188,6 +190,12 @@ async def reset_company(
     preserved, not blanked); an empty ``constraints`` list explicitly clears them.
     A revised ``mission_text`` drops the previously detected language/summary so the
     next generation re-derives them from the new text.
+
+    ``delete_files`` also purges the company's stored file blobs from the file
+    provider. The cascade delete removes the ``CompanyFile`` rows regardless, but the
+    external objects (Drive/R2) survive a reset by default — a founder who wants a
+    truly clean slate (or to stop paying to store them) passes ``delete_files=True``.
+    Best-effort: a provider hiccup leaves a blob orphaned rather than failing the reset.
     """
     company_id = company.id
     owner_id = company.owner_user_id
@@ -226,6 +234,13 @@ async def reset_company(
         ).all()
     ]
     saved_keys = await snapshot_api_keys(db, company_id)
+
+    # Optionally purge the stored file blobs BEFORE the cascade wipes their tracking
+    # rows (the provider is resolved from company integration state that the delete
+    # would also remove). The CompanyFile rows go with the cascade either way.
+    files_purged = 0
+    if delete_files:
+        files_purged = await files_svc.purge_company_files(db, company_id=company_id)
 
     # Cascade-delete every tenant row, then rebuild a pristine draft.
     await db.delete(company)
@@ -274,8 +289,9 @@ async def reset_company(
     await dedupe_singleton_roles(db, company_id)
     await db.flush()
     _log.info(
-        "Company reset complete (company=%s, keys_preserved=%d)",
+        "Company reset complete (company=%s, keys_preserved=%d, files_purged=%d)",
         company_id,
         len(saved_keys),
+        files_purged,
     )
     return fresh

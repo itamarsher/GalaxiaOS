@@ -160,6 +160,30 @@ _TOOL_SPECS = [
         },
     },
     {
+        "name": "reset_company",
+        "description": "Reset a company to a fresh 'draft': wipe its generated org and all "
+        "operational state (tasks, runs, budget spend, memory, chat, sites, decisions) and "
+        "re-provision the default fleet, back at the onboarding plan-approval state. The mission, "
+        "budget limit, memberships (incl. your involvement/approval gates), and saved provider keys "
+        "survive. Optionally revise the mission as part of the reset (mission_text / constraints). "
+        "Set delete_files=true to ALSO delete the company's stored files from the file provider "
+        "(Drive/R2) — OFF by default, so files survive a reset unless you ask to purge them. After "
+        "reset: generate_org, then launch_company.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "company_id": {"type": "string"},
+                "delete_files": {
+                    "type": "boolean",
+                    "description": "Also delete the company's stored files from the provider (default false).",
+                },
+                "mission_text": {"type": "string", "description": "Optional revised mission to relaunch with."},
+                "constraints": {"type": "array", "items": {"type": "string"}},
+            },
+            "required": ["company_id"],
+        },
+    },
+    {
         "name": "set_involvement",
         "description": "Set how you (the founder) want to be involved — the prose that drives which "
         "decisions escalate to you vs. auto-resolve. Name the decision kinds you must approve (e.g. "
@@ -839,6 +863,30 @@ async def _call_tool(db, user_id: uuid.UUID, mid, params: dict) -> dict:
             preview = await onboarding.refine(db, company=company, message=str(args["message"]))
             await db.commit()
             return _ok(mid, _content(preview))
+
+        if name == "reset_company":
+            company = await _founder_company(db, user_id, args.get("company_id"))
+            mt = args.get("mission_text")
+            delete_files = bool(args.get("delete_files", False))
+            fresh = await company_reset_svc.reset_company(
+                db,
+                company=company,
+                mission_text=str(mt) if mt is not None else None,
+                constraints=args.get("constraints"),
+                delete_files=delete_files,
+            )
+            await db.commit()
+            return _ok(
+                mid,
+                _content(
+                    {
+                        "company_id": str(fresh.id),
+                        "status": fresh.status.value,
+                        "deleted_files": delete_files,
+                        "next": "generate_org, then launch_company",
+                    }
+                ),
+            )
 
         if name == "edit_mission":
             company = await _founder_company(db, user_id, args.get("company_id"))

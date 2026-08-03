@@ -154,7 +154,8 @@ async def reset_company(company: CompanyDep, db: DbDep, body: ResetCompanyReques
     """
     body = body or ResetCompanyRequest()
     fresh = await company_reset_svc.reset_company(
-        db, company=company, mission_text=body.mission_text, constraints=body.constraints
+        db, company=company, mission_text=body.mission_text, constraints=body.constraints,
+        delete_files=body.delete_files,
     )
     await db.commit()
     return fresh
