@@ -67,6 +67,20 @@ async def check_before_task(db: AsyncSession, task: Task) -> BreakerVerdict:
     if spend_breaker is not None:
         return BreakerVerdict(False, "spend circuit breaker tripped")
 
+    # Provider breaker tripped → block. The LLM credential is out of credit or
+    # invalid; every task would fail the same way, so halt instead of burning the
+    # run (and stacking silent failures). Cleared when the operator tops up / swaps
+    # the key and explicitly resumes.
+    provider_breaker = await db.scalar(
+        select(CircuitBreaker).where(
+            CircuitBreaker.company_id == task.company_id,
+            CircuitBreaker.type == BreakerType.provider,
+            CircuitBreaker.state == BreakerState.tripped,
+        )
+    )
+    if provider_breaker is not None:
+        return BreakerVerdict(False, "provider circuit breaker tripped")
+
     # Depth cap.
     if task.depth > settings.max_task_depth:
         await _trip(db, task.company_id, BreakerType.loop, f"max depth {settings.max_task_depth}")
@@ -99,6 +113,54 @@ async def check_before_task(db: AsyncSession, task: Task) -> BreakerVerdict:
 
 async def trip_spend_breaker(db: AsyncSession, company_id: uuid.UUID, reason: str) -> None:
     await _trip(db, company_id, BreakerType.spend, reason)
+
+
+async def trip_provider_breaker(db: AsyncSession, company_id: uuid.UUID, reason: str) -> None:
+    """Halt the company because the LLM provider is unfunded/unauthorized.
+
+    Idempotent: re-tripping an already-tripped breaker just refreshes its reason, so
+    a repeated failure won't spam. Callers pair the first trip with a founder alert.
+    """
+    await _trip(db, company_id, BreakerType.provider, reason)
+
+
+async def provider_breaker_reason(db: AsyncSession, company_id: uuid.UUID) -> str | None:
+    """The reason a company is provider-blocked, or ``None`` when it isn't.
+
+    Read by the run gate and the founder-facing snapshot so a provider halt is
+    surfaced (escalated), not silent.
+    """
+    breaker = await db.scalar(
+        select(CircuitBreaker).where(
+            CircuitBreaker.company_id == company_id,
+            CircuitBreaker.type == BreakerType.provider,
+            CircuitBreaker.state == BreakerState.tripped,
+        )
+    )
+    return breaker.tripped_reason or "provider blocked" if breaker is not None else None
+
+
+async def clear_provider_breaker(db: AsyncSession, company_id: uuid.UUID) -> bool:
+    """Re-arm the provider breaker after the operator addresses the funding/auth issue.
+
+    Returns True if a tripped breaker was cleared. An explicit operator action (a
+    fresh key, or a manual resume/run) means "I've fixed it, try again"; if the
+    provider is still broken the next task simply re-trips and re-alerts.
+    """
+    breaker = await db.scalar(
+        select(CircuitBreaker).where(
+            CircuitBreaker.company_id == company_id,
+            CircuitBreaker.type == BreakerType.provider,
+            CircuitBreaker.state == BreakerState.tripped,
+        )
+    )
+    if breaker is None:
+        return False
+    breaker.state = BreakerState.armed
+    breaker.tripped_reason = None
+    breaker.tripped_at = None
+    await db.flush()
+    return True
 
 
 async def block_task(db: AsyncSession, task: Task, reason: str) -> None:

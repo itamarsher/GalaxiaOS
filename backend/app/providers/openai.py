@@ -230,6 +230,16 @@ class OpenAIProvider(LLMProvider):
                 kind="auth",
             ) from exc
         except openai.RateLimitError as exc:
+            # OpenAI reports an out-of-credit account as a 429 with code
+            # ``insufficient_quota`` — a funding problem no retry fixes, distinct from
+            # transient throttling. Escalate it as ``billing`` so the runtime halts and
+            # alerts the operator instead of backing off and re-firing.
+            if "insufficient_quota" in str(exc).lower() or "billing" in str(exc).lower():
+                raise ProviderError(
+                    "OpenAI rejected the request: the account is out of quota/credit. "
+                    "Top up credits (or connect a funded key) to resume.",
+                    kind="billing",
+                ) from exc
             raise ProviderError("OpenAI rate limit exceeded; try again shortly.",
                                 kind="rate_limit") from exc
         except openai.NotFoundError as exc:
