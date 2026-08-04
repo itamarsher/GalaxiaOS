@@ -31,6 +31,7 @@ from app.models.enums import (
     TaskStatus,
 )
 from app.observability import get_logger
+from app.providers.base import ProviderError
 from app.runtime import breakers, prompts
 from app.runtime.backends import external_push_available, get_backend
 from app.runtime.context import RuntimeContext
@@ -318,10 +319,50 @@ async def run_task(ctx: RuntimeContext, task_id: uuid.UUID) -> dict:
         # but flag it when an unusually large error gets clipped (so it's never
         # silently half-shown).
         error_text = clip(f"{type(exc).__name__}: {exc}", DEFAULT_MAX_OBSERVATION_CHARS)
+        # A provider funding/auth failure is not this task's fault and no retry (nor a
+        # failure-review, which would itself need an LLM call) can fix it: every task
+        # would fail identically. Halt the company via the provider breaker and
+        # escalate to the founder once, instead of failing silently and letting the
+        # cron re-fire doomed runs. ``kind`` is the vendor-neutral category set at the
+        # provider boundary.
+        provider_block = isinstance(exc, ProviderError) and exc.kind in ("billing", "auth")
         review_task_id: uuid.UUID | None = None
         async with ctx.session_factory() as db:
             await set_tenant(db, task.company_id)
             row = await db.get(Task, task.id)
+            if provider_block:
+                first_trip = await breakers.provider_breaker_reason(db, task.company_id) is None
+                await breakers.trip_provider_breaker(db, task.company_id, str(exc))
+                if row is not None and row.status is TaskStatus.running:
+                    row.status = TaskStatus.failed
+                    row.output = {"error": error_text}
+                    row.transcript = None
+                    await event_counters.record(
+                        db, company_id=task.company_id, event_type=EventType.task_failed
+                    )
+                # Escalate to the founder/operator DM — but only on the first trip, so a
+                # burst of blocked tasks doesn't spam the inbox.
+                if first_trip:
+                    from app.services import chat as chat_svc
+
+                    await chat_svc.post_founder_alert(
+                        db,
+                        company_id=task.company_id,
+                        body=(
+                            "⚠️ I've had to pause the company: the LLM provider "
+                            f"rejected our calls — {exc}\n\n"
+                            "Nothing will run until this is resolved. To resume: top up "
+                            "the provider's credit (or connect a funded API key via "
+                            "add_provider_key), then start a new cycle. I'll pick up "
+                            "right where we left off."
+                        ),
+                    )
+                await db.commit()
+                _log.warning(
+                    "Provider breaker tripped for company %s (kind=%s): %s",
+                    task.company_id, exc.kind, error_text,
+                )
+                return {"status": TaskStatus.failed.value, "output": {"error": error_text}}
             if row is not None and row.status is TaskStatus.running:
                 agent_row = await db.get(Agent, row.agent_id) if row.agent_id else None
                 if agent_row is not None and await task_svc.should_review_failure(

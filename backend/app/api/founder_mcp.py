@@ -48,6 +48,7 @@ from app.models.enums import (
     FileCategory,
     TaskStatus,
 )
+from app.runtime import breakers
 from app.runtime.queue import enqueue_task
 from app.services import (
     apikeys,
@@ -366,8 +367,9 @@ _TOOL_SPECS = [
     {
         "name": "get_company_snapshot",
         "description": "A live snapshot of a company: status, objectives, budget/spend, cycle "
-        "state, live agents, active task count, and pending founder decisions. This is your main "
-        "read to decide what (if anything) to steer.",
+        "state, live agents, active task count, pending founder decisions, and `alerts` — "
+        "operator-actionable blockers the company can't clear itself (e.g. the LLM provider is "
+        "out of credit). This is your main read to decide what (if anything) to steer.",
         "inputSchema": {
             "type": "object",
             "properties": {"company_id": {"type": "string"}},
@@ -759,6 +761,25 @@ async def _snapshot(db, company: Company) -> dict:
         )
     ).all()
     cycle = await runs_svc.cycle_status(db, company)
+    # Escalate operator-actionable blockers so a founder's AI operator polling the
+    # snapshot sees WHY the company is stalled instead of a silent "0 tasks". Today:
+    # a tripped provider breaker (LLM credential out of credit / invalid), which no
+    # amount of cycling can clear on its own.
+    alerts: list[dict] = []
+    provider_reason = await breakers.provider_breaker_reason(db, company.id)
+    if provider_reason is not None:
+        alerts.append(
+            {
+                "kind": "provider_blocked",
+                "severity": "critical",
+                "message": provider_reason,
+                "action": (
+                    "The LLM provider rejected calls (out of credit or invalid key). "
+                    "Top up the provider's credit, or connect a funded key via "
+                    "add_provider_key, then call run_cycle to resume."
+                ),
+            }
+        )
     return {
         "company": {"id": str(company.id), "name": company.name, "status": company.status.value},
         "objectives": [{"title": o.title, "status": o.status} for o in objectives],
@@ -770,6 +791,7 @@ async def _snapshot(db, company: Company) -> dict:
             {"role": a.role.value, "name": a.name, "status": a.status.value} for a in agents
         ],
         "active_task_count": int(active_tasks or 0),
+        "alerts": alerts,
         "cycle": {"active": cycle.active, "can_start": cycle.can_start, "reason": cycle.reason},
         "pending_decisions": [
             {"id": str(d.id), "kind": d.kind.value, "summary": (d.summary or "")[:400]}
@@ -951,6 +973,9 @@ async def _call_tool(db, user_id: uuid.UUID, mid, params: dict) -> dict:
                 provider=str(args["provider"]).lower().strip(),
                 plaintext=str(args["api_key"]),
             )
+            # A funded key is exactly the fix for a provider block — re-arm the breaker
+            # so the next cycle can run on it instead of staying halted.
+            await breakers.clear_provider_breaker(db, company.id)
             await db.commit()
             return _ok(
                 mid,
@@ -1285,6 +1310,10 @@ async def _call_tool(db, user_id: uuid.UUID, mid, params: dict) -> dict:
 
         if name == "run_cycle":
             company = await _founder_company(db, user_id, args.get("company_id"))
+            # An explicit operator "go" means "I've addressed the block, try again":
+            # re-arm a tripped provider breaker so a topped-up account can resume. If
+            # it's still broken the first task simply re-trips it and re-alerts.
+            await breakers.clear_provider_breaker(db, company.id)
             result = await runs_svc.start_cycle(db, company)
             if result.started and result.task_id is not None:
                 await db.commit()

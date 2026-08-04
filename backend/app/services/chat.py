@@ -723,6 +723,35 @@ async def ensure_ceo_dm(
     return await founder_dm(db, company_id=company_id, agent_id=ceo.id)
 
 
+async def post_founder_alert(
+    db: AsyncSession, *, company_id: uuid.UUID, body: str
+) -> bool:
+    """Post an operator-actionable alert into the founder↔CEO DM.
+
+    Used to escalate a condition the company can't resolve on its own (e.g. the LLM
+    provider is out of credit) so it surfaces in the founder's decision inbox instead
+    of failing silently. Sent as the CEO so it lands in the standing founder DM.
+    Best-effort: returns ``False`` (never raises) when there's no CEO to speak yet.
+    The caller commits.
+    """
+    ceo = await db.scalar(
+        select(Agent)
+        .where(Agent.company_id == company_id, Agent.role == AgentRole.ceo)
+        .order_by(Agent.created_at.asc(), Agent.id.asc())
+    )
+    if ceo is None:
+        return False
+    channel = await founder_dm(db, company_id=company_id, agent_id=ceo.id)
+    await post_message(
+        db,
+        company_id=company_id,
+        channel_id=channel.id,
+        sender_agent_id=ceo.id,
+        body=body,
+    )
+    return True
+
+
 async def spawn_dm_handler_task(
     db: AsyncSession,
     *,

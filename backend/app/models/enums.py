@@ -131,6 +131,10 @@ class BreakerType(str, enum.Enum):
     loop = "loop"
     rate = "rate"
     risky_action = "risky_action"
+    # The LLM provider rejected calls for a reason no retry can fix — the credential
+    # is out of credit (billing) or invalid (auth). Trips to halt doomed cycles and
+    # escalate to the founder/operator, who must top up or swap the key to clear it.
+    provider = "provider"
 
 
 class BreakerState(str, enum.Enum):

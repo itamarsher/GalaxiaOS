@@ -73,6 +73,16 @@ async def _blocked_reason(db: AsyncSession, company_id: uuid.UUID) -> str | None
     if spend_tripped is not None:
         return "spend_breaker"
 
+    provider_tripped = await db.scalar(
+        select(CircuitBreaker.id).where(
+            CircuitBreaker.company_id == company_id,
+            CircuitBreaker.type == BreakerType.provider,
+            CircuitBreaker.state == BreakerState.tripped,
+        )
+    )
+    if provider_tripped is not None:
+        return "provider_blocked"
+
     budget = await budget_svc.get_active_budget(db, company_id)
     if budget is None:
         return "insufficient_budget"

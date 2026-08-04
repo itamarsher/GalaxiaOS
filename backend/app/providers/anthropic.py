@@ -40,6 +40,17 @@ _STREAM_THRESHOLD = 16_000
 # Internal tool used to force structured JSON output (see ``complete``).
 _JSON_TOOL_NAME = "emit_result"
 
+# Phrases Anthropic uses in a 400 when the account is out of credit (billing), as
+# opposed to a genuinely malformed request. Matched case-insensitively against the
+# error text so the runtime can escalate a funding problem instead of retrying it.
+_BILLING_MARKERS = ("credit balance is too low", "billing", "purchase credits")
+
+
+def _is_billing_error(exc: Exception) -> bool:
+    """True when a 400 signals an unfunded account rather than a bad request."""
+    text = str(exc).lower()
+    return any(marker in text for marker in _BILLING_MARKERS)
+
 
 def _block_text(block: object) -> str:
     """Approximate character length of a structured block (for estimation)."""
@@ -190,6 +201,16 @@ class AnthropicProvider(LLMProvider):
             raise ProviderError(f"Anthropic could not find model '{model}'.",
                                 kind="bad_request") from exc
         except anthropic.BadRequestError as exc:
+            # A "credit balance is too low" 400 is well-formed but unfunded: the
+            # account is out of credit. It is operator-actionable (top up / swap the
+            # key), not a code bug — classify it as ``billing`` so the runtime can
+            # halt and escalate instead of retrying a doomed call.
+            if _is_billing_error(exc):
+                raise ProviderError(
+                    "Anthropic rejected the request: the account's credit balance is "
+                    "too low. Top up credits (or connect a funded key) to resume.",
+                    kind="billing",
+                ) from exc
             raise ProviderError(f"Anthropic rejected the request: {exc}", kind="bad_request") from exc
         except anthropic.APIConnectionError as exc:
             raise ProviderError("Could not reach the Anthropic API (network error).",
